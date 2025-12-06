@@ -7,6 +7,11 @@ Provides natural language to SQL conversion with:
 - Template-based pattern matching with priority scoring
 - Confidence scoring with syntax validation
 - Query suggestions and explanations
+
+This module has been refactored for modularity:
+- Tokenizer: backend.core.nl2sql.tokenizer
+- QueryTemplate: backend.core.nl2sql.templates
+- Language Mappings: backend.core.nl2sql.mappings
 """
 import re
 import logging
@@ -17,18 +22,13 @@ from functools import lru_cache
 
 from .config import SUPPORTED_DIALECTS, settings
 
+# Import refactored components from subpackage
+from .nl2sql_components.tokenizer import Tokenizer, JIEBA_AVAILABLE
+from .nl2sql_components.templates import QueryTemplate, DEFAULT_QUERY_TEMPLATES
+from .nl2sql_components.mappings import KEYWORDS, TABLE_PATTERNS, COLUMN_PATTERNS
+
 # Configure module logger
 logger = logging.getLogger(__name__)
-
-# Try to import jieba for better Chinese tokenization
-try:
-    import jieba
-    jieba.setLogLevel(logging.WARNING)  # Suppress jieba logs
-    JIEBA_AVAILABLE = True
-    logger.info("jieba tokenizer available for Chinese NL2SQL")
-except ImportError:
-    JIEBA_AVAILABLE = False
-    logger.debug("jieba not installed, using basic tokenization for Chinese")
 
 
 @dataclass
@@ -76,10 +76,24 @@ class QueryTemplate:
 
 
 class Tokenizer:
-    """Smart tokenizer with Chinese and English support."""
+    """Smart tokenizer with Chinese and English support.
+    
+    Performance: All static regex patterns are pre-compiled at class level.
+    """
     
     # Chinese punctuation to remove
     CN_PUNCTUATION = r'[，。！？、；：""''（）【】《》]'
+    
+    # Pre-compiled regex patterns for performance
+    _RE_CN_PUNCT = re.compile(CN_PUNCTUATION)
+    _RE_EN_PUNCT = re.compile(r'[,\.!?;:\'"()\[\]{}]')
+    _RE_CHINESE_CHARS = re.compile(r'[\u4e00-\u9fff]')
+    _RE_LETTER = re.compile(r'[a-zA-Z]')
+    _RE_ALNUM = re.compile(r'[a-zA-Z0-9]')
+    _RE_DIGIT = re.compile(r'\d')
+    _RE_DIGIT_DOT = re.compile(r'[\d\.]')
+    _RE_NUMBERS = re.compile(r'\d+\.?\d*')
+    _RE_QUOTED = re.compile(r'["\']([^"\']+)["\']')
     
     # Common Chinese compound words that should not be split
     # These are keywords important for NL2SQL
@@ -112,12 +126,12 @@ class Tokenizer:
         Uses jieba for Chinese if available, otherwise falls back to
         compound-word aware splitting for Chinese and word-based for English.
         """
-        # Clean punctuation
-        text = re.sub(Tokenizer.CN_PUNCTUATION, ' ', text)
-        text = re.sub(r'[,\.!?;:\'"()\[\]{}]', ' ', text)
+        # Clean punctuation using pre-compiled patterns
+        text = Tokenizer._RE_CN_PUNCT.sub(' ', text)
+        text = Tokenizer._RE_EN_PUNCT.sub(' ', text)
         
         # Check if text contains Chinese characters
-        has_chinese = bool(re.search(r'[\u4e00-\u9fff]', text))
+        has_chinese = bool(Tokenizer._RE_CHINESE_CHARS.search(text))
         
         if has_chinese and JIEBA_AVAILABLE:
             # Use jieba for Chinese tokenization
@@ -160,20 +174,20 @@ class Tokenizer:
             if matched_compound:
                 tokens.append(matched_compound)
                 i += len(matched_compound)
-            elif re.match(r'[\u4e00-\u9fff]', char):
+            elif Tokenizer._RE_CHINESE_CHARS.match(char):
                 # Single Chinese character
                 tokens.append(char)
                 i += 1
-            elif re.match(r'[a-zA-Z]', char):
+            elif Tokenizer._RE_LETTER.match(char):
                 # English word - collect until non-letter
                 word_start = i
-                while i < text_len and re.match(r'[a-zA-Z0-9]', text[i]):
+                while i < text_len and Tokenizer._RE_ALNUM.match(text[i]):
                     i += 1
                 tokens.append(text[word_start:i].lower())
-            elif re.match(r'\d', char):
+            elif Tokenizer._RE_DIGIT.match(char):
                 # Number - collect until non-digit
                 num_start = i
-                while i < text_len and re.match(r'[\d\.]', text[i]):
+                while i < text_len and Tokenizer._RE_DIGIT_DOT.match(text[i]):
                     i += 1
                 tokens.append(text[num_start:i])
             else:
@@ -184,17 +198,17 @@ class Tokenizer:
     @staticmethod
     def extract_numbers(text: str) -> List[str]:
         """Extract all numbers from text."""
-        return re.findall(r'\d+\.?\d*', text)
+        return Tokenizer._RE_NUMBERS.findall(text)
     
     @staticmethod
     def extract_quoted_strings(text: str) -> List[str]:
         """Extract quoted strings from text."""
-        return re.findall(r'["\']([^"\']+)["\']', text)
+        return Tokenizer._RE_QUOTED.findall(text)
     
     @staticmethod
     def is_chinese(text: str) -> bool:
         """Check if text contains Chinese characters."""
-        return bool(re.search(r'[\u4e00-\u9fff]', text))
+        return bool(Tokenizer._RE_CHINESE_CHARS.search(text))
 
 
 class NL2SQLGenerator:
@@ -403,60 +417,13 @@ class NL2SQLGenerator:
         self._init_query_templates()
     
     def _init_query_templates(self) -> None:
-        """Initialize prioritized query templates for pattern matching."""
-        self.query_templates: List[QueryTemplate] = [
-            # High priority: Specific patterns with clear structure
-            QueryTemplate(
-                name="top_n_query",
-                pattern=r"(?:查询|获取|显示|get|show|find)?\s*(?:前|top)\s*(\d+)\s*(?:个|条|名)?\s*(.+?)(?:按|by)?\s*(.+?)?\s*(?:排序|排列|order)?",
-                sql_template="SELECT * FROM {table} ORDER BY {order_col} DESC LIMIT {n}",
-                priority=90
-            ),
-            QueryTemplate(
-                name="count_by_group",
-                pattern=r"(?:统计|计算|count)\s*(?:每个|各个|each)?\s*(.+?)\s*(?:的|的数量|数量|有多少)",
-                sql_template="SELECT {group_col}, COUNT(*) AS count FROM {table} GROUP BY {group_col}",
-                priority=85
-            ),
-            QueryTemplate(
-                name="time_range_query",
-                pattern=r"(?:查询|获取|get|find)?\s*(?:最近|过去|last|past)\s*(\d+)\s*(天|周|月|年|days?|weeks?|months?|years?)\s*(?:的|内的)?\s*(.+)",
-                sql_template="SELECT * FROM {table} WHERE {date_col} >= DATE_SUB(CURRENT_DATE, {interval})",
-                priority=85
-            ),
-            QueryTemplate(
-                name="aggregate_query",
-                pattern=r"(?:计算|求|get)?\s*(.+?)\s*(?:的)?\s*(平均|总和|最大|最小|average|sum|max|min)\s*(.+)",
-                sql_template="SELECT {agg_func}({col}) FROM {table}",
-                priority=80
-            ),
-            QueryTemplate(
-                name="condition_query",
-                pattern=r"(?:查询|获取|find|get)?\s*(.+?)\s*(大于|小于|等于|超过|不等于|greater|less|equal|>|<|=)\s*(\d+\.?\d*)\s*(?:的)?\s*(.+)?",
-                sql_template="SELECT * FROM {table} WHERE {col} {op} {value}",
-                priority=75
-            ),
-            QueryTemplate(
-                name="join_query",
-                pattern=r"(?:查询|获取)?\s*(.+?)\s*(?:和|与|关联|连接|join)\s*(.+?)(?:的|数据)?",
-                sql_template="SELECT * FROM {table1} JOIN {table2} ON {join_condition}",
-                priority=70
-            ),
-            # Medium priority: General patterns
-            QueryTemplate(
-                name="select_with_columns",
-                pattern=r"(?:查询|获取|显示|select|get|show)\s*(.+?)\s*(?:的|from)?\s*(.+?)(?:表|table)?$",
-                sql_template="SELECT {columns} FROM {table}",
-                priority=60
-            ),
-            # Low priority: Catch-all patterns
-            QueryTemplate(
-                name="simple_select",
-                pattern=r"(?:查询|获取|显示|列出|select|get|show|list|find)\s*(?:所有|全部|all)?\s*(.+)",
-                sql_template="SELECT * FROM {table}",
-                priority=40
-            ),
-        ]
+        """Initialize prioritized query templates for pattern matching.
+        
+        Uses DEFAULT_QUERY_TEMPLATES from the templates module.
+        Templates are sorted by priority (highest first).
+        """
+        # Use imported templates (can be extended with custom templates)
+        self.query_templates: List[QueryTemplate] = list(DEFAULT_QUERY_TEMPLATES)
         # Sort by priority (highest first)
         self.query_templates.sort(key=lambda t: t.priority, reverse=True)
     

@@ -360,9 +360,9 @@ class SQLTranspiler:
             "warnings": []
         }
         
-        # Check dangerous patterns (may block)
+        # Check dangerous patterns (may block) - patterns are precompiled
         for pattern, message in DANGEROUS_SQL_PATTERNS:
-            if re.search(pattern, sql, re.IGNORECASE | re.MULTILINE):
+            if pattern.search(sql):
                 logger.warning(f"Dangerous SQL pattern detected: {message}")
                 if settings.security_block_dangerous:
                     result["blocked"] = True
@@ -371,9 +371,9 @@ class SQLTranspiler:
                 else:
                     result["warnings"].append(f"🔒 Security: {message}")
         
-        # Check warning patterns (never block, just warn)
+        # Check warning patterns (never block, just warn) - patterns are precompiled
         for pattern, message in WARNING_SQL_PATTERNS:
-            if re.search(pattern, sql, re.IGNORECASE | re.MULTILINE):
+            if pattern.search(sql):
                 result["warnings"].append(f"⚠️ {message}")
         
         return result

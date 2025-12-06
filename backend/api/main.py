@@ -18,13 +18,13 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, List, Dict, Any
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from core.config import setup_logging
+from core.config import setup_logging, get_dialect_api_info
 from core.transpiler import SQLTranspiler
 from core.parser import SQLParser, SUPPORTED_DIALECTS
 from core.functions_lookup import FunctionEncyclopedia
@@ -128,13 +128,20 @@ from backend.api.middleware import (
 )
 from backend.core.exceptions import SDMException, UnsupportedDialectError
 
-# Configure CORS
+# Configure CORS with environment-based origins for security
+# In production, set SDM_ALLOWED_ORIGINS to restrict access
+import os
+ALLOWED_ORIGINS = os.getenv(
+    "SDM_ALLOWED_ORIGINS", 
+    "http://localhost:8501,http://localhost:8000,http://127.0.0.1:8501,http://127.0.0.1:8000"
+).split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],  # Restrict to needed methods
+    allow_headers=["Content-Type", "Authorization", "X-Request-ID"],
 )
 
 # Add security headers
@@ -168,40 +175,26 @@ async def add_process_time_header(request: Request, call_next):
     )
     return response
 
-# Dialect info for enhanced responses
-DIALECT_INFO = {
-    "hive": {"icon": "🐝", "name": "Apache Hive", "category": "Big Data"},
-    "mysql": {"icon": "🐬", "name": "MySQL", "category": "RDBMS"},
-    "oracle": {"icon": "🔴", "name": "Oracle Database", "category": "RDBMS"},
-    "tsql": {"icon": "🟦", "name": "SQL Server (T-SQL)", "category": "RDBMS"},
-    "postgres": {"icon": "🐘", "name": "PostgreSQL", "category": "RDBMS"},
-    "spark": {"icon": "⚡", "name": "Apache Spark SQL", "category": "Big Data"},
-    "trino": {"icon": "🔷", "name": "Trino (Presto)", "category": "Big Data"},
-    "snowflake": {"icon": "❄️", "name": "Snowflake", "category": "Cloud DW"},
-    "redshift": {"icon": "🔶", "name": "Amazon Redshift", "category": "Cloud DW"},
-    "clickhouse": {"icon": "🏠", "name": "ClickHouse", "category": "OLAP"},
-    "duckdb": {"icon": "🦆", "name": "DuckDB", "category": "Embedded"},
-    "databricks": {"icon": "🧱", "name": "Databricks SQL", "category": "Big Data"}
-}
+# Dialect info for enhanced responses (from centralized config)
+DIALECT_INFO = get_dialect_api_info()
 
 # === Request/Response Models with Enhanced Documentation ===
 
 class ConvertRequest(BaseModel):
     """SQL conversion request model."""
-    sql: str = Field(..., description="Source SQL statement to convert", example="SELECT * FROM users WHERE id = 1")
-    source_dialect: str = Field(..., description="Source database dialect", example="mysql")
-    target_dialect: str = Field(..., description="Target database dialect", example="hive")
+    sql: str = Field(..., description="Source SQL statement to convert")
+    source_dialect: str = Field(..., description="Source database dialect")
+    target_dialect: str = Field(..., description="Target database dialect")
     pretty: bool = Field(True, description="Format output SQL with indentation")
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "sql": "SELECT DATE_FORMAT(created_at, '%Y-%m-%d') FROM orders",
-                "source_dialect": "mysql",
-                "target_dialect": "postgres",
-                "pretty": True
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "sql": "SELECT DATE_FORMAT(created_at, '%Y-%m-%d') FROM orders",
+            "source_dialect": "mysql",
+            "target_dialect": "postgres",
+            "pretty": True
         }
+    })
 
 class ConvertResponse(BaseModel):
     """SQL conversion response model."""
@@ -218,18 +211,17 @@ class ConvertResponse(BaseModel):
 
 class NL2SQLRequest(BaseModel):
     """Natural language to SQL request model."""
-    text: str = Field(..., description="Natural language query (Chinese or English)", example="查询最近7天的订单")
+    text: str = Field(..., description="Natural language query (Chinese or English)")
     dialect: str = Field("hive", description="Target SQL dialect")
     table_hint: Optional[str] = Field(None, description="Optional table name hint")
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "text": "统计每个部门的员工数量",
-                "dialect": "mysql",
-                "table_hint": "employees"
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "text": "统计每个部门的员工数量",
+            "dialect": "mysql",
+            "table_hint": "employees"
         }
+    })
 
 class NL2SQLResponse(BaseModel):
     """Natural language to SQL response model."""
@@ -248,9 +240,17 @@ class ParseRequest(BaseModel):
 
 class TypeMapRequest(BaseModel):
     """Type mapping request model."""
-    type_name: str = Field(..., description="Source data type name", example="VARCHAR")
-    source_dialect: str = Field(..., description="Source database dialect", example="mysql")
-    target_dialect: str = Field(..., description="Target database dialect", example="postgres")
+    type_name: str = Field(..., description="Source data type name")
+    source_dialect: str = Field(..., description="Source database dialect")
+    target_dialect: str = Field(..., description="Target database dialect")
+
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "type_name": "VARCHAR",
+            "source_dialect": "mysql",
+            "target_dialect": "postgres"
+        }
+    })
 
 class APIResponse(BaseModel):
     """Standard API response wrapper."""

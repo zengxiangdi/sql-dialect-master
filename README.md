@@ -16,7 +16,7 @@ Enterprise-grade multi-database SQL conversion engine supporting 12 database dia
 | 🗂️ **Type Mapping** | 36 data types × 12 databases matrix |
 | 💬 **NL2SQL** | Natural language to SQL (Chinese/English) |
 | 🔧 **40+ Rules** | Intelligent transformation rules |
-| 🎨 **Modern UI** | Beautiful Streamlit interface with 5 themes |
+| 🎨 **Modern UI** | Beautiful Streamlit interface with 5 themes + Custom Theme Editor |
 
 ## 💾 Supported Databases
 
@@ -105,6 +105,10 @@ sql-dialect-master/
 │   │   ├── main.py              # FastAPI application
 │   │   └── middleware.py        # Rate limiting, logging
 │   ├── core/
+│   │   ├── nl2sql_components/   # Modular NL2SQL components
+│   │   │   ├── tokenizer.py     # Language tokenization
+│   │   │   ├── templates.py     # Query templates
+│   │   │   └── mappings.py      # Language mappings
 │   │   ├── config.py            # Configuration management
 │   │   ├── transpiler.py        # SQL conversion engine
 │   │   ├── parser.py            # SQL parser
@@ -120,10 +124,22 @@ sql-dialect-master/
 │   ├── utils/
 │   │   └── validators.py        # Input validation
 │   └── tests/                   # Test suite
+├── frontend/                    # Streamlit UI Components
+│   ├── tabs/                    # Modular Tab Pages
+│   │   ├── convert.py
+│   │   ├── functions.py
+│   │   ├── types.py
+│   │   ├── nl2sql.py
+│   │   ├── explain.py
+│   │   └── lineage.py
+│   ├── app_context.py           # Shared Application Context
+│   ├── components.py            # Reusable UI Widgets
+│   ├── themes.py                # Visual Themes
+│   └── templates.py             # SQL Templates
 ├── examples/
 │   ├── api_client.py            # API usage examples
 │   └── basic_usage.py           # SDK usage examples
-├── sdm_local.py                 # Streamlit UI
+├── sdm_local.py                 # Streamlit Application Entry
 ├── pyproject.toml               # Project configuration
 ├── requirements.txt             # Dependencies
 ├── .env.example                 # Environment template
@@ -154,7 +170,11 @@ The Streamlit UI supports 5 beautiful themes:
 - 🌸 Sakura
 - 🌲 Forest
 
+**New in v1.0.1:** You can now create, import, and export custom themes directly from the UI sidebar!
+
 ## ⚙️ Configuration
+
+The project uses `pydantic-settings` for robust configuration. 
 
 Copy `.env.example` to `.env` and customize:
 
@@ -162,7 +182,7 @@ Copy `.env.example` to `.env` and customize:
 cp .env.example .env
 ```
 
-Key settings:
+Key settings (prefixed with `SDM_`):
 - `SDM_CACHE_ENABLED` - Enable/disable caching
 - `SDM_CACHE_TTL` - Cache time-to-live (seconds)
 - `SDM_RATE_LIMIT_REQUESTS` - Rate limit per window

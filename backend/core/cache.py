@@ -181,6 +181,78 @@ class TTLCache:
             if key not in self._cache:
                 return False
             return not self._cache[key].is_expired()
+    
+    def get_or_set(self, key: str, factory: Callable[[], Any], ttl: int = None) -> Any:
+        """Get value from cache, or compute and cache if missing.
+        
+        This provides atomic get-or-set functionality to avoid race conditions.
+        
+        Args:
+            key: Cache key
+            factory: Callable that returns the value if not cached
+            ttl: Optional TTL override
+            
+        Returns:
+            Cached or computed value
+        """
+        with self._lock:
+            result = self.get(key)
+            if result is not None:
+                return result
+            
+            # Compute value outside of race condition
+            value = factory()
+            self.set(key, value, ttl)
+            return value
+    
+    async def get_async(self, key: str) -> Optional[Any]:
+        """Async version of get - runs in thread pool.
+        
+        Args:
+            key: Cache key
+            
+        Returns:
+            Cached value or None
+        """
+        import asyncio
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self.get, key)
+    
+    async def set_async(self, key: str, value: Any, ttl: int = None) -> None:
+        """Async version of set - runs in thread pool.
+        
+        Args:
+            key: Cache key
+            value: Value to cache
+            ttl: Optional TTL override
+        """
+        import asyncio
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, lambda: self.set(key, value, ttl))
+    
+    def start_background_cleanup(self, interval: int = 60) -> threading.Thread:
+        """Start a background daemon thread for periodic cache cleanup.
+        
+        Args:
+            interval: Cleanup interval in seconds
+            
+        Returns:
+            The cleanup thread (already started)
+        """
+        def cleanup_loop():
+            while True:
+                time.sleep(interval)
+                try:
+                    removed = self.cleanup_expired()
+                    if removed > 0:
+                        logger.info(f"Background cleanup removed {removed} expired entries")
+                except Exception as e:
+                    logger.error(f"Background cleanup error: {e}")
+        
+        thread = threading.Thread(target=cleanup_loop, daemon=True, name="CacheCleanup")
+        thread.start()
+        logger.info(f"Started background cache cleanup (interval={interval}s)")
+        return thread
 
 
 class CachedFunction:

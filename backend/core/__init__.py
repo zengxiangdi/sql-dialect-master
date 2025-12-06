@@ -1,5 +1,14 @@
 # SQL Dialect Master - Core Module
-from .config import setup_logging, SUPPORTED_DIALECTS, settings, AppSettings
+from .config import (
+    setup_logging, 
+    SUPPORTED_DIALECTS, 
+    DIALECT_METADATA,
+    settings, 
+    AppSettings,
+    get_dialect_ui_info,
+    get_dialect_api_info,
+    get_dialect_label,
+)
 from .parser import SQLParser, ParseResult
 from .transpiler import SQLTranspiler, TranspileResult
 from .post_processor import PostProcessor
@@ -20,8 +29,12 @@ __all__ = [
     # Configuration
     "setup_logging",
     "SUPPORTED_DIALECTS",
+    "DIALECT_METADATA",
     "settings",
     "AppSettings",
+    "get_dialect_ui_info",
+    "get_dialect_api_info",
+    "get_dialect_label",
     # Parser
     "SQLParser",
     "ParseResult",

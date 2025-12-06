@@ -1,6 +1,6 @@
 [project]
 name = "sql-dialect-master"
-version = "1.0.0"
+version = "1.0.1"
 description = "SQL Dialect Master - Multi-database SQL conversion engine"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -10,6 +10,7 @@ dependencies = [
     "fastapi>=0.115.0",
     "uvicorn>=0.30.0",
     "pydantic>=2.9.0",
+    "pydantic-settings>=2.0.0",
     "hypothesis>=6.112.0",
     "pytest>=8.3.0",
 ]

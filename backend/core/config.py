@@ -14,64 +14,9 @@ import os
 import sys
 from pathlib import Path
 from typing import List, Dict, Any, TypedDict, Optional
-from dataclasses import dataclass, field
 from enum import Enum
-
-
-# =============================================================================
-# Environment Variable Helpers
-# =============================================================================
-
-def _load_dotenv() -> None:
-    """Load .env file if it exists."""
-    env_file = Path(__file__).parent.parent.parent / ".env"
-    if env_file.exists():
-        try:
-            with open(env_file, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith("#") and "=" in line:
-                        key, value = line.split("=", 1)
-                        key = key.strip()
-                        value = value.strip().strip('"').strip("'")
-                        if key not in os.environ:  # Don't override existing env vars
-                            os.environ[key] = value
-        except Exception:
-            pass  # Silently ignore .env parsing errors
-
-
-def _get_env(key: str, default: Any, type_cast: type = str) -> Any:
-    """Get environment variable with type casting.
-    
-    Args:
-        key: Environment variable name (without SDM_ prefix)
-        default: Default value if not set
-        type_cast: Type to cast the value to
-        
-    Returns:
-        Configuration value
-    """
-    env_key = f"SDM_{key.upper()}"
-    value = os.environ.get(env_key)
-    
-    if value is None:
-        return default
-    
-    try:
-        if type_cast == bool:
-            return value.lower() in ("true", "1", "yes", "on")
-        elif type_cast == int:
-            return int(value)
-        elif type_cast == float:
-            return float(value)
-        else:
-            return value
-    except (ValueError, TypeError):
-        return default
-
-
-# Load .env file on module import
-_load_dotenv()
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 # =============================================================================
@@ -144,6 +89,8 @@ class DialectCategory(Enum):
     OLAP = "OLAP"
     EMBEDDED = "Embedded"
 
+from dataclasses import dataclass
+
 @dataclass
 class DialectInfo:
     """Information about a SQL dialect."""
@@ -169,6 +116,46 @@ DIALECT_METADATA: Dict[str, DialectInfo] = {
     "duckdb": DialectInfo("duckdb", "DuckDB", "🦆", DialectCategory.EMBEDDED, "#FFF000", "In-process analytical DB"),
     "databricks": DialectInfo("databricks", "Databricks SQL", "🧱", DialectCategory.BIG_DATA, "#FF3621", "Unified analytics platform"),
 }
+
+
+def get_dialect_ui_info() -> Dict[str, Dict[str, str]]:
+    """Get dialect info formatted for UI display.
+    
+    Returns:
+        Dictionary of dialect_id -> {"icon", "name", "color"}
+    """
+    return {
+        d.id: {"icon": d.icon, "name": d.name, "color": d.color}
+        for d in DIALECT_METADATA.values()
+    }
+
+
+def get_dialect_api_info() -> Dict[str, Dict[str, str]]:
+    """Get dialect info formatted for API responses.
+    
+    Returns:
+        Dictionary of dialect_id -> {"icon", "name", "category"}
+    """
+    return {
+        d.id: {"icon": d.icon, "name": d.name, "category": d.category.value}
+        for d in DIALECT_METADATA.values()
+    }
+
+
+def get_dialect_label(dialect: str) -> str:
+    """Get formatted dialect label with icon for display.
+    
+    Args:
+        dialect: Dialect identifier
+        
+    Returns:
+        Formatted string like "🐬 MYSQL"
+    """
+    info = DIALECT_METADATA.get(dialect)
+    if info:
+        return f"{info.icon} {dialect.upper()}"
+    return f"📄 {dialect.upper()}"
+
 
 # =============================================================================
 # Type Definitions for Type Safety
@@ -219,77 +206,63 @@ class TranspileResultDict(TypedDict, total=False):
     transformations: List[str]
     warnings: List[str]
 
+
 # =============================================================================
-# Application Settings
+# Application Settings (Pydantic)
 # =============================================================================
 
-@dataclass
-class AppSettings:
-    """Application settings with defaults.
+class AppSettings(BaseSettings):
+    """Application settings using Pydantic.
     
     All settings can be overridden via environment variables with SDM_ prefix.
-    Example: SDM_CACHE_ENABLED=false, SDM_MAX_BATCH_SIZE=50
+    Example: SDM_CACHE_ENABLED=false
     """
+    model_config = SettingsConfigDict(
+        env_prefix="SDM_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore"
+    )
+
     # API settings
-    api_version: str = field(default_factory=lambda: _get_env("API_VERSION", "1.0.0"))
-    api_title: str = field(default_factory=lambda: _get_env("API_TITLE", "SQL Dialect Master API"))
-    max_batch_size: int = field(default_factory=lambda: _get_env("MAX_BATCH_SIZE", 100, int))
-    request_timeout: int = field(default_factory=lambda: _get_env("REQUEST_TIMEOUT", 30, int))
+    api_version: str = "1.0.1"
+    api_title: str = "SQL Dialect Master API"
+    max_batch_size: int = 100
+    request_timeout: int = 30
     
     # Cache settings
-    cache_enabled: bool = field(default_factory=lambda: _get_env("CACHE_ENABLED", True, bool))
-    cache_ttl: int = field(default_factory=lambda: _get_env("CACHE_TTL", 300, int))
-    cache_max_size: int = field(default_factory=lambda: _get_env("CACHE_MAX_SIZE", 1000, int))
+    cache_enabled: bool = True
+    cache_ttl: int = 300
+    cache_max_size: int = 1000
     
     # Rate limiting
-    rate_limit_enabled: bool = field(default_factory=lambda: _get_env("RATE_LIMIT_ENABLED", True, bool))
-    rate_limit_requests: int = field(default_factory=lambda: _get_env("RATE_LIMIT_REQUESTS", 100, int))
-    rate_limit_window: int = field(default_factory=lambda: _get_env("RATE_LIMIT_WINDOW", 60, int))
+    rate_limit_enabled: bool = True
+    rate_limit_requests: int = 100
+    rate_limit_window: int = 60
     
     # NL2SQL settings
-    nl2sql_confidence_threshold: float = field(default_factory=lambda: _get_env("NL2SQL_CONFIDENCE_THRESHOLD", 0.6, float))
-    nl2sql_max_suggestions: int = field(default_factory=lambda: _get_env("NL2SQL_MAX_SUGGESTIONS", 5, int))
+    nl2sql_confidence_threshold: float = 0.6
+    nl2sql_max_suggestions: int = 5
     
     # Transpiler settings
-    transpiler_pretty_default: bool = field(default_factory=lambda: _get_env("TRANSPILER_PRETTY_DEFAULT", True, bool))
-    transpiler_max_sql_length: int = field(default_factory=lambda: _get_env("TRANSPILER_MAX_SQL_LENGTH", 100000, int))
+    transpiler_pretty_default: bool = True
+    transpiler_max_sql_length: int = 100000
     
     # Function encyclopedia
-    function_search_limit: int = field(default_factory=lambda: _get_env("FUNCTION_SEARCH_LIMIT", 50, int))
-    function_fuzzy_threshold: float = field(default_factory=lambda: _get_env("FUNCTION_FUZZY_THRESHOLD", 0.4, float))
+    function_search_limit: int = 50
+    function_fuzzy_threshold: float = 0.4
     
     # Security settings
-    security_check_enabled: bool = field(default_factory=lambda: _get_env("SECURITY_CHECK_ENABLED", True, bool))
-    security_block_dangerous: bool = field(default_factory=lambda: _get_env("SECURITY_BLOCK_DANGEROUS", False, bool))
+    security_check_enabled: bool = True
+    security_block_dangerous: bool = False
     
     # Logging settings
-    log_level: str = field(default_factory=lambda: _get_env("LOG_LEVEL", "INFO"))
-    log_file: str = field(default_factory=lambda: _get_env("LOG_FILE", ""))
+    log_level: str = "INFO"
+    log_file: str = ""
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert settings to dictionary."""
-        return {
-            "api_version": self.api_version,
-            "api_title": self.api_title,
-            "max_batch_size": self.max_batch_size,
-            "request_timeout": self.request_timeout,
-            "cache_enabled": self.cache_enabled,
-            "cache_ttl": self.cache_ttl,
-            "cache_max_size": self.cache_max_size,
-            "rate_limit_enabled": self.rate_limit_enabled,
-            "rate_limit_requests": self.rate_limit_requests,
-            "rate_limit_window": self.rate_limit_window,
-            "nl2sql_confidence_threshold": self.nl2sql_confidence_threshold,
-            "nl2sql_max_suggestions": self.nl2sql_max_suggestions,
-            "transpiler_pretty_default": self.transpiler_pretty_default,
-            "transpiler_max_sql_length": self.transpiler_max_sql_length,
-            "function_search_limit": self.function_search_limit,
-            "function_fuzzy_threshold": self.function_fuzzy_threshold,
-            "security_check_enabled": self.security_check_enabled,
-            "security_block_dangerous": self.security_block_dangerous,
-            "log_level": self.log_level,
-            "log_file": self.log_file,
-        }
+        return self.model_dump()
 
 
 # Global settings instance
@@ -300,8 +273,10 @@ settings = AppSettings()
 # Security Patterns for SQL Validation
 # =============================================================================
 
+import re
+
 # Patterns that indicate potentially dangerous SQL
-DANGEROUS_SQL_PATTERNS: List[tuple] = [
+_DANGEROUS_SQL_PATTERNS_RAW: List[tuple] = [
     # Multiple statements (SQL injection risk)
     (r";\s*(DROP|DELETE|TRUNCATE|ALTER|CREATE|INSERT|UPDATE)\s+", 
      "Multiple statements with dangerous operations detected"),
@@ -320,10 +295,31 @@ DANGEROUS_SQL_PATTERNS: List[tuple] = [
     # File operations
     (r"(INTO\s+OUTFILE|INTO\s+DUMPFILE|LOAD_FILE|UTL_FILE)",
      "File operation detected"),
+    # Classic OR 1=1 injection
+    (r"\bOR\s+['\"]?1['\"]?\s*=\s*['\"]?1['\"]?",
+     "Classic OR 1=1 injection pattern detected"),
+    # OR with string comparison
+    (r"\bOR\s+['\"][\w]+['\"]\s*=\s*['\"][\w]+['\"]",
+     "OR string comparison injection pattern detected"),
+    # Tautology attacks (always true)
+    (r"\b(AND|OR)\s+\d+\s*=\s*\d+",
+     "Tautology attack pattern detected"),
+    # Hex encoding attacks
+    (r"0x[0-9a-fA-F]{8,}",
+     "Suspicious hex-encoded value detected"),
+    # Stacked queries via semicolon
+    (r";\s*SELECT\s+",
+     "Stacked query injection pattern detected"),
+    # Sleep/benchmark attacks (timing)
+    (r"(SLEEP\s*\(\s*\d+\s*\)|BENCHMARK\s*\(|WAITFOR\s+DELAY|PG_SLEEP)",
+     "Timing-based attack pattern detected"),
+    # Database/schema enumeration
+    (r"(SHOW\s+DATABASES|SHOW\s+TABLES|DESCRIBE\s+|SP_COLUMNS)",
+     "Database enumeration attempt detected"),
 ]
 
 # Patterns that warrant warnings but aren't blocked
-WARNING_SQL_PATTERNS: List[tuple] = [
+_WARNING_SQL_PATTERNS_RAW: List[tuple] = [
     # DELETE/UPDATE without WHERE
     (r"DELETE\s+FROM\s+\w+\s*(?!WHERE)", 
      "DELETE without WHERE clause - will affect all rows"),
@@ -338,6 +334,23 @@ WARNING_SQL_PATTERNS: List[tuple] = [
     # Grant/Revoke
     (r"(GRANT|REVOKE)\s+",
      "Permission modification detected"),
+    # Large LIMIT values
+    (r"LIMIT\s+\d{6,}",
+     "Very large LIMIT value may impact performance"),
+    # SELECT * (code smell)
+    (r"SELECT\s+\*\s+FROM",
+     "SELECT * detected - consider specifying columns explicitly"),
+]
+
+# Pre-compile regex patterns for better performance
+DANGEROUS_SQL_PATTERNS: List[tuple] = [
+    (re.compile(pattern, re.IGNORECASE | re.MULTILINE), message)
+    for pattern, message in _DANGEROUS_SQL_PATTERNS_RAW
+]
+
+WARNING_SQL_PATTERNS: List[tuple] = [
+    (re.compile(pattern, re.IGNORECASE | re.MULTILINE), message)
+    for pattern, message in _WARNING_SQL_PATTERNS_RAW
 ]
 
 # =============================================================================
@@ -560,6 +573,7 @@ COMPATIBILITY_NOTES: Dict[tuple, List[str]] = {
         "Check function availability"
     ],
 }
+
 
 def get_compatibility_notes(source: str, target: str) -> List[str]:
     """Get compatibility notes for a dialect pair."""
