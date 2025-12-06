@@ -1,0 +1,30 @@
+[project]
+name = "sql-dialect-master"
+version = "1.0.0"
+description = "SQL Dialect Master - Multi-database SQL conversion engine"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "sqlglot>=25.0.0",
+    "streamlit>=1.38.0",
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+    "pydantic>=2.9.0",
+    "hypothesis>=6.112.0",
+    "pytest>=8.3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest-cov>=5.0.0",
+    "httpx>=0.27.0",
+]
+
+[build-system]
+requires = ["setuptools>=75.0.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["backend/tests"]
+python_files = ["test_*.py"]
+addopts = "-v --tb=short"
