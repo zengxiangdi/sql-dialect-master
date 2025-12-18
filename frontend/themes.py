@@ -156,6 +156,74 @@ def generate_theme_css(theme: Dict[str, str]) -> str:
 .stApp {{
     background: var(--bg);
     color: var(--fg);
+    font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+    line-height: 1.6;
+}}
+
+/* Global layout helpers */
+.page-wrapper {{
+    max-width: 1200px;
+    margin: 0 auto;
+}}
+
+.section-header {{
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    margin: 0.75rem 0 0.5rem;
+}}
+
+.section-title {{
+    font-weight: 700;
+    font-size: 1.1rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+}}
+
+.section-subtitle {{
+    margin: 0;
+    opacity: 0.8;
+    font-size: 0.9rem;
+}}
+
+.section-kicker {{
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: {theme['accent']}20;
+    color: var(--accent);
+    border-radius: 8px;
+    padding: 4px 8px;
+    font-size: 0.85rem;
+}}
+
+.panel {{
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1rem;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.06);
+}}
+
+.panel-title {{
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: 700;
+    margin-bottom: 0.25rem;
+}}
+
+.pill {{
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 6px 12px;
+    border-radius: 999px;
+    background: var(--secondary);
+    border: 1px solid var(--border);
+    font-size: 0.85rem;
+    color: var(--fg);
 }}
 
 /* Hide default Streamlit elements */

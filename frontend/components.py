@@ -115,6 +115,28 @@ def render_main_header(theme: Dict[str, str], subtitle: str = "") -> str:
     """
 
 
+def render_section_header(title: str, subtitle: str = "", icon: str = "") -> str:
+    """Render a compact section header block used across tabs.
+
+    Args:
+        title: Main section title text
+        subtitle: Supporting caption text
+        icon: Optional leading icon
+
+    Returns:
+        HTML string for the section header
+    """
+    icon_html = f"<span class='section-kicker'>{icon}</span>" if icon else ""
+    subtitle_html = f"<p class='section-subtitle'>{subtitle}</p>" if subtitle else ""
+
+    return f"""
+    <div class="section-header">
+        <div class="section-title">{icon_html}{title}</div>
+        {subtitle_html}
+    </div>
+    """
+
+
 def render_sidebar_branding(theme: Dict[str, str], version: str = "1.0") -> str:
     """Render sidebar branding section.
     

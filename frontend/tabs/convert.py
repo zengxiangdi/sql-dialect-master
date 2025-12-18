@@ -15,21 +15,34 @@ import difflib
 from datetime import datetime
 from frontend.app_context import DIALECTS, convert, format_sql, get_dialect_label
 from frontend.templates import TEMPLATES
+from frontend.components import render_section_header
 
 
 def render_convert_tab(current_theme):
     """Render the SQL Convert tab content."""
-    
+
+    st.markdown(
+        render_section_header(
+            "SQL 转换工作台",
+            "优化布局、更清晰的操作分区，以及全局提示，帮助你更快完成转换",
+            "⚡",
+        ),
+        unsafe_allow_html=True,
+    )
+
     # Template selector with better UX
-    st.markdown("#### 📋 Quick Start")
+    st.markdown(render_section_header("快速开始", "选择模板或直接粘贴 SQL", "📋"), unsafe_allow_html=True)
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
     template_choice = st.selectbox(
         "Choose a template or write your own SQL",
-        list(TEMPLATES.keys()), 
+        list(TEMPLATES.keys()),
         key="tpl",
         label_visibility="collapsed"
     )
     default_sql = TEMPLATES.get(template_choice, "") or "SELECT * FROM users WHERE id = 1"
-    
+    st.caption("小贴士：模板会自动填充到源 SQL 输入框，可随时覆盖或编辑")
+    st.markdown('</div>', unsafe_allow_html=True)
+
     # Load from history/favorites
     if st.session_state.get("load_sql"):
         loaded = st.session_state.load_sql
@@ -40,10 +53,12 @@ def render_convert_tab(current_theme):
     col_src, col_arrow, col_tgt = st.columns([5, 1, 5])
     
     with col_src:
-        st.markdown("##### Source")
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title">🟢 Source</div>', unsafe_allow_html=True)
+        st.caption("选择源库并可一键格式化 SQL")
         src_dialect = st.selectbox(
             "Source Database",
-            DIALECTS, 
+            DIALECTS,
             index=1,
             format_func=get_dialect_label,
             key="src"
@@ -67,7 +82,9 @@ def render_convert_tab(current_theme):
         with col_clear:
             if st.button("🗑️ Clear", key="clear_src", use_container_width=True):
                 st.rerun()
-    
+        st.caption("快捷键: Ctrl+Shift+F 格式化 · 支持常见 12 种数据库")
+        st.markdown('</div>', unsafe_allow_html=True)
+
     with col_arrow:
         st.markdown("")
         st.markdown("")
@@ -79,18 +96,20 @@ def render_convert_tab(current_theme):
         """, unsafe_allow_html=True)
     
     with col_tgt:
-        st.markdown("##### Target")
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title">🎯 Target</div>', unsafe_allow_html=True)
+        st.caption("选择目标库并立即执行转换")
         tgt_dialect = st.selectbox(
             "Target Database",
-            DIALECTS, 
+            DIALECTS,
             index=0,
             format_func=get_dialect_label,
             key="tgt"
         )
-        
+
         # Convert button
         convert_clicked = st.button(
-            "🚀 Convert SQL", 
+            "🚀 Convert SQL",
             type="primary", 
             use_container_width=True,
             key="convert_btn"
@@ -99,7 +118,7 @@ def render_convert_tab(current_theme):
         if convert_clicked:
             with st.spinner("Converting..."):
                 r = convert(src_sql, src_dialect, tgt_dialect)
-            
+
             if r["ok"]:
                 st.session_state["last_sql"] = r["sql"]
                 st.session_state["last_conversion"] = r
@@ -114,8 +133,10 @@ def render_convert_tab(current_theme):
                 
                 # Output SQL
                 st.code(r["sql"], language="sql")
-                
+
                 # Action buttons
+                st.markdown('<div class="panel" style="margin-top: 0.5rem;">', unsafe_allow_html=True)
+                st.markdown('<div class="panel-title">⚙️ 操作</div>', unsafe_allow_html=True)
                 col_copy, col_dl, col_fav = st.columns(3)
                 with col_copy:
                     st.button("📋 Copy", key="copy_btn", use_container_width=True)
@@ -127,7 +148,9 @@ def render_convert_tab(current_theme):
                         if hist_entry not in st.session_state.get("favorites", []):
                             st.session_state.favorites.append(hist_entry)
                             st.toast("⭐ Added to favorites!")
-                
+                st.caption("提示：转换记录可在侧边栏快速回溯")
+                st.markdown('</div>', unsafe_allow_html=True)
+
                 # Transformation notes
                 if r["notes"]:
                     st.markdown("##### 🔧 Transformations Applied")
@@ -135,16 +158,17 @@ def render_convert_tab(current_theme):
                         st.info(n)
             else:
                 st.error(f"❌ Conversion failed: {r['err']}")
-    
+        st.markdown('</div>', unsafe_allow_html=True)
+
     # Detailed analysis section
     if st.session_state.get("last_conversion"):
         r = st.session_state["last_conversion"]
-        
-        st.markdown("---")
-        st.markdown("#### 📊 Conversion Analysis")
-        
+
+        st.markdown(render_section_header("转换分析", "查看差异、兼容性与优化提示", "📊"), unsafe_allow_html=True)
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+
         analysis_tabs = st.tabs(["📝 Diff View", "⚠️ Compatibility", "💡 Tips", "📄 Report"])
-        
+
         with analysis_tabs[0]:
             diff = difflib.unified_diff(
                 src_sql.splitlines(), 
@@ -223,6 +247,8 @@ def render_convert_tab(current_theme):
 """
             st.download_button("📥 Download Report", report, "conversion_report.md", mime="text/markdown", use_container_width=True)
             st.code(report, language="markdown")
+
+        st.markdown('</div>', unsafe_allow_html=True)
     
     # Batch conversion
     with st.expander("📦 Batch Conversion"):

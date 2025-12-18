@@ -196,6 +196,7 @@ with st.sidebar:
 
 # === MAIN CONTENT ===
 # Header (using component)
+st.markdown('<div class="page-wrapper">', unsafe_allow_html=True)
 st.markdown(render_main_header(current_theme), unsafe_allow_html=True)
 
 st.markdown("")
@@ -243,3 +244,4 @@ st.markdown(f"""
     <p style="font-size: 0.8rem;">Supports 12 databases · 298 functions · 36 data types · 40 conversion rules</p>
 </div>
 """, unsafe_allow_html=True)
+st.markdown('</div>', unsafe_allow_html=True)

@@ -5,6 +5,7 @@ from .components import (
     render_dialect_chip,
     render_history_card,
     render_sql_output,
+    render_section_header,
 )
 
 __all__ = [
@@ -17,4 +18,5 @@ __all__ = [
     "render_dialect_chip",
     "render_history_card",
     "render_sql_output",
+    "render_section_header",
 ]

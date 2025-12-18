@@ -10,12 +10,20 @@ Handles Natural Language to SQL generation, including:
 """
 import streamlit as st
 from frontend.app_context import DIALECTS, get_dialect_label
+from frontend.components import render_section_header
 
 
 def render_nl2sql_tab():
     """Render the NL2SQL tab content."""
-    
-    st.markdown("#### 💬 Natural Language → SQL")
+
+    st.markdown(
+        render_section_header(
+            "自然语言生成 SQL",
+            "描述业务意图即可生成 SQL，新增强调区块和更清晰的提示",
+            "💬",
+        ),
+        unsafe_allow_html=True,
+    )
     st.caption("Describe your query in Chinese or English, and we'll generate the SQL for you")
     
     # Example queries with better organization
@@ -33,14 +41,15 @@ def render_nl2sql_tab():
         "🏆 Top N / Ranking": "查询销售额最高的前5个产品",
     }
     
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
     col_example, col_dialect = st.columns([2, 1])
     with col_example:
         nl_example = st.selectbox("📋 Quick Examples", list(nl_examples.keys()), key="nl_ex")
     with col_dialect:
         nl_dialect = st.selectbox("🎯 Target Database", DIALECTS, index=1, format_func=get_dialect_label, key="nld")
-    
+
     default_nl = nl_examples.get(nl_example, "") or "查询所有用户的姓名和邮箱"
-    
+
     nl_input = st.text_area(
         "Describe your query",
         default_nl,
@@ -61,6 +70,9 @@ def render_nl2sql_tab():
     with col_gen:
         st.markdown("")
         generate_clicked = st.button("🪄 Generate SQL", type="primary", key="nlbtn", use_container_width=True)
+
+    st.caption("提示：表名、列名等信息可通过“Parsed Elements”区块快速查看，便于后续调整")
+    st.markdown('</div>', unsafe_allow_html=True)
     
     if generate_clicked:
         with st.spinner("Generating SQL..."):
