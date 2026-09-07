@@ -18,6 +18,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from backend.core.cache import TTLCache, CacheEntry, CachedFunction
+from backend.core.config import settings
+from backend.core.transpiler import SQLTranspiler
 
 
 class TestCacheEntry:
@@ -54,6 +56,19 @@ class TestTTLCache:
         cache = TTLCache(max_size=10, ttl=60)
         cache.set("key1", "value1")
         assert cache.get("key1") == "value1"
+
+    def test_security_policy_is_checked_before_a_cached_result(self, monkeypatch):
+        """A result cached by an internal bypass must not bypass normal checks."""
+        monkeypatch.setattr(settings, "security_block_dangerous", True)
+        transpiler = SQLTranspiler()
+        sql = "SELECT * FROM users WHERE id = 1 OR 1=1"
+
+        bypassed = transpiler.transpile(sql, "mysql", "postgres", skip_security=True)
+        assert bypassed.success
+
+        checked = transpiler.transpile(sql, "mysql", "postgres")
+        assert not checked.success
+        assert "Security check failed" in checked.error
     
     def test_get_nonexistent_key(self):
         """Get nonexistent key should return None."""

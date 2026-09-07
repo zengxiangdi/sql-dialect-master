@@ -118,14 +118,6 @@ class SQLTranspiler:
         logger.info(f"Transpiling SQL: {source} -> {target}, length={len(sql)}")
         logger.debug(f"Input SQL: {sql[:200]}{'...' if len(sql) > 200 else ''}")
         
-        # Check cache first
-        if self._cache_enabled:
-            cache_key = f"{sql}|{source}|{target}|{pretty}"
-            cached = self._cache.get(cache_key)
-            if cached:
-                logger.info("Returning cached result")
-                return TranspileResult(**cached)
-        
         # Security validation
         if self._security_enabled and not skip_security:
             security_result = self._validate_security(sql)
@@ -139,6 +131,15 @@ class SQLTranspiler:
                     error=f"Security check failed: {security_result['reason']}",
                     warnings=security_result["warnings"]
                 )
+
+        # Validate before serving from cache. Otherwise a result cached by an
+        # internal call using skip_security=True could bypass this policy.
+        if self._cache_enabled:
+            cache_key = f"{sql}|{source}|{target}|{pretty}"
+            cached = self._cache.get(cache_key)
+            if cached:
+                logger.info("Returning cached result")
+                return TranspileResult(**cached)
         
         # Validate dialects
         if source not in SUPPORTED_DIALECTS:
