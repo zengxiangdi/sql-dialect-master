@@ -24,7 +24,7 @@ from typing import Optional, List, Dict, Any
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from core.config import setup_logging, get_dialect_api_info
+from core.config import settings, setup_logging, get_dialect_api_info
 from core.transpiler import SQLTranspiler
 from core.parser import SQLParser, SUPPORTED_DIALECTS
 from core.functions_lookup import FunctionEncyclopedia
@@ -149,10 +149,14 @@ app.add_middleware(SecurityHeadersMiddleware)
 
 # Add rate limiting (configurable via settings)
 rate_limiter = RateLimiter(
-    requests_per_window=100,  # settings.rate_limit_requests
-    window_seconds=60  # settings.rate_limit_window
+    requests_per_window=settings.rate_limit_requests,
+    window_seconds=settings.rate_limit_window,
 )
-app.add_middleware(RateLimitMiddleware, limiter=rate_limiter, enabled=True)
+app.add_middleware(
+    RateLimitMiddleware,
+    limiter=rate_limiter,
+    enabled=settings.rate_limit_enabled,
+)
 
 # Initialize services
 transpiler = SQLTranspiler()
@@ -356,13 +360,14 @@ async def convert_sql(request: ConvertRequest):
     }
     ```
     """
-    # Validate dialects
-    if request.source_dialect not in SUPPORTED_DIALECTS:
+    source_dialect = request.source_dialect.lower()
+    target_dialect = request.target_dialect.lower()
+    if source_dialect not in SUPPORTED_DIALECTS:
         raise HTTPException(
             status_code=400, 
             detail=f"Unsupported source dialect: {request.source_dialect}. Supported: {SUPPORTED_DIALECTS}"
         )
-    if request.target_dialect not in SUPPORTED_DIALECTS:
+    if target_dialect not in SUPPORTED_DIALECTS:
         raise HTTPException(
             status_code=400,
             detail=f"Unsupported target dialect: {request.target_dialect}. Supported: {SUPPORTED_DIALECTS}"
@@ -370,8 +375,8 @@ async def convert_sql(request: ConvertRequest):
     
     result = transpiler.transpile(
         request.sql,
-        request.source_dialect,
-        request.target_dialect,
+        source_dialect,
+        target_dialect,
         request.pretty
     )
     return ConvertResponse(
@@ -519,10 +524,26 @@ async def map_type(request: TypeMapRequest):
     
     Returns the equivalent type in the target database with notes.
     """
+    source_dialect = request.source_dialect.lower()
+    target_dialect = request.target_dialect.lower()
+    invalid_dialects = [
+        dialect
+        for dialect in (source_dialect, target_dialect)
+        if dialect not in SUPPORTED_DIALECTS
+    ]
+    if invalid_dialects:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unsupported dialect(s): {', '.join(invalid_dialects)}. "
+                f"Supported: {SUPPORTED_DIALECTS}"
+            ),
+        )
+
     result = type_mapper.suggest_type(
         request.type_name,
-        request.source_dialect,
-        request.target_dialect
+        source_dialect,
+        target_dialect,
     )
     return {
         "success": True,

@@ -239,6 +239,25 @@ class TestTypesEndpoint:
         data = response.json()
         assert data["success"] is True
 
+    def test_type_mapping_rejects_unsupported_dialect(self):
+        """Invalid dialects must not silently produce an N/A mapping."""
+        response = client.post("/api/types/map", json={
+            "type_name": "VARCHAR",
+            "source_dialect": "invalid_db",
+            "target_dialect": "postgres"
+        })
+        assert response.status_code == 400
+
+    def test_type_mapping_normalizes_dialect_case(self):
+        """Dialect names are case-insensitive at the API boundary."""
+        response = client.post("/api/types/map", json={
+            "type_name": "VARCHAR",
+            "source_dialect": "MYSQL",
+            "target_dialect": "POSTGRES"
+        })
+        assert response.status_code == 200
+        assert response.json()["target_dialect"] == "postgres"
+
 
 class TestNL2SQLEndpoint:
     """Tests for the /api/nl2sql endpoint."""

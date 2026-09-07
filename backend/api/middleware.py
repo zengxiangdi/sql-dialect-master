@@ -139,12 +139,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     
     def _get_client_id(self, request: Request) -> str:
         """Extract client identifier from request."""
-        # Try X-Forwarded-For header first (for proxied requests)
-        forwarded = request.headers.get("X-Forwarded-For")
-        if forwarded:
-            return forwarded.split(",")[0].strip()
-        
-        # Fall back to client host
+        # Do not trust X-Forwarded-For here: clients can forge it to bypass
+        # per-client limits. Deployments that sit behind a trusted proxy should
+        # configure the ASGI server's proxy-header support instead.
         if request.client:
             return request.client.host
         

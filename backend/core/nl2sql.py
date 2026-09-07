@@ -45,7 +45,7 @@ class NL2SQLResult:
 
 
 @dataclass
-class QueryTemplate:
+class LegacyQueryTemplate:
     """Template for pattern-based SQL generation with priority."""
     name: str
     pattern: str  # Regex pattern
@@ -75,7 +75,7 @@ class QueryTemplate:
         return None
 
 
-class Tokenizer:
+class LegacyTokenizer:
     """Smart tokenizer with Chinese and English support.
     
     Performance: All static regex patterns are pre-compiled at class level.
@@ -127,18 +127,18 @@ class Tokenizer:
         compound-word aware splitting for Chinese and word-based for English.
         """
         # Clean punctuation using pre-compiled patterns
-        text = Tokenizer._RE_CN_PUNCT.sub(' ', text)
-        text = Tokenizer._RE_EN_PUNCT.sub(' ', text)
+        text = LegacyTokenizer._RE_CN_PUNCT.sub(' ', text)
+        text = LegacyTokenizer._RE_EN_PUNCT.sub(' ', text)
         
         # Check if text contains Chinese characters
-        has_chinese = bool(Tokenizer._RE_CHINESE_CHARS.search(text))
+        has_chinese = bool(LegacyTokenizer._RE_CHINESE_CHARS.search(text))
         
         if has_chinese and JIEBA_AVAILABLE:
             # Use jieba for Chinese tokenization
             tokens = list(jieba.cut(text, cut_all=False))
         elif has_chinese:
             # Fallback: compound-word aware tokenization
-            tokens = Tokenizer._tokenize_chinese_fallback(text)
+            tokens = LegacyTokenizer._tokenize_chinese_fallback(text)
         else:
             # English: simple word tokenization
             tokens = text.lower().split()
@@ -166,7 +166,7 @@ class Tokenizer:
             
             # Check if this is the start of a known compound word
             matched_compound = None
-            for compound in sorted(Tokenizer.CHINESE_COMPOUNDS, key=len, reverse=True):
+            for compound in sorted(LegacyTokenizer.CHINESE_COMPOUNDS, key=len, reverse=True):
                 if text[i:].startswith(compound):
                     matched_compound = compound
                     break
@@ -174,20 +174,20 @@ class Tokenizer:
             if matched_compound:
                 tokens.append(matched_compound)
                 i += len(matched_compound)
-            elif Tokenizer._RE_CHINESE_CHARS.match(char):
+            elif LegacyTokenizer._RE_CHINESE_CHARS.match(char):
                 # Single Chinese character
                 tokens.append(char)
                 i += 1
-            elif Tokenizer._RE_LETTER.match(char):
+            elif LegacyTokenizer._RE_LETTER.match(char):
                 # English word - collect until non-letter
                 word_start = i
-                while i < text_len and Tokenizer._RE_ALNUM.match(text[i]):
+                while i < text_len and LegacyTokenizer._RE_ALNUM.match(text[i]):
                     i += 1
                 tokens.append(text[word_start:i].lower())
-            elif Tokenizer._RE_DIGIT.match(char):
+            elif LegacyTokenizer._RE_DIGIT.match(char):
                 # Number - collect until non-digit
                 num_start = i
-                while i < text_len and Tokenizer._RE_DIGIT_DOT.match(text[i]):
+                while i < text_len and LegacyTokenizer._RE_DIGIT_DOT.match(text[i]):
                     i += 1
                 tokens.append(text[num_start:i])
             else:
@@ -198,17 +198,17 @@ class Tokenizer:
     @staticmethod
     def extract_numbers(text: str) -> List[str]:
         """Extract all numbers from text."""
-        return Tokenizer._RE_NUMBERS.findall(text)
+        return LegacyTokenizer._RE_NUMBERS.findall(text)
     
     @staticmethod
     def extract_quoted_strings(text: str) -> List[str]:
         """Extract quoted strings from text."""
-        return Tokenizer._RE_QUOTED.findall(text)
+        return LegacyTokenizer._RE_QUOTED.findall(text)
     
     @staticmethod
     def is_chinese(text: str) -> bool:
         """Check if text contains Chinese characters."""
-        return bool(Tokenizer._RE_CHINESE_CHARS.search(text))
+        return bool(LegacyTokenizer._RE_CHINESE_CHARS.search(text))
 
 
 class NL2SQLGenerator:
