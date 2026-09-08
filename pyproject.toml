@@ -25,6 +25,9 @@ qa = [
     "bandit>=1.7",
     "pip-audit>=2.7",
 ]
+redis = [
+    "redis>=5.0.0",
+]
 
 [build-system]
 requires = ["setuptools>=75.0.0"]
