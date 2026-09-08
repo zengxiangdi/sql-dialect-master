@@ -33,7 +33,7 @@ def enrich_result_with_semantic_ir(result: Any, conditions: list[str], dialect: 
         return result
     try:
         expression = parse_condition_list(conditions, dialect=dialect)
-    except ValueError:
+    except (ValueError, sqlglot.errors.ParseError):
         return result
     if expression is not None:
         result.parsed_elements["semantic_ir"] = expression.to_dict()
@@ -69,7 +69,7 @@ def rewrite_result_sql_with_semantic_ir(
         rewritten = tree.sql(dialect=dialect)
         result.sql = header + rewritten
         result.parsed_elements["semantic_ast_rewrite"] = True
-    except (ValueError, sqlglot.errors.ParseError):
+    except (ValueError, sqlglot.errors.ParseError, KeyError, TypeError):
         result.sql = original_sql
         result.parsed_elements["semantic_ast_rewrite"] = False
     return result
