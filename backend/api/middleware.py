@@ -6,6 +6,7 @@ Provides rate limiting, logging, and request processing middleware.
 import logging
 import time
 import json
+import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -181,8 +182,8 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
         start_time = time.time()
         
-        # Generate request ID
-        request_id = f"{int(start_time * 1000)}"
+        # Generate a unique request ID for log correlation and response tracing.
+        request_id = str(uuid.uuid4())
         
         # Log request
         log_data = {
