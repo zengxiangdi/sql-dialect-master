@@ -8,6 +8,7 @@ from backend.core.schema_context import SchemaColumn, SchemaContext, SchemaTable
 from backend.core.semantic_ir import (
     And,
     ComparisonPredicate,
+    Not,
     NullPredicate,
     Or,
     RangePredicate,
@@ -117,7 +118,7 @@ def test_build_schema_aware_query_qualifies_columns_and_table():
     )
 
     tree = build_query_ast(semantic, schema)
-    sql = tree.sql(dialect="postgres")
+    sql = tree.sql(dialect="postgres", identify=True)
     assert sql == 'SELECT "u"."id", "u"."name" FROM "users" AS "u" WHERE "u"."age" >= 18'
     reparsed = sqlglot.parse_one(sql, read="postgres")
     assert isinstance(reparsed, exp.Select)
