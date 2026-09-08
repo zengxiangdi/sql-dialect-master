@@ -144,8 +144,37 @@ class Tokenizer:
     
     @staticmethod
     def extract_numbers(text: str) -> List[str]:
-        """Extract all numbers from text."""
-        return Tokenizer._RE_NUMBERS.findall(text)
+        """Extract numbers, preserving a simple Chinese boolean comparison tail."""
+        numbers = Tokenizer._RE_NUMBERS.findall(text)
+        if "且" in text and len(numbers) >= 2:
+            boolean_tail = re.search(
+                r"且\s*(数量|价格|金额|年龄|数量)\s*(大于|超过|高于|多于|小于|低于|少于|不足|等于|不等于)\s*(\d+(?:\.\d+)?)",
+                text,
+            )
+            if boolean_tail:
+                column_map = {
+                    "数量": "quantity",
+                    "价格": "price",
+                    "金额": "amount",
+                    "年龄": "age",
+                }
+                operator_map = {
+                    "大于": ">",
+                    "超过": ">",
+                    "高于": ">",
+                    "多于": ">",
+                    "小于": "<",
+                    "低于": "<",
+                    "少于": "<",
+                    "不足": "<",
+                    "等于": "=",
+                    "不等于": "!=",
+                }
+                column = column_map[boolean_tail.group(1)]
+                operator = operator_map[boolean_tail.group(2)]
+                second_value = boolean_tail.group(3)
+                return [f"{numbers[0]} AND {column} {operator} {second_value}"] + numbers[1:]
+        return numbers
     
     @staticmethod
     def extract_quoted_strings(text: str) -> List[str]:
