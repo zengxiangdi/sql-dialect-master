@@ -1,7 +1,7 @@
 """Boolean condition extraction for NL2SQL.
 
-Extract explicit comparison predicates and boolean connectors while preserving
-normal SQL AND-over-OR precedence and user-supplied parentheses.
+Extract explicit comparison and status predicates plus boolean connectors while
+preserving normal SQL AND-over-OR precedence and user-supplied parentheses.
 """
 import re
 from typing import List, Optional, Tuple
@@ -28,8 +28,9 @@ _COMPARISON_PATTERNS = (
 )
 
 _STATUS_PATTERN = re.compile(
-    r"\bstatus\s+(active|enabled|valid|inactive|disabled|invalid|"
-    r"completed|done|pending|paid|unpaid)\b",
+    r"(?:\bstatus\s+|状态\s*(?:为|是|=)\s*)"
+    r"(active|enabled|valid|inactive|disabled|invalid|completed|done|pending|paid|unpaid|"
+    r"有效|无效|已完成|未完成|已支付|未支付)",
     re.IGNORECASE,
 )
 
@@ -37,14 +38,20 @@ _STATUS_CONDITIONS = {
     "active": "status = 'active'",
     "enabled": "status = 'active'",
     "valid": "status = 'active'",
+    "有效": "status = 'active'",
     "inactive": "status = 'inactive'",
     "disabled": "status = 'inactive'",
     "invalid": "status = 'inactive'",
+    "无效": "status = 'inactive'",
     "completed": "status = 'completed'",
     "done": "status = 'completed'",
+    "已完成": "status = 'completed'",
     "pending": "status = 'pending'",
+    "未完成": "status = 'pending'",
     "paid": "status = 'paid'",
+    "已支付": "status = 'paid'",
     "unpaid": "status = 'unpaid'",
+    "未支付": "status = 'unpaid'",
 }
 
 _CN_COLUMNS = {
