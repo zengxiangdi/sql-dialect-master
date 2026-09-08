@@ -214,7 +214,7 @@ class AppSettings(BaseSettings):
     # Cache settings
     cache_enabled: bool = True
     cache_ttl: int = 300
-    cache_max_size: int = 1000
+    cache_max_size: int = Field(1000, gt=0)
     
     # Rate limiting
     rate_limit_enabled: bool = True
