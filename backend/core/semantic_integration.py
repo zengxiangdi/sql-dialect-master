@@ -55,11 +55,12 @@ def rewrite_result_sql_with_semantic_ir(
     if not result or not getattr(result, "sql", None) or not conditions:
         return result
 
+    original_sql = result.sql
     try:
         expression = parse_condition_list(conditions, dialect=dialect)
         if expression is None:
             return result
-        header, body = _extract_generated_header(result.sql)
+        header, body = _extract_generated_header(original_sql)
         tree = sqlglot.parse_one(body, read=dialect)
         where = tree.find(exp.Where)
         if where is None:
@@ -69,7 +70,8 @@ def rewrite_result_sql_with_semantic_ir(
         result.sql = header + rewritten
         result.parsed_elements["semantic_ast_rewrite"] = True
     except (ValueError, sqlglot.errors.ParseError):
-        result.parsed_elements.setdefault("semantic_ast_rewrite", False)
+        result.sql = original_sql
+        result.parsed_elements["semantic_ast_rewrite"] = False
     return result
 
 
