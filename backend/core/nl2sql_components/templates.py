@@ -21,13 +21,11 @@ _COMPOSITION_MARKERS = (
 )
 
 _TEMPLATE_BLOCKERS = {
-    "condition_query": _COMPOSITION_MARKERS,
     "aggregate_query": _COMPOSITION_MARKERS,
     "time_range_query": _COMPOSITION_MARKERS,
     "select_with_columns": _COMPOSITION_MARKERS,
     "simple_select": _COMPOSITION_MARKERS,
 }
-
 
 @dataclass
 class QueryTemplate:
@@ -75,7 +73,7 @@ class QueryTemplate:
 DEFAULT_QUERY_TEMPLATES = [
     QueryTemplate(
         name="top_n_query",
-        pattern=r"(?:查询|获取|显示|get|show|find)?\s*(?:前|top)\s*(\d+)\s*(?:个|条|名)?\s*(.+?)(?:按|by)?\s*(.+?)?\s*(?:排序|排列|order)?",
+        pattern=r"(?:查询|获取|get|show|find)?\s*(?:前|top)\s*(\d+)\s*(?:个|条|名)?\s*(.+?)(?:按|by)?\s*(.+?)?\s*(?:排序|排列|order)?",
         sql_template="SELECT * FROM {table} ORDER BY {order_col} DESC LIMIT {n}",
         priority=90,
     ),
