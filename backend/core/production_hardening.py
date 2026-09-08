@@ -48,13 +48,24 @@ def _generate_with_length_guard(
 
 
 def _validate_output_strict(self: SQLTranspiler, sql: str, dialect: str):
-    """Require generated SQL to parse under the requested target dialect."""
+    """Validate output in the target dialect, with only a known parser limitation exempted."""
     try:
         import sqlglot
         sqlglot.parse_one(sql, read=dialect)
+        return None
     except Exception as exc:
-        return f"⚠️ Output SQL failed {dialect} dialect validation: {str(exc)[:160]}"
-    return None
+        message = str(exc)
+        # sqlglot models Hive TRUNC as TimestampTrunc and may require a unit even
+        # when the converted SQL is the valid numeric form TRUNC(number). Keep
+        # this narrow compatibility exception instead of accepting arbitrary
+        # target-parser failures via the old generic-parser fallback.
+        if (
+            "Required keyword: 'unit' missing" in message
+            and "TimestampTrunc" in message
+            and dialect == "hive"
+        ):
+            return None
+        return f"⚠️ Output SQL may have syntax issues: target {dialect} validation failed: {message[:160]}"
 
 
 SQLParser.parse = _parse_with_length_guard
