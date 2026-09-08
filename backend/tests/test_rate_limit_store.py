@@ -12,7 +12,7 @@ from backend.api.rate_limit_store import (
 
 def test_memory_store_enforces_limit_and_cleans_up():
     store = InMemoryRateLimitStore()
-    clock = iter([100.0, 100.0, 161.0])
+    clock = iter([100.0, 100.0, 161.0, 161.0])
     original_time = sys.modules["backend.api.rate_limit_store"].time.time
     sys.modules["backend.api.rate_limit_store"].time.time = lambda: next(clock)
     try:
