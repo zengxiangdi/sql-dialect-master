@@ -44,12 +44,12 @@ def test_parentheses_override_and_or_precedence():
 
 
 def test_chinese_mixed_boolean_conditions_preserve_connectors():
-    boolean = parse_where("查询价格大于100且数量小于10或status active的产品")
+    boolean = parse_where("查询价格大于100且数量小于10或price equals 50的产品")
 
     assert isinstance(boolean, exp.Or)
     assert isinstance(boolean.this, exp.And)
     assert {column.name.lower() for column in boolean.find_all(exp.Column)} >= {
         "price",
         "quantity",
-        "status",
     }
+    assert len(list(boolean.find_all(exp.EQ))) == 1
