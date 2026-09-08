@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Callable
 
 import sqlglot
 
@@ -22,8 +21,6 @@ logger = logging.getLogger(__name__)
 
 
 _ORIGINAL_TRANSPILER = SQLTranspiler.transpile
-_ORIGINAL_TOP_TO_LIMIT = PostProcessor._convert_top_to_limit
-_ORIGINAL_GROUP_CONCAT = PostProcessor._fix_group_concat_default_separator
 
 
 def _reject_stacked_statements(
@@ -99,7 +96,7 @@ def _convert_top_to_limit_quote_aware(self, sql: str):
     masked = _mask_non_executable(sql)
     match = re.search(r"SELECT\s+TOP\s+(\d+)", masked, re.IGNORECASE)
     if not match:
-        return _ORIGINAL_TOP_TO_LIMIT(self, sql)
+        return sql, []
 
     n = match.group(1)
     result, count = _replace_outside(
@@ -118,8 +115,11 @@ def _convert_top_to_limit_quote_aware(self, sql: str):
 
 
 def _fix_group_concat_quote_aware(self, sql: str):
-    """Fix the legacy simple GROUP_CONCAT case without touching literals/comments."""
+    """Fix the legacy simple GROUP_CONCAT case without touching literals."""
     pattern = re.compile(r"GROUP_CONCAT\s*\((\w+)\)(?!\s+SEPARATOR)", re.IGNORECASE)
+    masked = _mask_non_executable(sql)
+    if not pattern.search(masked):
+        return sql, []
 
     def add_default_separator(match: re.Match) -> str:
         col = match.group(1)
@@ -127,7 +127,7 @@ def _fix_group_concat_quote_aware(self, sql: str):
 
     result, count = _replace_outside(sql, pattern, add_default_separator)
     if not count:
-        return _ORIGINAL_GROUP_CONCAT(self, sql)
+        return sql, []
     return result, ["Converted GROUP_CONCAT to STRING_AGG with default separator"]
 
 
