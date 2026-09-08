@@ -4,10 +4,10 @@ import sqlglot
 from sqlglot import exp
 import pytest
 
+from backend.core.schema_context import SchemaColumn, SchemaContext, SchemaTable
 from backend.core.semantic_ir import (
     And,
     ComparisonPredicate,
-    Not,
     NullPredicate,
     Or,
     RangePredicate,
@@ -15,7 +15,7 @@ from backend.core.semantic_ir import (
     SetPredicate,
     TextPredicate,
 )
-from backend.core.semantic_sql import build_condition_ast, build_select_ast
+from backend.core.semantic_sql import build_condition_ast, build_query_ast, build_select_ast
 
 
 def test_build_comparison_ast():
@@ -98,6 +98,46 @@ def test_build_select_ast_is_valid_sqlglot_tree():
         "age",
         "deleted_at",
     }
+
+
+def test_build_schema_aware_query_qualifies_columns_and_table():
+    schema = SchemaContext(
+        tables=(
+            SchemaTable(
+                "users",
+                alias="u",
+                columns=(SchemaColumn("id"), SchemaColumn("name"), SchemaColumn("age")),
+            ),
+        ),
+    )
+    semantic = SemanticQuery(
+        table="u",
+        select_fields=("id", "name"),
+        where=ComparisonPredicate(field="age", operator=">=", value=18),
+    )
+
+    tree = build_query_ast(semantic, schema)
+    sql = tree.sql(dialect="postgres")
+    assert sql == 'SELECT "u"."id", "u"."name" FROM "users" AS "u" WHERE "u"."age" >= 18'
+    reparsed = sqlglot.parse_one(sql, read="postgres")
+    assert isinstance(reparsed, exp.Select)
+    assert reparsed.args["from"].this.alias == "u"
+
+
+def test_schema_aware_query_rejects_ambiguous_field():
+    schema = SchemaContext(
+        tables=(
+            SchemaTable("users", columns=(SchemaColumn("id"),)),
+            SchemaTable("orders", columns=(SchemaColumn("id"),)),
+        ),
+    )
+    with pytest.raises(ValueError, match="Ambiguous schema column: id"):
+        build_query_ast(SemanticQuery(table="users", select_fields=("id",)), schema)
+
+
+def test_build_query_ast_requires_table():
+    with pytest.raises(ValueError, match="Semantic query table is required"):
+        build_query_ast(SemanticQuery(), SchemaContext())
 
 
 def test_build_select_ast_rejects_empty_table():
