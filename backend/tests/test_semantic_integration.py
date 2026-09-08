@@ -112,5 +112,7 @@ def test_manual_rewrite_accepts_structured_boolean_semantics():
         ["(price > 100) AND (quantity < 10)"],
         "postgres",
     )
-    assert "price > 100" in result.sql
-    assert "quantity < 10" in result.sql
+    tree = sqlglot.parse_one(result.sql.split("\n", 1)[1], read="postgres")
+    where = tree.find(exp.Where)
+    assert isinstance(where.this, exp.And)
+    assert {column.name for column in where.this.find_all(exp.Column)} >= {"price", "quantity"}
