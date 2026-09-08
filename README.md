@@ -37,11 +37,17 @@ Enterprise-grade multi-database SQL conversion engine supporting 12 database dia
 
 ```bash
 # Clone the repository
-git clone https://github.com/YOUR_USERNAME/sql-dialect-master.git
+git clone https://github.com/zengxiangdi/sql-dialect-master.git
 cd sql-dialect-master
 
-# Install dependencies
-pip install -r requirements.txt
+# Install the application package
+python -m pip install -e .
+```
+
+For development and testing, install the optional development dependencies:
+
+```bash
+python -m pip install -e ".[dev]"
 ```
 
 ### Run Streamlit UI (Recommended)
@@ -145,11 +151,11 @@ sql-dialect-master/
 │   ├── themes.py                # Visual Themes
 │   └── templates.py             # SQL Templates
 ├── examples/
-│   ├── api_client.py            # API usage examples
-│   └── basic_usage.py           # SDK usage examples
+│   ├── api_client.py             # API usage examples
+│   └── basic_usage.py            # SDK usage examples
 ├── sdm_local.py                 # Streamlit Application Entry
 ├── pyproject.toml               # Project configuration
-├── requirements.txt             # Dependencies
+├── requirements.txt              # Legacy/runtime dependency list
 ├── .env.example                 # Environment template
 ├── LICENSE                      # MIT License
 └── README.md
@@ -201,6 +207,9 @@ Key settings (prefixed with `SDM_`):
 ## 🧪 Testing
 
 ```bash
+# Install development dependencies
+python -m pip install -e ".[dev]"
+
 # Run all tests
 pytest
 
@@ -227,7 +236,7 @@ MIT License - see [LICENSE](LICENSE) file.
 
 ## 📬 Contact
 
-- Issues: [GitHub Issues](https://github.com/YOUR_USERNAME/sql-dialect-master/issues)
+- Issues: [GitHub Issues](https://github.com/zengxiangdi/sql-dialect-master/issues)
 
 ---
 
