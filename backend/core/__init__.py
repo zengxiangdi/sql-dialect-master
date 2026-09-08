@@ -30,6 +30,7 @@ from .semantic_ir import (
     TextPredicate,
 )
 from .semantic_parser import parse_condition_expression, parse_condition_list
+from .semantic_integration import enrich_result_with_semantic_ir
 from .exceptions import (
     SDMException,
     UnsupportedDialectError,
@@ -55,7 +56,6 @@ def _extract_conditions_with_boolean(self, text, original):
 NL2SQLGenerator._extract_conditions_enhanced = _extract_conditions_with_boolean
 
 __all__ = [
-    # Configuration
     "setup_logging",
     "SUPPORTED_DIALECTS",
     "DIALECT_METADATA",
@@ -64,24 +64,16 @@ __all__ = [
     "get_dialect_ui_info",
     "get_dialect_api_info",
     "get_dialect_label",
-    # Parser
     "SQLParser",
     "ParseResult",
-    # Transpiler
     "SQLTranspiler",
     "TranspileResult",
-    # Cache
     "TTLCache",
-    # Post-processor
     "PostProcessor",
-    # Function Encyclopedia
     "FunctionEncyclopedia",
-    # Type Mapper
     "TypeMapper",
-    # NL2SQL
     "NL2SQLGenerator",
     "NL2SQLResult",
-    # Semantic IR
     "Predicate",
     "ComparisonPredicate",
     "RangePredicate",
@@ -95,7 +87,7 @@ __all__ = [
     "SemanticQuery",
     "parse_condition_expression",
     "parse_condition_list",
-    # Exceptions
+    "enrich_result_with_semantic_ir",
     "SDMException",
     "UnsupportedDialectError",
     "TranspileError",
