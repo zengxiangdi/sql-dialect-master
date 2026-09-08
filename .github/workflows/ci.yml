@@ -50,6 +50,11 @@ jobs:
           }
           missing = required - names
           assert not missing, f"wheel missing runtime data files: {sorted(missing)}"
+          forbidden_prefixes = ("backend/tests/", "backend/benchmarks/")
+          leaked = sorted(
+              name for name in names if name.startswith(forbidden_prefixes)
+          )
+          assert not leaked, f"wheel contains development packages: {leaked}"
           print(f"Validated wheel: {wheels[-1].name}")
           PY
 
