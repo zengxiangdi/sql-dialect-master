@@ -8,6 +8,8 @@ from .config import SUPPORTED_DIALECTS
 from .nl2sql import NL2SQLGenerator
 from .parser import SQLParser
 from .post_processor import PostProcessor
+from .rules import TransformRule
+from .transpiler import SQLTranspiler
 
 
 _original_parser_init = SQLParser.__init__
@@ -63,6 +65,88 @@ def _process_with_group_concat_default_separator(self, sql: str, source: str, ta
 
 
 PostProcessor.process = _process_with_group_concat_default_separator
+
+
+# RuleEngine historically applied regexes across the complete SQL string. That
+# can rewrite data inside string literals or quoted identifiers, which changes
+# query semantics without touching executable SQL. Apply each rule only to
+# unquoted SQL segments while preserving the original compiled-pattern cache.
+_original_rule_apply = TransformRule.apply
+
+
+def _apply_rule_quote_aware(self, sql: str):
+    """Apply a transformation rule only outside SQL quoted regions."""
+    if not self.enabled:
+        return sql, False
+
+    pattern = getattr(self, "_compiled_pattern", None)
+    if pattern is None:
+        pattern = re.compile(self.pattern, re.IGNORECASE)
+        self._compiled_pattern = pattern
+
+    chunks = []
+    unquoted = []
+    changed = False
+    i = 0
+    start = 0
+    quote = None
+    length = len(sql)
+
+    while i < length:
+        char = sql[i]
+
+        if quote is None:
+            if char in ("'", '"', '`'):
+                if start < i:
+                    segment = sql[start:i]
+                    replacement, count = pattern.subn(self.replacement, segment)
+                    chunks.append(replacement)
+                    changed = changed or count > 0
+                quote = char
+                start = i
+                i += 1
+                continue
+            if char == '[':
+                if start < i:
+                    segment = sql[start:i]
+                    replacement, count = pattern.subn(self.replacement, segment)
+                    chunks.append(replacement)
+                    changed = changed or count > 0
+                quote = ']'
+                start = i
+                i += 1
+                continue
+            i += 1
+            continue
+
+        # Inside a quoted region, preserve content verbatim. SQL-standard
+        # doubled quote escapes are handled for all quote styles that use them.
+        if char == quote:
+            if i + 1 < length and sql[i + 1] == quote:
+                i += 2
+                continue
+            chunks.append(sql[start:i + 1])
+            start = i + 1
+            quote = None
+        elif quote == "'" and char == "\\" and i + 1 < length:
+            # MySQL-compatible backslash escaping inside single-quoted strings.
+            i += 2
+            continue
+        i += 1
+
+    if start < length:
+        segment = sql[start:]
+        if quote is None:
+            replacement, count = pattern.subn(self.replacement, segment)
+            chunks.append(replacement)
+            changed = changed or count > 0
+        else:
+            chunks.append(segment)
+
+    return ''.join(chunks), changed
+
+
+TransformRule.apply = _apply_rule_quote_aware
 
 
 _original_extract_conditions = NL2SQLGenerator._extract_conditions_enhanced
