@@ -39,8 +39,7 @@ def test_parse_not_in_and_not_null():
     )
 
     not_null = parse_condition_expression("name IS NOT NULL")
-    assert isinstance(not_null, Not)
-    assert not_null.operand == NullPredicate(field="name", is_null=True)
+    assert not_null == NullPredicate(field="name", is_null=False)
 
 
 def test_parse_range_and_text_predicates():
