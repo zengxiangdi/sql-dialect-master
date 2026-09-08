@@ -60,6 +60,26 @@ class TTLCache:
         """Create cache key from arguments."""
         content = str(args) + str(sorted(kwargs.items()))
         return hashlib.md5(content.encode()).hexdigest()
+
+    def _get_value(self, key: str) -> tuple[bool, Any]:
+        """Get a cached value while preserving the distinction between None and a miss."""
+        if key not in self._cache:
+            self._misses += 1
+            return False, None
+
+        entry = self._cache[key]
+
+        if entry.is_expired():
+            del self._cache[key]
+            self._misses += 1
+            logger.debug(f"Cache entry expired: {key[:8]}...")
+            return False, None
+
+        self._cache.move_to_end(key)
+        entry.hits += 1
+        self._hits += 1
+        logger.debug(f"Cache hit: {key[:8]}...")
+        return True, entry.value
     
     def get(self, key: str) -> Optional[Any]:
         """Get value from cache.
@@ -71,24 +91,8 @@ class TTLCache:
             Cached value or None if not found/expired
         """
         with self._lock:
-            if key not in self._cache:
-                self._misses += 1
-                return None
-            
-            entry = self._cache[key]
-            
-            if entry.is_expired():
-                del self._cache[key]
-                self._misses += 1
-                logger.debug(f"Cache entry expired: {key[:8]}...")
-                return None
-            
-            # Move to end (most recently used)
-            self._cache.move_to_end(key)
-            entry.hits += 1
-            self._hits += 1
-            logger.debug(f"Cache hit: {key[:8]}...")
-            return entry.value
+            found, value = self._get_value(key)
+            return value if found else None
     
     def set(self, key: str, value: Any, ttl: int = None) -> None:
         """Store value in cache.
@@ -208,9 +212,9 @@ class TTLCache:
             Cached or computed value
         """
         with self._lock:
-            result = self.get(key)
-            if result is not None:
-                return result
+            found, value = self._get_value(key)
+            if found:
+                return value
             
             # Compute value while holding the reentrant lock so competing
             # callers cannot publish a second value for the same key.
@@ -288,13 +292,13 @@ class CachedFunction:
             else:
                 key = self._cache._make_key(func.__name__, *args, **kwargs)
             
-            result = self._cache.get(key)
-            if result is not None:
-                return result
+            found, value = self._cache._get_value(key)
+            if found:
+                return value
             
-            result = func(*args, **kwargs)
-            self._cache.set(key, result)
-            return result
+            value = func(*args, **kwargs)
+            self._cache.set(key, value)
+            return value
         
         wrapper.__name__ = func.__name__
         wrapper.__doc__ = func.__doc__
