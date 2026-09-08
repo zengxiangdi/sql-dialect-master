@@ -48,6 +48,9 @@ from . import batch_validation  # noqa: F401,E402
 # structured validation result as API callers.
 from . import input_validation  # noqa: F401,E402
 
+# Install the focused NULL-predicate precedence fix after NL2SQLGenerator is loaded.
+from . import nl2sql_null_predicate_fix  # noqa: F401,E402
+
 __all__ = [
     "setup_logging",
     "SUPPORTED_DIALECTS",
