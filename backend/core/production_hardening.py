@@ -1,13 +1,35 @@
 """Second-pass production hardening helpers."""
 
+import os
+
 from .config import settings
 from .nl2sql import NL2SQLGenerator, NL2SQLResult
 from .parser import SQLParser, ParseResult
 from .transpiler import SQLTranspiler
 
 
-PARSER_MAX_INPUT_LENGTH = getattr(settings, "parser_max_sql_length", settings.transpiler_max_sql_length)
-NL2SQL_MAX_INPUT_LENGTH = getattr(settings, "nl2sql_max_input_length", 8192)
+def _configured_positive_int(env_name: str, default: int) -> int:
+    """Read a positive integer configuration value without silently accepting invalid input."""
+    raw = os.getenv(env_name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{env_name} must be a positive integer") from exc
+    if value <= 0:
+        raise ValueError(f"{env_name} must be a positive integer")
+    return value
+
+
+PARSER_MAX_INPUT_LENGTH = _configured_positive_int(
+    "SDM_PARSER_MAX_SQL_LENGTH",
+    getattr(settings, "parser_max_sql_length", settings.transpiler_max_sql_length),
+)
+NL2SQL_MAX_INPUT_LENGTH = _configured_positive_int(
+    "SDM_NL2SQL_MAX_INPUT_LENGTH",
+    getattr(settings, "nl2sql_max_input_length", 8192),
+)
 
 _original_parser_parse = SQLParser.parse
 _original_nl2sql_generate = NL2SQLGenerator.generate
@@ -55,10 +77,6 @@ def _validate_output_strict(self: SQLTranspiler, sql: str, dialect: str):
         return None
     except Exception as exc:
         message = str(exc)
-        # sqlglot models Hive TRUNC as TimestampTrunc and may require a unit even
-        # when the converted SQL is the valid numeric form TRUNC(number). Keep
-        # this narrow compatibility exception instead of accepting arbitrary
-        # target-parser failures via the old generic-parser fallback.
         if (
             "Required keyword: 'unit' missing" in message
             and "TimestampTrunc" in message
