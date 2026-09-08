@@ -78,3 +78,14 @@ def test_dialect_selectors_ignore_whitespace_and_case() -> None:
     assert rule.matches_dialects("ORACLE", "hive")
     assert rule.matches_dialects("mysql", "POSTGRES")
     assert not rule.matches_dialects("spark", "hive")
+
+def test_rule_apply_surfaces_regex_execution_errors() -> None:
+    rule = make_rule("bad_replacement")
+    rule.replacement = r"\2"
+
+    import re
+    import pytest
+
+    with pytest.raises(re.error, match="invalid group reference"):
+        rule.apply("SELECT FOO")
+

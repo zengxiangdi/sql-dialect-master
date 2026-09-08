@@ -69,15 +69,12 @@ class TransformRule:
         if not self.enabled:
             return sql, False
         
-        try:
-            pattern = getattr(self, "_compiled_pattern", None)
-            if pattern is None:
-                pattern = re.compile(self.pattern, re.IGNORECASE)
-                self._compiled_pattern = pattern
-            new_sql, count = pattern.subn(self.replacement, sql)
-            return new_sql, count > 0
-        except Exception:
-            return sql, False
+        pattern = getattr(self, "_compiled_pattern", None)
+        if pattern is None:
+            pattern = re.compile(self.pattern, re.IGNORECASE)
+            self._compiled_pattern = pattern
+        new_sql, count = pattern.subn(self.replacement, sql)
+        return new_sql, count > 0
 
 
 # =============================================================================
