@@ -54,8 +54,10 @@ class TransformRule:
     
     def matches_dialects(self, source: str, target: str) -> bool:
         """Check if this rule applies to the given dialect pair."""
-        source_match = self.source == "*" or source.lower() in self.source.lower().split(",")
-        target_match = self.target == "*" or target.lower() in self.target.lower().split(",")
+        source_values = {value.strip().lower() for value in self.source.split(",")}
+        target_values = {value.strip().lower() for value in self.target.split(",")}
+        source_match = "*" in source_values or source.lower() in source_values
+        target_match = "*" in target_values or target.lower() in target_values
         return source_match and target_match
     
     def apply(self, sql: str) -> Tuple[str, bool]:
@@ -519,73 +521,59 @@ class RuleEngine:
                     rule._compiled_pattern = None
     
     def validate_rules(self) -> List[str]:
-        """Validate rules for potential conflicts and issues.
+        """Validate rules for common conflicts and invalid configurations.
         
         Returns:
-            List of warning messages
+            List of warning messages. Empty list means no issues found.
         """
         warnings = []
+        names = set()
         
-        # Check for duplicate rule names
-        names = [r.name for r in self.rules]
-        duplicates = set(n for n in names if names.count(n) > 1)
-        for dup in duplicates:
-            warnings.append(f"Duplicate rule name: {dup}")
-        
-        # Check for invalid patterns
         for rule in self.rules:
-            try:
-                re.compile(rule.pattern)
-            except re.error as e:
-                warnings.append(f"Invalid pattern in rule {rule.name}: {e}")
-        
-        # Check for potential conflicts (same source/target with overlapping patterns)
-        for i, r1 in enumerate(self.rules):
-            for r2 in self.rules[i+1:]:
-                if (self._dialect_sets_intersect(r1.source, r2.source)
-                    and self._dialect_sets_intersect(r1.target, r2.target)
-                    and r1.category == r2.category
-                    and r1.enabled and r2.enabled):
-                    if self._patterns_may_overlap(r1.pattern, r2.pattern):
-                        warnings.append(
-                            f"Potential conflict between rules '{r1.name}' and '{r2.name}'"
-                        )
+            if rule.name in names:
+                warnings.append(f"Duplicate rule name: {rule.name}")
+            names.add(rule.name)
+            
+            if not rule.pattern:
+                warnings.append(f"Empty pattern in rule: {rule.name}")
+            
+            # Check for potentially conflicting rules with same dialect/category
+            # Calculate intersection rather than requiring exact selector equality.
+            for other in self.rules:
+                if rule.name >= other.name:
+                    continue
+                if (rule.category == other.category and 
+                    rule.priority == other.priority and
+                    self._dialect_sets_intersect(rule.source, other.source) and
+                    self._dialect_sets_intersect(rule.target, other.target)):
+                    warnings.append(
+                        f"Potential conflict: {rule.name} and {other.name} "
+                        f"have same priority/category and overlapping dialects"
+                    )
         
         return warnings
     
     @staticmethod
-    def _dialect_sets_intersect(left: str, right: str) -> bool:
-        """Return whether two comma-separated dialect selectors intersect."""
-        left_values = {value.strip().lower() for value in left.split(",")}
-        right_values = {value.strip().lower() for value in right.split(",")}
-        return "*" in left_values or "*" in right_values or bool(left_values & right_values)
-    
-    def _patterns_may_overlap(self, pattern1: str, pattern2: str) -> bool:
-        """Check if two patterns might match the same text."""
-        # Simple heuristic: check if patterns share common literal strings
-        literals1 = set(re.findall(r'[A-Z_]+', pattern1))
-        literals2 = set(re.findall(r'[A-Z_]+', pattern2))
-        return bool(literals1 & literals2)
+    def _dialect_sets_intersect(first: str, second: str) -> bool:
+        """Return whether two comma-separated dialect selectors overlap."""
+        first_values = {value.strip().lower() for value in first.split(",")}
+        second_values = {value.strip().lower() for value in second.split(",")}
+        return "*" in first_values or "*" in second_values or bool(first_values & second_values)
     
     def get_stats(self) -> dict:
         """Get rule engine statistics.
         
         Returns:
-            Dictionary with stats
+            Dictionary with statistics
         """
-        by_category = {}
-        for rule in self.rules:
-            cat = rule.category.value
-            by_category[cat] = by_category.get(cat, 0) + 1
-        
-        # Validate rules and include warnings
-        validation_warnings = self.validate_rules()
-        
         return {
             "total_rules": len(self.rules),
             "enabled_rules": sum(1 for r in self.rules if r.enabled),
-            "by_category": by_category,
-            "validation_warnings": validation_warnings
+            "categories": {
+                cat.value: sum(1 for r in self.rules if r.category == cat)
+                for cat in RuleCategory
+            },
+            "average_priority": sum(r.priority for r in self.rules) / len(self.rules) if self.rules else 0,
         }
 
 
