@@ -68,6 +68,12 @@ class FunctionEncyclopedia:
                 details={"data_path": str(self.data_path)},
             ) from exc
 
+        if not isinstance(data, dict):
+            raise ConfigurationError(
+                f"Invalid function data in {self.data_path}: top-level JSON value must be an object",
+                details={"data_path": str(self.data_path)},
+            )
+
         functions = data.get("functions", [])
         if not isinstance(functions, list):
             raise ConfigurationError(
