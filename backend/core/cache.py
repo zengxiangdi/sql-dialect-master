@@ -282,7 +282,7 @@ class CachedFunction:
             cache: Cache instance to use
             key_func: Optional function to generate cache key
         """
-        self._cache = cache or TTLCache()
+        self._cache = cache if cache is not None else TTLCache()
         self._key_func = key_func
     
     def __call__(self, func: Callable) -> Callable:
@@ -292,7 +292,8 @@ class CachedFunction:
             else:
                 key = self._cache._make_key(func.__name__, *args, **kwargs)
             
-            found, value = self._cache._get_value(key)
+            with self._cache._lock:
+                found, value = self._cache._get_value(key)
             if found:
                 return value
             
