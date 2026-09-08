@@ -42,22 +42,19 @@ class RateLimiter:
 
     @property
     def _limits(self):
-        """Read-only compatibility view for the legacy in-memory implementation."""
         return getattr(self._store, "_entries", {})
 
     def is_allowed(self, client_id: str) -> tuple:
-        """Check and consume one request from the configured store."""
         return self._store.check(client_id, self._requests_per_window, self._window_seconds)
 
     def get_stats(self) -> Dict:
-        """Get rate limiter configuration and store metadata."""
         stats = self._store.stats()
         stats.update({"requests_per_window": self._requests_per_window, "window_seconds": self._window_seconds})
         return stats
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    """Rate limiting middleware with an early request-body size guard."""
+    """Rate limiting middleware with a bounded request-body guard."""
 
     def __init__(self, app, limiter: RateLimiter = None, enabled: bool = True, max_body_bytes: int = DEFAULT_MAX_REQUEST_BODY_BYTES):
         super().__init__(app)
@@ -67,16 +64,32 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self.enabled = enabled
         self.max_body_bytes = max_body_bytes
 
-    async def dispatch(self, request: Request, call_next) -> Response:
-        if request.method not in {"GET", "HEAD"}:
-            content_length = request.headers.get("content-length")
-            if content_length:
-                try:
-                    declared_length = int(content_length)
-                except ValueError:
-                    return JSONResponse(status_code=400, content={"success": False, "error": {"code": 400, "message": "Invalid Content-Length"}, "timestamp": datetime.now().isoformat()})
-                if declared_length > self.max_body_bytes:
+    async def _read_bounded_body(self, request: Request) -> Response | None:
+        """Consume and cache request bodies without trusting Content-Length."""
+        if request.method in {"GET", "HEAD"}:
+            return None
+        content_length = request.headers.get("content-length")
+        if content_length:
+            try:
+                if int(content_length) > self.max_body_bytes:
                     return JSONResponse(status_code=413, content={"success": False, "error": {"code": 413, "message": "Request body exceeds the maximum allowed size", "max_bytes": self.max_body_bytes}, "timestamp": datetime.now().isoformat()})
+            except ValueError:
+                return JSONResponse(status_code=400, content={"success": False, "error": {"code": 400, "message": "Invalid Content-Length"}, "timestamp": datetime.now().isoformat()})
+
+        total = 0
+        chunks = []
+        async for chunk in request.stream():
+            total += len(chunk)
+            if total > self.max_body_bytes:
+                return JSONResponse(status_code=413, content={"success": False, "error": {"code": 413, "message": "Request body exceeds the maximum allowed size", "max_bytes": self.max_body_bytes}, "timestamp": datetime.now().isoformat()})
+            chunks.append(chunk)
+        request._body = b"".join(chunks)
+        return None
+
+    async def dispatch(self, request: Request, call_next) -> Response:
+        body_error = await self._read_bounded_body(request)
+        if body_error is not None:
+            return body_error
 
         if not self.enabled:
             return await call_next(request)
@@ -87,11 +100,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         is_allowed, remaining, reset_time = self.limiter.is_allowed(client_id)
         if not is_allowed:
             logger.warning(f"Rate limit exceeded for client: {client_id}")
-            return JSONResponse(
-                status_code=429,
-                content={"success": False, "error": {"code": 429, "message": "Rate limit exceeded", "retry_after": reset_time}, "timestamp": datetime.now().isoformat()},
-                headers={"X-RateLimit-Limit": str(self.limiter._requests_per_window), "X-RateLimit-Remaining": "0", "X-RateLimit-Reset": str(reset_time), "Retry-After": str(reset_time)},
-            )
+            return JSONResponse(status_code=429, content={"success": False, "error": {"code": 429, "message": "Rate limit exceeded", "retry_after": reset_time}, "timestamp": datetime.now().isoformat()}, headers={"X-RateLimit-Limit": str(self.limiter._requests_per_window), "X-RateLimit-Remaining": "0", "X-RateLimit-Reset": str(reset_time), "Retry-After": str(reset_time)})
         response = await call_next(request)
         response.headers["X-RateLimit-Limit"] = str(self.limiter._requests_per_window)
         response.headers["X-RateLimit-Remaining"] = str(remaining)
@@ -99,7 +108,6 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         return response
 
     def _get_client_id(self, request: Request) -> str:
-        """Extract client identifier from request without trusting forwarded headers."""
         return request.client.host if request.client else "unknown"
 
 
