@@ -227,6 +227,10 @@ class AppSettings(BaseSettings):
     # API settings
     api_version: str = "1.0.1"
     api_title: str = "SQL Dialect Master API"
+    allowed_origins: str = (
+        "http://localhost:8501,http://localhost:8000,"
+        "http://127.0.0.1:8501,http://127.0.0.1:8000"
+    )
     max_batch_size: int = 100
     request_timeout: int = 30
     

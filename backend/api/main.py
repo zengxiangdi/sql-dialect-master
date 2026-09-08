@@ -36,8 +36,8 @@ logger = setup_logging(level=logging.INFO)
 api_logger = logging.getLogger(__name__)
 
 # API metadata
-API_VERSION = "1.0.0"
-API_TITLE = "SQL Dialect Master API"
+API_VERSION = settings.api_version
+API_TITLE = settings.api_title
 API_DESCRIPTION = """
 # 🔄 SQL Dialect Master API
 
@@ -128,13 +128,8 @@ from backend.api.middleware import (
 )
 from backend.core.exceptions import SDMException, UnsupportedDialectError
 
-# Configure CORS with environment-based origins for security
-# In production, set SDM_ALLOWED_ORIGINS to restrict access
-import os
-ALLOWED_ORIGINS = os.getenv(
-    "SDM_ALLOWED_ORIGINS", 
-    "http://localhost:8501,http://localhost:8000,http://127.0.0.1:8501,http://127.0.0.1:8000"
-).split(",")
+# Configure CORS from the centralized Pydantic settings source.
+ALLOWED_ORIGINS = [origin.strip() for origin in settings.allowed_origins.split(",") if origin.strip()]
 
 app.add_middleware(
     CORSMiddleware,
@@ -181,6 +176,17 @@ async def add_process_time_header(request: Request, call_next):
 
 # Dialect info for enhanced responses (from centralized config)
 DIALECT_INFO = get_dialect_api_info()
+
+
+def normalize_dialect(dialect: str, field_name: str = "dialect") -> str:
+    """Normalize and validate a dialect at the API boundary."""
+    normalized = dialect.strip().lower()
+    if normalized not in SUPPORTED_DIALECTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported {field_name}: {dialect}. Supported: {SUPPORTED_DIALECTS}",
+        )
+    return normalized
 
 # === Request/Response Models with Enhanced Documentation ===
 
@@ -398,11 +404,12 @@ async def parse_sql(request: ParseRequest):
     
     Extracts tables, columns, functions, and other elements from SQL.
     """
-    parser = SQLParser(request.dialect)
+    dialect = normalize_dialect(request.dialect)
+    parser = SQLParser(dialect)
     elements = parser.extract_elements(request.sql)
     return {
         "success": True,
-        "dialect": request.dialect,
+        "dialect": dialect,
         "elements": elements,
         "timestamp": datetime.now().isoformat()
     }
@@ -490,6 +497,10 @@ async def list_types(
     - Complex: ARRAY, MAP, STRUCT, JSON
     - Special: UUID, INET, GEOMETRY
     """
+    if source is not None:
+        source = normalize_dialect(source, "source dialect")
+    if target is not None:
+        target = normalize_dialect(target, "target dialect")
     matrix = type_mapper.get_matrix(source, target)
     return {
         "success": True,
@@ -563,16 +574,17 @@ async def generate_sql(request: NL2SQLRequest):
     - "统计每个部门的员工数量" → SELECT dept, COUNT(*) FROM employees GROUP BY dept
     - "Get top 10 users by score" → SELECT * FROM users ORDER BY score DESC LIMIT 10
     """
+    dialect = normalize_dialect(request.dialect)
     result = nl2sql_generator.generate(
         request.text,
-        request.dialect,
+        dialect,
         request.table_hint
     )
     return NL2SQLResponse(
         success=result.success,
         input_text=result.input_text,
         sql=result.sql,
-        dialect=result.dialect,
+        dialect=dialect,
         explanation=result.explanation,
         confidence=result.confidence,
         suggestions=result.suggestions
