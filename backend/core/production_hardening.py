@@ -35,12 +35,7 @@ def _generate_with_length_guard(
 ) -> NL2SQLResult:
     """Reject oversized NL2SQL input before tokenization and regex processing."""
     if not isinstance(text, str):
-        return NL2SQLResult(
-            success=False,
-            input_text=str(text),
-            dialect=dialect or self.default_dialect,
-            explanation="text must be a string",
-        )
+        raise TypeError("text must be a string")
     if len(text) > NL2SQL_MAX_INPUT_LENGTH:
         return NL2SQLResult(
             success=False,
@@ -52,5 +47,16 @@ def _generate_with_length_guard(
     return _original_nl2sql_generate(self, text, dialect, table_hint, column_hints)
 
 
+def _validate_output_strict(self: SQLTranspiler, sql: str, dialect: str):
+    """Require generated SQL to parse under the requested target dialect."""
+    try:
+        import sqlglot
+        sqlglot.parse_one(sql, read=dialect)
+    except Exception as exc:
+        return f"⚠️ Output SQL failed {dialect} dialect validation: {str(exc)[:160]}"
+    return None
+
+
 SQLParser.parse = _parse_with_length_guard
 NL2SQLGenerator.generate = _generate_with_length_guard
+SQLTranspiler._validate_output = _validate_output_strict
