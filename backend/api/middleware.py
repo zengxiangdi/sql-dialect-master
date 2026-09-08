@@ -108,7 +108,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if not self.enabled:
             return await call_next(request)
 
-        if request.url.path in ["/health", "/health/deep", "/"] and request.method in {"GET", "HEAD"}:
+        if request.url.path in ["/health", "/health/deep", "/ready", "/"] and request.method in {"GET", "HEAD"}:
             return await call_next(request)
 
         client_id = self._get_client_id(request)
