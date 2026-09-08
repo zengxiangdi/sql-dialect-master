@@ -4,6 +4,7 @@ import re
 
 from sqlglot import exp
 
+from .config import SUPPORTED_DIALECTS
 from .nl2sql import NL2SQLGenerator
 from .parser import SQLParser
 from .post_processor import PostProcessor
@@ -86,3 +87,63 @@ def _extract_conditions_with_english_inclusive_comparisons(self, text: str, orig
 
 
 NL2SQLGenerator._extract_conditions_enhanced = _extract_conditions_with_english_inclusive_comparisons
+
+
+_original_apply_dialect_adjustments = NL2SQLGenerator._apply_dialect_adjustments
+
+
+def _apply_dialect_adjustments_safe(self, sql: str, dialect: str):
+    """Apply date rewrites without destructive parenthesis/string replacement."""
+    if dialect == "oracle":
+        adjusted = sql.replace("CURRENT_DATE", "TRUNC(SYSDATE)")
+        adjusted = re.sub(
+            r"DATE_SUB\(TRUNC\(SYSDATE\),\s*(\d+)\)",
+            r"TRUNC(SYSDATE) - \1",
+            adjusted,
+        )
+        return adjusted
+
+    if dialect == "tsql":
+        adjusted = sql.replace("CURRENT_DATE", "CAST(GETDATE() AS DATE)")
+        adjusted = re.sub(
+            r"DATE_SUB\(CAST\(GETDATE\(\) AS DATE\),\s*(\d+)\)",
+            r"DATEADD(DAY, -\1, CAST(GETDATE() AS DATE))",
+            adjusted,
+        )
+        return adjusted
+
+    if dialect == "postgres":
+        return re.sub(
+            r"DATE_SUB\(CURRENT_DATE,\s*(\d+)\)",
+            r"CURRENT_DATE - INTERVAL '\1 days'",
+            sql,
+        )
+
+    return _original_apply_dialect_adjustments(self, sql, dialect)
+
+
+NL2SQLGenerator._apply_dialect_adjustments = _apply_dialect_adjustments_safe
+
+
+_original_generate = NL2SQLGenerator.generate
+
+
+def _generate_normalized(self, text: str, dialect: str = None, table_hint: str = None, column_hints=None):
+    """Normalize direct-call inputs so core and API callers share dialect semantics."""
+    normalized_dialect = (dialect or self.default_dialect).strip().lower()
+    if normalized_dialect not in SUPPORTED_DIALECTS:
+        raise ValueError(
+            f"Unsupported dialect: {dialect}. Supported: {', '.join(SUPPORTED_DIALECTS)}"
+        )
+    if not isinstance(text, str):
+        raise TypeError("text must be a string")
+    return _original_generate(
+        self,
+        text,
+        normalized_dialect,
+        table_hint.strip() if isinstance(table_hint, str) else table_hint,
+        column_hints,
+    )
+
+
+NL2SQLGenerator.generate = _generate_normalized
