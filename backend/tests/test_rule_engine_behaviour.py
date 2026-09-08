@@ -66,3 +66,15 @@ def test_added_rule_is_immediately_compiled_and_applied() -> None:
 
     assert result == "SELECT BAR"
     assert notes == ["foo_to_bar"]
+
+
+def test_dialect_selectors_ignore_whitespace_and_case() -> None:
+    rule = make_rule(
+        "multi_dialect",
+        source="mysql, oracle",
+        target="postgres, Hive",
+    )
+
+    assert rule.matches_dialects("ORACLE", "hive")
+    assert rule.matches_dialects("mysql", "POSTGRES")
+    assert not rule.matches_dialects("spark", "hive")
