@@ -44,8 +44,11 @@ NL2SQLGenerator._extract_conditions_enhanced = _extract_conditions_with_boolean
 # cannot be silently truncated by the legacy batch implementations.
 from . import batch_validation  # noqa: F401,E402
 
+# Install core input validation so invalid direct callers receive the same
+# structured validation result as API callers.
+from . import input_validation  # noqa: F401,E402
+
 __all__ = [
-    # Configuration
     "setup_logging",
     "SUPPORTED_DIALECTS",
     "DIALECT_METADATA",
@@ -54,24 +57,16 @@ __all__ = [
     "get_dialect_ui_info",
     "get_dialect_api_info",
     "get_dialect_label",
-    # Parser
     "SQLParser",
     "ParseResult",
-    # Transpiler
     "SQLTranspiler",
     "TranspileResult",
-    # Cache
     "TTLCache",
-    # Post-processor
     "PostProcessor",
-    # Function Encyclopedia
     "FunctionEncyclopedia",
-    # Type Mapper
     "TypeMapper",
-    # NL2SQL
     "NL2SQLGenerator",
     "NL2SQLResult",
-    # Exceptions
     "SDMException",
     "UnsupportedDialectError",
     "TranspileError",
