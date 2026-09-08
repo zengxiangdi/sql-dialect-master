@@ -31,12 +31,7 @@ class RateLimitEntry:
 class RateLimiter:
     """Rate limiter backed by a local or shared store."""
 
-    def __init__(
-        self,
-        requests_per_window: int = 100,
-        window_seconds: int = 60,
-        store: RateLimitStore = None,
-    ):
+    def __init__(self, requests_per_window: int = 100, window_seconds: int = 60, store: RateLimitStore = None):
         if requests_per_window <= 0:
             raise ValueError("requests_per_window must be positive")
         if window_seconds <= 0:
@@ -45,6 +40,11 @@ class RateLimiter:
         self._window_seconds = window_seconds
         self._store = store or create_rate_limit_store()
 
+    @property
+    def _limits(self):
+        """Read-only compatibility view for the legacy in-memory implementation."""
+        return getattr(self._store, "_entries", {})
+
     def is_allowed(self, client_id: str) -> tuple:
         """Check and consume one request from the configured store."""
         return self._store.check(client_id, self._requests_per_window, self._window_seconds)
@@ -52,23 +52,14 @@ class RateLimiter:
     def get_stats(self) -> Dict:
         """Get rate limiter configuration and store metadata."""
         stats = self._store.stats()
-        stats.update({
-            "requests_per_window": self._requests_per_window,
-            "window_seconds": self._window_seconds,
-        })
+        stats.update({"requests_per_window": self._requests_per_window, "window_seconds": self._window_seconds})
         return stats
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """Rate limiting middleware with an early request-body size guard."""
 
-    def __init__(
-        self,
-        app,
-        limiter: RateLimiter = None,
-        enabled: bool = True,
-        max_body_bytes: int = DEFAULT_MAX_REQUEST_BODY_BYTES,
-    ):
+    def __init__(self, app, limiter: RateLimiter = None, enabled: bool = True, max_body_bytes: int = DEFAULT_MAX_REQUEST_BODY_BYTES):
         super().__init__(app)
         if max_body_bytes <= 0:
             raise ValueError("max_body_bytes must be positive")
@@ -83,31 +74,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 try:
                     declared_length = int(content_length)
                 except ValueError:
-                    return JSONResponse(
-                        status_code=400,
-                        content={
-                            "success": False,
-                            "error": {"code": 400, "message": "Invalid Content-Length"},
-                            "timestamp": datetime.now().isoformat(),
-                        },
-                    )
+                    return JSONResponse(status_code=400, content={"success": False, "error": {"code": 400, "message": "Invalid Content-Length"}, "timestamp": datetime.now().isoformat()})
                 if declared_length > self.max_body_bytes:
-                    return JSONResponse(
-                        status_code=413,
-                        content={
-                            "success": False,
-                            "error": {
-                                "code": 413,
-                                "message": "Request body exceeds the maximum allowed size",
-                                "max_bytes": self.max_body_bytes,
-                            },
-                            "timestamp": datetime.now().isoformat(),
-                        },
-                    )
+                    return JSONResponse(status_code=413, content={"success": False, "error": {"code": 413, "message": "Request body exceeds the maximum allowed size", "max_bytes": self.max_body_bytes}, "timestamp": datetime.now().isoformat()})
 
         if not self.enabled:
             return await call_next(request)
-
         if request.url.path in ["/health", "/health/deep", "/ready", "/"] and request.method in {"GET", "HEAD"}:
             return await call_next(request)
 
@@ -117,23 +89,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             logger.warning(f"Rate limit exceeded for client: {client_id}")
             return JSONResponse(
                 status_code=429,
-                content={
-                    "success": False,
-                    "error": {
-                        "code": 429,
-                        "message": "Rate limit exceeded",
-                        "retry_after": reset_time,
-                    },
-                    "timestamp": datetime.now().isoformat(),
-                },
-                headers={
-                    "X-RateLimit-Limit": str(self.limiter._requests_per_window),
-                    "X-RateLimit-Remaining": "0",
-                    "X-RateLimit-Reset": str(reset_time),
-                    "Retry-After": str(reset_time),
-                },
+                content={"success": False, "error": {"code": 429, "message": "Rate limit exceeded", "retry_after": reset_time}, "timestamp": datetime.now().isoformat()},
+                headers={"X-RateLimit-Limit": str(self.limiter._requests_per_window), "X-RateLimit-Remaining": "0", "X-RateLimit-Reset": str(reset_time), "Retry-After": str(reset_time)},
             )
-
         response = await call_next(request)
         response.headers["X-RateLimit-Limit"] = str(self.limiter._requests_per_window)
         response.headers["X-RateLimit-Remaining"] = str(remaining)
@@ -142,9 +100,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     def _get_client_id(self, request: Request) -> str:
         """Extract client identifier from request without trusting forwarded headers."""
-        if request.client:
-            return request.client.host
-        return "unknown"
+        return request.client.host if request.client else "unknown"
 
 
 class StructuredLoggingMiddleware(BaseHTTPMiddleware):
@@ -157,15 +113,7 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
         start_time = time.time()
         request_id = str(uuid.uuid4())
-        log_data = {
-            "event": "request_start",
-            "request_id": request_id,
-            "method": request.method,
-            "path": request.url.path,
-            "query": str(request.query_params),
-            "client": request.client.host if request.client else "unknown",
-            "timestamp": datetime.now().isoformat(),
-        }
+        log_data = {"event": "request_start", "request_id": request_id, "method": request.method, "path": request.url.path, "query": str(request.query_params), "client": request.client.host if request.client else "unknown", "timestamp": datetime.now().isoformat()}
         logger.info(json.dumps(log_data))
         try:
             response = await call_next(request)
@@ -177,20 +125,8 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
             raise
         finally:
             process_time = time.time() - start_time
-            log_data = {
-                "event": "request_end",
-                "request_id": request_id,
-                "method": request.method,
-                "path": request.url.path,
-                "status_code": status_code,
-                "process_time_ms": round(process_time * 1000, 2),
-                "error": error,
-                "timestamp": datetime.now().isoformat(),
-            }
-            if status_code >= 400:
-                logger.warning(json.dumps(log_data))
-            else:
-                logger.info(json.dumps(log_data))
+            log_data = {"event": "request_end", "request_id": request_id, "method": request.method, "path": request.url.path, "status_code": status_code, "process_time_ms": round(process_time * 1000, 2), "error": error, "timestamp": datetime.now().isoformat()}
+            (logger.warning if status_code >= 400 else logger.info)(json.dumps(log_data))
         response.headers["X-Request-ID"] = request_id
         return response
 
