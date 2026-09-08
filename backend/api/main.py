@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""FastAPI Backend for SQL Dialect Master."""
+"""FastAPI Backend for SQL Dialect Master.
+
+Enterprise-grade multi-database SQL conversion API with:
+- 12 database dialects support
+- 298 SQL functions encyclopedia
+- 36 data type mappings
+- Natural language to SQL generation
+"""
+import asyncio
 import logging
 import sys
 import time
@@ -37,8 +45,8 @@ Enterprise-grade multi-database SQL conversion engine.
 | Feature | Description |
 |---------|-------------|
 | 🔄 **SQL Conversion** | Convert SQL between 12 database dialects |
-| 📚 **Function Encyclopedia** | Cross-database SQL function reference |
-| 🗂️ **Type Mapping** | Cross-database data type mapping matrix |
+| 📚 **Function Encyclopedia** | 298 SQL functions with cross-database comparison |
+| 🗂️ **Type Mapping** | 36 data type mappings × 12 databases matrix |
 | 💬 **NL2SQL** | Natural language to SQL (Chinese/English) |
 
 ## 💾 Supported Databases
@@ -54,8 +62,6 @@ Enterprise-grade multi-database SQL conversion engine.
 
 ```python
 import requests
-
-# Convert SQL
 response = requests.post("http://localhost:8000/api/convert", json={
     "sql": "SELECT DATE_FORMAT(created_at, '%Y-%m-%d') FROM orders",
     "source_dialect": "mysql",
@@ -78,41 +84,41 @@ app = FastAPI(
     version=API_VERSION,
     docs_url="/docs",
     redoc_url="/redoc",
-    license_info={
-        "name": "MIT License",
-        "url": "https://opensource.org/licenses/MIT"
-    },
+    license_info={"name": "MIT License", "url": "https://opensource.org/licenses/MIT"},
     openapi_tags=[
         {"name": "conversion", "description": "🔄 SQL dialect conversion operations", "externalDocs": {"description": "Learn more", "url": "https://sqlglot.com/"}},
         {"name": "functions", "description": "📚 SQL function encyclopedia"},
         {"name": "types", "description": "🗂️ Data type mapping matrix"},
         {"name": "nl2sql", "description": "💬 Natural language to SQL generation"},
-        {"name": "system", "description": "⚙️ System and health endpoints"}
-    ]
+        {"name": "system", "description": "⚙️ System and health endpoints"},
+    ],
 )
 
-from backend.api.middleware import (
-    RateLimiter,
-    RateLimitMiddleware,
-    StructuredLoggingMiddleware,
-    SecurityHeadersMiddleware
-)
+from backend.api.middleware import RateLimiter, RateLimitMiddleware, StructuredLoggingMiddleware, SecurityHeadersMiddleware
 from backend.core.exceptions import SDMException, UnsupportedDialectError
 
 ALLOWED_ORIGINS = [origin.strip() for origin in settings.allowed_origins.split(",") if origin.strip()]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization", "X-Request-ID"],
-)
+if "*" in ALLOWED_ORIGINS and settings.allowed_origins.strip() != "*":
+    raise RuntimeError("CORS wildcard must be the only configured origin")
+if "*" in ALLOWED_ORIGINS and True:
+    # Credentials with wildcard origins are forbidden by browser CORS semantics.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[],
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Content-Type", "Authorization", "X-Request-ID"],
+    )
+else:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=ALLOWED_ORIGINS,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Content-Type", "Authorization", "X-Request-ID"],
+    )
 app.add_middleware(SecurityHeadersMiddleware)
-rate_limiter = RateLimiter(
-    requests_per_window=settings.rate_limit_requests,
-    window_seconds=settings.rate_limit_window,
-)
+rate_limiter = RateLimiter(requests_per_window=settings.rate_limit_requests, window_seconds=settings.rate_limit_window)
 app.add_middleware(RateLimitMiddleware, limiter=rate_limiter, enabled=settings.rate_limit_enabled)
 
 transpiler = SQLTranspiler()
@@ -136,7 +142,6 @@ DIALECT_INFO = get_dialect_api_info()
 
 
 def normalize_dialect(dialect: str, field_name: str = "dialect") -> str:
-    """Normalize and validate a dialect at the API boundary."""
     normalized = dialect.strip().lower()
     if normalized not in SUPPORTED_DIALECTS:
         raise HTTPException(status_code=400, detail=f"Unsupported {field_name}: {dialect}. Supported: {SUPPORTED_DIALECTS}")
@@ -152,17 +157,17 @@ class ConvertRequest(BaseModel):
 
 
 class ConvertResponse(BaseModel):
-    success: bool = Field(..., description="Whether conversion was successful")
-    source_sql: str = Field(..., description="Original SQL statement")
-    target_sql: Optional[str] = Field(None, description="Converted SQL statement")
-    source_dialect: str = Field(..., description="Source dialect")
-    target_dialect: str = Field(..., description="Target dialect")
-    error: Optional[str] = Field(None, description="Error message if conversion failed")
-    error_code: Optional[str] = Field(None, description="Stable machine-readable error category")
-    compatibility_notes: List[str] = Field(default_factory=list, description="Compatibility notes")
-    transformations: List[str] = Field(default_factory=list, description="Applied transformations")
-    warnings: List[str] = Field(default_factory=list, description="Conversion warnings")
-    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat(), description="Response timestamp")
+    success: bool = Field(...)
+    source_sql: str = Field(...)
+    target_sql: Optional[str] = Field(None)
+    source_dialect: str = Field(...)
+    target_dialect: str = Field(...)
+    error: Optional[str] = Field(None)
+    error_code: Optional[str] = Field(None)
+    compatibility_notes: List[str] = Field(default_factory=list)
+    transformations: List[str] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
 
 
 class NL2SQLRequest(BaseModel):
@@ -173,61 +178,38 @@ class NL2SQLRequest(BaseModel):
 
 
 class NL2SQLResponse(BaseModel):
-    success: bool = Field(..., description="Whether generation was successful")
-    input_text: str = Field(..., description="Original natural language input")
-    sql: Optional[str] = Field(None, description="Generated SQL statement")
-    dialect: str = Field(..., description="Target dialect")
-    explanation: str = Field("", description="Explanation of generated SQL")
-    confidence: float = Field(0.0, description="Confidence score (0.0-1.0)")
-    suggestions: List[str] = Field(default_factory=list, description="Improvement suggestions")
+    success: bool = Field(...)
+    input_text: str = Field(...)
+    sql: Optional[str] = Field(None)
+    dialect: str = Field(...)
+    explanation: str = Field("")
+    confidence: float = Field(0.0)
+    suggestions: List[str] = Field(default_factory=list)
 
 
 class ParseRequest(BaseModel):
-    sql: str = Field(..., description="SQL statement to parse")
-    dialect: str = Field("hive", description="SQL dialect")
+    sql: str = Field(...)
+    dialect: str = Field("hive")
 
 
 class TypeMapRequest(BaseModel):
-    type_name: str = Field(..., description="Source data type name")
-    source_dialect: str = Field(..., description="Source database dialect")
-    target_dialect: str = Field(..., description="Target database dialect")
+    type_name: str = Field(...)
+    source_dialect: str = Field(...)
+    target_dialect: str = Field(...)
     model_config = ConfigDict(json_schema_extra={"example": {"type_name": "VARCHAR", "source_dialect": "mysql", "target_dialect": "postgres"}})
 
 
 class APIResponse(BaseModel):
-    success: bool = Field(..., description="Operation success status")
-    data: Optional[Dict[str, Any]] = Field(None, description="Response data")
-    error: Optional[str] = Field(None, description="Error message if failed")
+    success: bool = Field(...)
+    data: Optional[Dict[str, Any]] = Field(None)
+    error: Optional[str] = Field(None)
     timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
 
 
 @app.get("/", tags=["system"])
 async def root():
-    return {
-        "name": API_TITLE,
-        "version": API_VERSION,
-        "status": "✅ Online",
-        "description": "Enterprise-grade multi-database SQL conversion engine",
-        "stats": {
-            "functions": {"count": len(func_encyclopedia.functions), "label": "📚 SQL Functions"},
-            "types": {"count": len(type_mapper.mappings), "label": "🗂️ Data Types"},
-            "dialects": {"count": len(SUPPORTED_DIALECTS), "label": "💾 Databases"},
-            "rules": {"count": len(transpiler.post_processor.engine.rules), "label": "🔧 Conversion Rules"}
-        },
-        "endpoints": {
-            "🔄 conversion": {"url": "/api/convert", "method": "POST"},
-            "📝 parsing": {"url": "/api/parse", "method": "POST"},
-            "💾 dialects": {"url": "/api/dialects", "method": "GET"},
-            "📚 functions": {"url": "/api/functions", "method": "GET"},
-            "🗂️ types": {"url": "/api/types", "method": "GET"},
-            "💬 nl2sql": {"url": "/api/nl2sql", "method": "POST"},
-            "❤️ health": {"url": "/health", "method": "GET"},
-            "🟢 readiness": {"url": "/ready", "method": "GET"},
-            "📖 docs": {"url": "/docs", "method": "GET"}
-        },
-        "quick_start": {"example": {"endpoint": "POST /api/convert", "body": {"sql": "SELECT DATE_FORMAT(created_at, '%Y-%m-%d') FROM orders", "source_dialect": "mysql", "target_dialect": "postgres"}}},
-        "timestamp": datetime.now().isoformat()
-    }
+    rule_count = len(transpiler.post_processor.engine.rules)
+    return {"name": API_TITLE, "version": API_VERSION, "status": "✅ Online", "description": "Enterprise-grade multi-database SQL conversion engine", "stats": {"functions": {"count": len(func_encyclopedia.functions), "label": "📚 SQL Functions"}, "types": {"count": len(type_mapper.mappings), "label": "🗂️ Data Types"}, "dialects": {"count": len(SUPPORTED_DIALECTS), "label": "💾 Databases"}, "rules": {"count": rule_count, "label": "🔧 Conversion Rules"}}, "endpoints": {"🔄 conversion": {"url": "/api/convert", "method": "POST"}, "📝 parsing": {"url": "/api/parse", "method": "POST"}, "💾 dialects": {"url": "/api/dialects", "method": "GET"}, "📚 functions": {"url": "/api/functions", "method": "GET"}, "🗂️ types": {"url": "/api/types", "method": "GET"}, "💬 nl2sql": {"url": "/api/nl2sql", "method": "POST"}, "❤️ health": {"url": "/health", "method": "GET"}, "🟢 readiness": {"url": "/ready", "method": "GET"}, "📖 docs": {"url": "/docs", "method": "GET"}}, "timestamp": datetime.now().isoformat()}
 
 
 @app.get("/api/dialects", tags=["system"])
@@ -260,7 +242,7 @@ async def parse_sql(request: ParseRequest):
 
 
 @app.get("/api/functions", tags=["functions"])
-async def list_functions(search: Optional[str] = Query(None, description="Search term for function name"), category: Optional[str] = Query(None, description="Filter by category (string, date, math, etc.)"), limit: int = Query(50, ge=1, le=500, description="Maximum number of results")):
+async def list_functions(search: Optional[str] = Query(None, max_length=100), category: Optional[str] = Query(None, max_length=50), limit: int = Query(50, ge=1, le=500)):
     if search:
         functions = func_encyclopedia.search(search, limit)
     elif category:
@@ -285,7 +267,7 @@ async def get_function(name: str):
 
 
 @app.get("/api/types", tags=["types"])
-async def list_types(source: Optional[str] = Query(None, description="Filter by source dialect"), target: Optional[str] = Query(None, description="Filter by target dialect")):
+async def list_types(source: Optional[str] = Query(None, max_length=30), target: Optional[str] = Query(None, max_length=30)):
     if source is not None:
         source = normalize_dialect(source, "source dialect")
     if target is not None:
@@ -298,7 +280,7 @@ async def list_types(source: Optional[str] = Query(None, description="Filter by 
 async def get_type(type_name: str):
     comparison = type_mapper.compare_types(type_name)
     if "error" in comparison:
-        raise HTTPException(status_code=404, detail=f"Type '{type_name}' not found. Available types: STRING, VARCHAR, INT, BIGINT, DECIMAL, DATE, TIMESTAMP, ARRAY, MAP, JSON, etc.")
+        raise HTTPException(status_code=404, detail=f"Type '{type_name}' not found.")
     return {"success": True, **comparison}
 
 
@@ -318,65 +300,60 @@ async def generate_sql(request: NL2SQLRequest):
 
 
 def _run_readiness_checks() -> Dict[str, Dict[str, Any]]:
-    """Run lightweight in-process checks used by readiness probes."""
-    checks: Dict[str, Dict[str, Any]] = {}
+    checks = {}
     try:
         result = transpiler.transpile("SELECT 1 AS test", "mysql", "postgres")
-        checks["transpiler"] = {"status": "ok" if result.success else "error", "test_result": result.success}
+        checks["transpiler"] = {"status": "✅ ok" if result.success else "❌ error", "test_result": result.success, "cache_stats": transpiler.get_stats().get("cache", {})}
     except Exception as exc:
-        checks["transpiler"] = {"status": "error", "message": str(exc)}
+        checks["transpiler"] = {"status": "❌ error", "message": str(exc)}
     try:
         func = func_encyclopedia.get_function("CONCAT")
-        checks["functions"] = {"status": "ok" if func else "warning", "sample_lookup": "CONCAT" if func else None}
+        checks["functions"] = {"status": "✅ ok" if func else "⚠️ warning", "total_count": len(func_encyclopedia.functions), "sample_lookup": "CONCAT" if func else None}
     except Exception as exc:
-        checks["functions"] = {"status": "error", "message": str(exc)}
+        checks["functions"] = {"status": "❌ error", "message": str(exc)}
     try:
         type_result = type_mapper.map_type("VARCHAR", "mysql", "postgres")
-        checks["types"] = {"status": "ok" if type_result.get("success") else "warning", "sample_mapping": type_result.get("target_type")}
+        checks["types"] = {"status": "✅ ok" if type_result.get("success") else "⚠️ warning", "total_count": len(type_mapper.mappings), "sample_mapping": type_result.get("target_type")}
     except Exception as exc:
-        checks["types"] = {"status": "error", "message": str(exc)}
+        checks["types"] = {"status": "❌ error", "message": str(exc)}
     try:
         nl_result = nl2sql_generator.generate("查询所有用户", "mysql")
-        checks["nl2sql"] = {"status": "ok" if nl_result.success else "warning", "confidence": nl_result.confidence}
+        checks["nl2sql"] = {"status": "✅ ok" if nl_result.success else "⚠️ warning", "confidence": nl_result.confidence, "generated_sql": nl_result.sql[:50] if nl_result.sql else None}
     except Exception as exc:
-        checks["nl2sql"] = {"status": "error", "message": str(exc)}
+        checks["nl2sql"] = {"status": "❌ error", "message": str(exc)}
     return checks
 
 
 @app.get("/health", tags=["system"])
 async def health_check():
-    """Liveness probe: confirms the application process is serving HTTP."""
-    return {
-        "status": "✅ healthy",
-        "version": API_VERSION,
-        "probe": "liveness",
-        "timestamp": datetime.now().isoformat(),
+    rule_count = len(transpiler.post_processor.engine.rules)
+    services = {
+        "transpiler": {"status": "✅ healthy", "rules": rule_count, "description": "SQL conversion engine"},
+        "functions": {"status": "✅ healthy", "count": len(func_encyclopedia.functions), "description": "Function encyclopedia"},
+        "types": {"status": "✅ healthy", "count": len(type_mapper.mappings), "description": "Type mapping service"},
+        "nl2sql": {"status": "✅ healthy", "description": "Natural language processor"},
     }
+    return {"status": "✅ healthy", "version": API_VERSION, "probe": "liveness", "uptime": "Available", "timestamp": datetime.now().isoformat(), "services": services, "stats": {"dialects": len(SUPPORTED_DIALECTS), "functions": len(func_encyclopedia.functions), "types": len(type_mapper.mappings), "rules": rule_count}}
+
+
+async def _readiness_checks_async():
+    return await asyncio.to_thread(_run_readiness_checks)
 
 
 @app.get("/ready", tags=["system"])
 async def readiness_check():
-    """Readiness probe: validates core services before accepting traffic."""
-    checks = _run_readiness_checks()
-    has_errors = any(check.get("status") == "error" for check in checks.values())
-    all_ok = all(check.get("status") == "ok" for check in checks.values())
-    status = "✅ ready" if all_ok else ("❌ not ready" if has_errors else "⚠️ degraded")
-    payload = {
-        "status": status,
-        "version": API_VERSION,
-        "probe": "readiness",
-        "checks": checks,
-        "timestamp": datetime.now().isoformat(),
-    }
+    checks = await _readiness_checks_async()
+    has_errors = any("error" in check.get("status", "").lower() for check in checks.values())
+    all_ok = all("ok" in check.get("status", "").lower() for check in checks.values())
+    payload = {"status": "✅ ready" if all_ok else ("❌ not ready" if has_errors else "⚠️ degraded"), "version": API_VERSION, "probe": "readiness", "checks": checks, "timestamp": datetime.now().isoformat()}
     return JSONResponse(status_code=200 if all_ok else 503, content=payload)
 
 
 @app.get("/health/deep", tags=["system"])
 async def deep_health_check():
-    """Deep health diagnostics; unlike /health, this executes component checks."""
-    checks = _run_readiness_checks()
-    has_errors = any(check.get("status") == "error" for check in checks.values())
-    all_ok = all(check.get("status") == "ok" for check in checks.values())
+    checks = await _readiness_checks_async()
+    has_errors = any("error" in check.get("status", "").lower() for check in checks.values())
+    all_ok = all("ok" in check.get("status", "").lower() for check in checks.values())
     return {"status": "✅ healthy" if all_ok else ("❌ unhealthy" if has_errors else "⚠️ degraded"), "version": API_VERSION, "checks": checks, "timestamp": datetime.now().isoformat()}
 
 
@@ -384,16 +361,7 @@ async def deep_health_check():
 async def get_stats():
     func_categories = func_encyclopedia.get_all_categories()
     rule_count = len(transpiler.post_processor.engine.rules)
-    return {
-        "success": True,
-        "stats": {
-            "overview": {"total_functions": len(func_encyclopedia.functions), "total_types": len(type_mapper.mappings), "total_dialects": len(SUPPORTED_DIALECTS), "conversion_rules": rule_count},
-            "functions": {"total": len(func_encyclopedia.functions), "categories": func_categories, "category_count": len(func_categories)},
-            "types": {"total": len(type_mapper.mappings), "dialects": len(type_mapper.DIALECTS), "categories": ["String", "Numeric", "Date/Time", "Complex", "Binary", "Special"]},
-            "dialects": {"list": SUPPORTED_DIALECTS, "details": DIALECT_INFO}
-        },
-        "timestamp": datetime.now().isoformat()
-    }
+    return {"success": True, "stats": {"overview": {"total_functions": len(func_encyclopedia.functions), "total_types": len(type_mapper.mappings), "total_dialects": len(SUPPORTED_DIALECTS), "conversion_rules": rule_count}, "functions": {"total": len(func_encyclopedia.functions), "categories": func_categories, "category_count": len(func_categories)}, "types": {"total": len(type_mapper.mappings), "dialects": len(type_mapper.DIALECTS), "categories": ["String", "Numeric", "Date/Time", "Complex", "Binary", "Special"]}, "dialects": {"list": SUPPORTED_DIALECTS, "details": DIALECT_INFO}}, "timestamp": datetime.now().isoformat()}
 
 
 @app.exception_handler(HTTPException)
@@ -403,22 +371,9 @@ async def custom_http_exception_handler(request: Request, exc: HTTPException):
 
 @app.exception_handler(SDMException)
 async def sdm_exception_handler(request: Request, exc: SDMException):
-    status_code = 400
-    if isinstance(exc, UnsupportedDialectError):
-        status_code = 400
-    return JSONResponse(status_code=status_code, content={"success": False, "error": exc.to_dict(), "timestamp": datetime.now().isoformat()})
+    return JSONResponse(status_code=400, content={"success": False, "error": exc.to_dict(), "timestamp": datetime.now().isoformat()})
 
 
 if __name__ == "__main__":
     import uvicorn
-    print(f"""
-    ╔══════════════════════════════════════════════════════════╗
-    ║  🔄 SQL Dialect Master API v{API_VERSION}                      ║
-    ║  ──────────────────────────────────────────────────────  ║
-    ║  📚 Functions: {len(func_encyclopedia.functions):>3}  │  🗂️ Types: {len(type_mapper.mappings):>2}  │  💾 DBs: {len(SUPPORTED_DIALECTS):>2}   ║
-    ║  ──────────────────────────────────────────────────────  ║
-    ║  📖 Docs: http://localhost:8000/docs                     ║
-    ║  ❤️ Health: http://localhost:8000/health                 ║
-    ╚══════════════════════════════════════════════════════════╝
-    """)
     uvicorn.run(app, host="0.0.0.0", port=8000)
