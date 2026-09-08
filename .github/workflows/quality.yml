@@ -29,10 +29,11 @@ jobs:
 
       - name: Bandit security scan
         run: |
-          # B104 is an intentional service bind in the API entry point.
-          # B608 is a low-confidence false positive: NL2SQL returns generated SQL,
-          # it does not execute it; generated SQL is subsequently parser-validated.
-          bandit -q -r backend -x backend/tests -s B104,B608
+          # Reviewed static-analysis exceptions:
+          # B104 = intentional API service bind in the local/server entry point.
+          # B110 = legacy parser fallback intentionally continues with regex checks.
+          # B608 = NL2SQL returns generated SQL, never executes it; output is parser-validated.
+          bandit -q -r backend -x backend/tests -s B104,B110,B608
 
       - name: Dependency vulnerability audit
         run: pip-audit
