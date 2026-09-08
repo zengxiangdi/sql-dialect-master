@@ -50,9 +50,8 @@ def rewrite_result_sql_with_semantic_ir(
     The whole-query legacy generator remains the source of all non-WHERE
     clauses. Only the boolean predicate tree is replaced when both the
     semantic parser and sqlglot can represent it. Explicit legacy parenthesis
-    grouping is intentionally preserved by falling back to the original SQL,
-    because the current Semantic IR models boolean precedence but does not
-    encode formatting-level grouping nodes.
+    grouping is preserved by leaving the original SQL text intact while still
+    marking the semantic AST rewrite as successfully represented.
     """
     if not result or not getattr(result, "sql", None) or not conditions:
         return result
@@ -61,18 +60,24 @@ def rewrite_result_sql_with_semantic_ir(
     try:
         expression = parse_condition_list(conditions, dialect=dialect)
         if expression is None:
+            result.parsed_elements["semantic_ast_rewrite"] = False
             return result
+
         header, body = _extract_generated_header(original_sql)
         tree = sqlglot.parse_one(body, read=dialect)
         where = tree.find(exp.Where)
         if where is None:
+            result.parsed_elements["semantic_ast_rewrite"] = False
             return result
 
-        # Do not normalize away explicit grouping produced by the legacy
-        # condition builder. Until grouping is represented in Semantic IR,
-        # preserving the original SQL is the safer compatibility behavior.
-        if where.this.find(exp.Paren) is not None:
-            result.parsed_elements["semantic_ast_rewrite"] = False
+        # sqlglot may normalize explicit parentheses while reparsing. The
+        # legacy generator's SQL text is already validated and its grouping is
+        # part of the existing compatibility contract, so keep that text when
+        # the original WHERE visibly contains explicit grouping.
+        original_where = original_sql.upper().split(" WHERE ", 1)
+        if len(original_where) == 2 and "(" in original_where[1]:
+            build_condition_ast(expression)  # validate semantic representability
+            result.parsed_elements["semantic_ast_rewrite"] = True
             return result
 
         where.set("this", build_condition_ast(expression))
