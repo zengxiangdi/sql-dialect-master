@@ -38,7 +38,7 @@ _RANGE_PATTERN = re.compile(
 
 _CN_RANGE_PATTERN = re.compile(
     r"(价格|数量|金额|年龄|得分|评分|浏览量|点击量)\s*"
-    r"(?:在|介于)\s*([0-9]+(?:\.[0-9]+)?)\s*(?:和|到|至|-)+\s*"
+    r"(?:在|介于)\s*([0-9]+(?:\.[0-9]+)?)\s*(?:和|到|至|-)\s*"
     r"([0-9]+(?:\.[0-9]+)?)\s*(?:之间|范围内|以内)?"
 )
 
@@ -55,7 +55,7 @@ _CN_TEXT_PATTERN = re.compile(
 
 _NULL_PATTERN = re.compile(
     r"(?<![A-Za-z0-9_])(name|title|description|category|brand|price|quantity|amount|"
-    r"age|score|rating|views|clicks)\s+(is\s+(?:not\s+)?null|is\s+null)\b",
+    r"age|score|rating|views|clicks)\s+(is\s+(?:not\s+)?null)\b",
     re.IGNORECASE,
 )
 
@@ -150,7 +150,7 @@ def _comparison_matches(text: str) -> List[Tuple[int, int, str]]:
     for pattern in (_RANGE_PATTERN, _CN_RANGE_PATTERN):
         for match in pattern.finditer(text):
             groups = match.groups()
-            if len(groups) == 4:
+            if len(groups) == 5:
                 first, low1, high1, low2, high2 = groups
                 low, high = low1 or low2, high1 or high2
             else:
@@ -169,7 +169,7 @@ def _comparison_matches(text: str) -> List[Tuple[int, int, str]]:
             first, raw_predicate = match.groups()
             column = _CN_COLUMNS.get(first, first)
             normalized = raw_predicate.replace(" ", "").lower()
-            is_not_null = normalized in {"isnotnull", "不为空", "不为空", "非空", "不为\u7a7a"}
+            is_not_null = normalized.startswith(("isnotnull", "不为空", "不为空", "非空", "不为"))
             matches.append((match.start(), match.end(), f"{column} IS {'NOT ' if is_not_null else ''}NULL"))
 
     for match in _STATUS_PATTERN.finditer(text):
