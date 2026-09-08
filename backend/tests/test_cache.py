@@ -110,6 +110,24 @@ class TestTTLCache:
         assert cache.get("key1") == "value1"
         assert cache.get("key2") is None  # Evicted
         assert cache.get("key3") == "value3"
+
+    def test_updating_existing_key_does_not_evict_other_entries(self):
+        """Updating an existing key should not evict an unrelated LRU entry."""
+        cache = TTLCache(max_size=2, ttl=60)
+        cache.set("key1", "value1")
+        cache.set("key2", "value2")
+        cache.set("key2", "updated")
+
+        assert cache.get("key1") == "value1"
+        assert cache.get("key2") == "updated"
+        assert cache.get_stats()["evictions"] == 0
+
+    def test_invalid_max_size_is_rejected(self):
+        """Cache capacity must be positive so eviction cannot fail at runtime."""
+        with pytest.raises(ValueError, match="max_size must be greater than 0"):
+            TTLCache(max_size=0)
+        with pytest.raises(ValueError, match="max_size must be greater than 0"):
+            TTLCache(max_size=-1)
     
     def test_clear(self):
         """Clear should remove all entries."""
