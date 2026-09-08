@@ -19,7 +19,7 @@ import asyncio
 from .config import (
     SUPPORTED_DIALECTS, 
     get_compatibility_notes, 
-    settings,
+    settings, 
     DANGEROUS_SQL_PATTERNS,
     WARNING_SQL_PATTERNS,
 )
@@ -381,6 +381,25 @@ class SQLTranspiler:
             "reason": None,
             "warnings": []
         }
+
+        # Prefer statement-level parsing for stacked statements. This is more
+        # reliable than semicolon-oriented regexes because quoted semicolons
+        # remain inside a single statement while real statement boundaries are
+        # represented by the parser.
+        try:
+            parsed_statements = sqlglot.parse(sql)
+            if len(parsed_statements) > 1:
+                message = "Multiple SQL statements detected"
+                logger.warning("Security policy detected stacked SQL statements")
+                if settings.security_block_dangerous:
+                    result["blocked"] = True
+                    result["reason"] = message
+                    return result
+                result["warnings"].append(f"🔒 Security: {message}")
+        except Exception:
+            # Dialect-specific syntax may not be parseable without the source
+            # dialect, so keep the existing regex checks as a fallback.
+            pass
         
         # Check dangerous patterns (may block) - patterns are precompiled
         for pattern, message in DANGEROUS_SQL_PATTERNS:
