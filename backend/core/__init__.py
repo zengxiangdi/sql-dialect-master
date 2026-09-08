@@ -31,6 +31,7 @@ from .semantic_ir import (
 )
 from .semantic_parser import parse_condition_expression, parse_condition_list
 from .semantic_integration import enrich_result_with_semantic_ir
+from .semantic_sql import build_condition_ast, build_select_ast
 from .exceptions import (
     SDMException,
     UnsupportedDialectError,
@@ -99,6 +100,8 @@ __all__ = [
     "parse_condition_expression",
     "parse_condition_list",
     "enrich_result_with_semantic_ir",
+    "build_condition_ast",
+    "build_select_ast",
     "SDMException",
     "UnsupportedDialectError",
     "TranspileError",
