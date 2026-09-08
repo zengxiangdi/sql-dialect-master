@@ -68,21 +68,43 @@ PostProcessor.process = _process_with_group_concat_default_separator
 _original_extract_conditions = NL2SQLGenerator._extract_conditions_enhanced
 
 
+def _adjust_inclusive_comparison(conditions, text, phrase_pattern, operator, generic_operator):
+    """Upgrade only the comparison tied to an explicit inclusive phrase."""
+    phrases = list(re.finditer(phrase_pattern, text, re.IGNORECASE))
+    for phrase in phrases:
+        prefix = text[: phrase.start()]
+        column_match = re.search(
+            r"(?:^|\b)(price|quantity|amount|age|score|rating|views|clicks)\s*$",
+            prefix,
+            re.IGNORECASE,
+        )
+        value_match = re.match(r"\s*(\d+\.?\d*)", text[phrase.end() :])
+        if not column_match or not value_match:
+            continue
+        column = column_match.group(1)
+        value = value_match.group(1)
+        source_condition = f"{column} {generic_operator} {value}"
+        target_condition = f"{column} {operator} {value}"
+        conditions = [target_condition if condition == source_condition else condition for condition in conditions]
+    return conditions
+
+
 def _extract_conditions_with_english_inclusive_comparisons(self, text: str, original: str):
     conditions = _original_extract_conditions(self, text, original)
-
-    if re.search(r"\bgreater\s+than\s+or\s+equal\s+to\b", text, re.IGNORECASE):
-        conditions = [
-            re.sub(r"\s>\s(\d+\.?\d*)$", r" >= \1", condition, count=1)
-            for condition in conditions
-        ]
-
-    if re.search(r"\bless\s+than\s+or\s+equal\s+to\b", text, re.IGNORECASE):
-        conditions = [
-            re.sub(r"\s<\s(\d+\.?\d*)$", r" <= \1", condition, count=1)
-            for condition in conditions
-        ]
-
+    conditions = _adjust_inclusive_comparison(
+        conditions,
+        text,
+        r"\bgreater\s+than\s+or\s+equal\s+to\b",
+        ">=",
+        ">",
+    )
+    conditions = _adjust_inclusive_comparison(
+        conditions,
+        text,
+        r"\bless\s+than\s+or\s+equal\s+to\b",
+        "<=",
+        "<",
+    )
     return conditions
 
 
