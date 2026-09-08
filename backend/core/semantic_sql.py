@@ -41,10 +41,16 @@ def _column(field: str, schema: SchemaContext | None = None) -> exp.Column:
     if "." in requested:
         table_name, column_name = requested.rsplit(".", 1)
         schema_table, schema_column = schema.resolve_column(column_name, table_name)
-        return exp.column(schema_column.alias or schema_column.name, table=schema_table.alias or schema_table.name)
+        return exp.column(
+            schema_column.alias or schema_column.name,
+            table=schema_table.alias or schema_table.name,
+        )
 
     schema_table, schema_column = schema.resolve_column(requested)
-    return exp.column(schema_column.alias or schema_column.name, table=schema_table.alias or schema_table.name)
+    return exp.column(
+        schema_column.alias or schema_column.name,
+        table=schema_table.alias or schema_table.name,
+    )
 
 
 def _literal(value: Any) -> exp.Expression:
@@ -63,15 +69,24 @@ def _literal(value: Any) -> exp.Expression:
 def _build(predicate: BooleanExpression, schema: SchemaContext | None = None) -> exp.Expression:
     if isinstance(predicate, ComparisonPredicate):
         expression_type = _COMPARISON_EXPRESSIONS[predicate.operator]
-        return expression_type(this=_column(predicate.field, schema), expression=_literal(predicate.value))
+        return expression_type(
+            this=_column(predicate.field, schema),
+            expression=_literal(predicate.value),
+        )
 
     if isinstance(predicate, RangePredicate):
         if not predicate.inclusive_lower or not predicate.inclusive_upper:
-            lower = _COMPARISON_EXPRESSIONS[">=" if predicate.inclusive_lower else ">"](
-                this=_column(predicate.field, schema), expression=_literal(predicate.lower)
+            lower = _COMPARISON_EXPRESSIONS[
+                ">=" if predicate.inclusive_lower else ">"
+            ](
+                this=_column(predicate.field, schema),
+                expression=_literal(predicate.lower),
             )
-            upper = _COMPARISON_EXPRESSIONS["<=" if predicate.inclusive_upper else "<"](
-                this=_column(predicate.field, schema), expression=_literal(predicate.upper)
+            upper = _COMPARISON_EXPRESSIONS[
+                "<=" if predicate.inclusive_upper else "<"
+            ](
+                this=_column(predicate.field, schema),
+                expression=_literal(predicate.upper),
             )
             return exp.And(this=lower, expression=upper)
         return exp.Between(
@@ -147,15 +162,21 @@ def build_select_ast(
         from_source = from_source.as_(source_alias)
 
     if select_fields:
-        projection = [
-            _column(field, schema)
-            for field in select_fields
-        ]
+        projection = [_column(field, schema) for field in select_fields]
     else:
-        projection = [exp.Star()] if schema is None else [exp.Star(this=exp.Identifier(this=schema_table.alias or schema_table.name))]
+        projection = [
+            exp.Star(
+                this=exp.Identifier(
+                    this=schema_table.alias or schema_table.name
+                )
+            )
+            if schema
+            else exp.Star()
+        ]
 
-    query = exp.Select(expressions=projection)
-    query.set("from", exp.From(this=from_source))
+    # Use sqlglot's FROM builder instead of manually mutating Select.args;
+    # this keeps the source attached to the canonical AST slot.
+    query = exp.select(*projection).from_(from_source)
     if where is not None:
         query = query.where(build_condition_ast(where, schema))
     return query
