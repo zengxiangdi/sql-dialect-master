@@ -29,6 +29,7 @@ from .semantic_ir import (
     SetPredicate,
     TextPredicate,
 )
+from .semantic_parser import parse_condition_expression, parse_condition_list
 from .exceptions import (
     SDMException,
     UnsupportedDialectError,
@@ -92,6 +93,8 @@ __all__ = [
     "Or",
     "Not",
     "SemanticQuery",
+    "parse_condition_expression",
+    "parse_condition_list",
     # Exceptions
     "SDMException",
     "UnsupportedDialectError",
