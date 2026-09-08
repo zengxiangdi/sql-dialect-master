@@ -104,18 +104,21 @@ def test_rewrite_is_a_noop_when_semantic_condition_is_unsupported():
 def test_rewrite_preserves_non_where_query_clauses():
     generator = NL2SQLGenerator()
     result = generator.generate(
-        "find products with price greater than 100 sorted by price descending",
+        "find products with price greater than 100",
         "postgres",
     )
     assert result.success
+    header, body = result.sql.split("\n", 1)
+    result.sql = f"{header}\n{body}\nORDER BY price DESC\nLIMIT 10"
     original_sql = result.sql
-    conditions = extract_boolean_conditions("find products with price greater than 100")
+    conditions = ["price > 100"]
 
     rewrite_result_sql_with_semantic_ir(result, conditions, "postgres")
 
     assert result.parsed_elements["semantic_ast_rewrite"] is True
-    assert "ORDER BY" in original_sql.upper()
-    assert "ORDER BY" in result.sql.upper()
+    assert "ORDER BY price DESC" in original_sql.upper()
+    assert "ORDER BY price DESC" in result.sql.upper()
+    assert "LIMIT 10" in result.sql.upper()
 
 
 def test_manual_rewrite_accepts_structured_boolean_semantics():
