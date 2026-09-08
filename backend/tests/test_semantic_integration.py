@@ -116,8 +116,8 @@ def test_rewrite_preserves_non_where_query_clauses():
     rewrite_result_sql_with_semantic_ir(result, conditions, "postgres")
 
     assert result.parsed_elements["semantic_ast_rewrite"] is True
-    assert "ORDER BY price DESC" in original_sql.upper()
-    assert "ORDER BY price DESC" in result.sql.upper()
+    assert "ORDER BY PRICE DESC" in original_sql.upper()
+    assert "ORDER BY PRICE DESC" in result.sql.upper()
     assert "LIMIT 10" in result.sql.upper()
 
 
