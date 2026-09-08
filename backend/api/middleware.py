@@ -42,9 +42,16 @@ class RateLimiter:
             requests_per_window: Maximum requests allowed per window
             window_seconds: Window duration in seconds
         """
+        if requests_per_window <= 0:
+            raise ValueError("requests_per_window must be positive")
+        if window_seconds <= 0:
+            raise ValueError("window_seconds must be positive")
+
         self._limits: Dict[str, RateLimitEntry] = defaultdict(RateLimitEntry)
         self._requests_per_window = requests_per_window
         self._window_seconds = window_seconds
+        self._cleanup_interval_seconds = max(1.0, float(window_seconds))
+        self._last_cleanup_at = 0.0
         self._lock = Lock()
     
     def is_allowed(self, client_id: str) -> tuple:
@@ -58,6 +65,7 @@ class RateLimiter:
         """
         with self._lock:
             now = time.time()
+            self._prune_expired(now)
             entry = self._limits[client_id]
             
             # Reset window if expired
@@ -73,10 +81,25 @@ class RateLimiter:
             
             entry.requests += 1
             return True, remaining - 1, reset_time
+
+    def _prune_expired(self, now: float) -> None:
+        """Remove clients whose rate-limit window has expired."""
+        if now - self._last_cleanup_at < self._cleanup_interval_seconds:
+            return
+
+        expired_clients = [
+            client_id
+            for client_id, entry in self._limits.items()
+            if now - entry.window_start >= self._window_seconds
+        ]
+        for client_id in expired_clients:
+            del self._limits[client_id]
+        self._last_cleanup_at = now
     
     def get_stats(self) -> Dict:
         """Get rate limiter statistics."""
         with self._lock:
+            self._prune_expired(time.time())
             return {
                 "active_clients": len(self._limits),
                 "requests_per_window": self._requests_per_window,
