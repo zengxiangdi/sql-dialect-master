@@ -86,6 +86,8 @@ def _dml_without_where(sql: str):
         return []
     result = []
     for tree in trees:
+        if tree is None:
+            continue
         for node in tree.walk():
             if isinstance(node, exp.Update) and node.args.get("where") is None: result.append("UPDATE")
             elif isinstance(node, exp.Delete) and node.args.get("where") is None: result.append("DELETE")
@@ -105,8 +107,14 @@ def _validate_security(self, sql: str):
         if pattern.search(masked):
             if settings.security_block_dangerous: result["blocked"] = True; result["reason"] = message; return result
             result["warnings"].append(f"🔒 Security: {message}")
-    for op in _dml_without_where(sql): result["warnings"].append(f"⚠️ {op} without WHERE clause - may affect all rows")
+    dml_without_where = set(_dml_without_where(sql))
+    for op in sorted(dml_without_where): result["warnings"].append(f"⚠️ {op} without WHERE clause - may affect all rows")
     for pattern, message in WARNING_SQL_PATTERNS:
+        if message in {
+            "DELETE without WHERE clause - will affect all rows",
+            "UPDATE without WHERE clause - will affect all rows",
+        }:
+            continue
         if pattern.search(masked): result["warnings"].append(f"⚠️ {message}")
     return result
 
@@ -142,7 +150,13 @@ def _simple_rownum_transform(sql: str):
         if count: return result.rstrip(';').rstrip() + f" LIMIT {n}", f"Converted simple ROWNUM <= {n} to LIMIT {n}"
     return sql, "Skipped automatic ROWNUM conversion because predicate shape was not safely removable"
 
-PostProcessor._convert_rownum_to_limit = lambda self, sql: _simple_rownum_transform(sql)
+
+def _convert_rownum_to_limit(self, sql: str):
+    result, note = _simple_rownum_transform(sql)
+    return result, ([note] if note else [])
+
+
+PostProcessor._convert_rownum_to_limit = _convert_rownum_to_limit
 
 
 def _group_concat(args: str, original: str) -> str:
@@ -153,7 +167,9 @@ def _group_concat(args: str, original: str) -> str:
     distinct = expression[:9].upper() == "DISTINCT "
     if distinct: expression = expression[9:].strip()
     if not expression: return original
-    result = f"STRING_AGG({'DISTINCT ' if distinct else ''}({expression})::TEXT, {separator}"
+    needs_parentheses = distinct or not re.fullmatch(r"[A-Za-z_][\w$.]*", expression)
+    rendered_expression = f"({expression})" if needs_parentheses else expression
+    result = f"STRING_AGG({'DISTINCT ' if distinct else ''}{rendered_expression}::TEXT, {separator}"
     if order_by: result += f" ORDER BY {order_by}"
     return result + ")"
 
@@ -162,7 +178,11 @@ def _process(self, sql: str, source: str, target: str):
     working = sql; notes = []; source_l = source.lower(); target_l = target.lower()
     if source_l == "oracle" and target_l in {"mysql", "postgres", "hive", "spark"} and "ROWNUM" in _mask_non_executable(working).upper():
         converted, note = _simple_rownum_transform(working)
-        if note and converted != working: working = converted; notes.append(note)
+        if note and converted != working:
+            working = converted
+            notes.append(note)
+            result, legacy_notes = _ORIGINAL_PROCESS(self, working, source, target)
+            return result, notes + legacy_notes
         elif note:
             working, _ = _replace_outside(working, re.compile(r"\bROWNUM\b", re.IGNORECASE), "__SDM_ROWNUM_SENTINEL__")
             notes.append(note); result, legacy_notes = _ORIGINAL_PROCESS(self, working, source, target)
