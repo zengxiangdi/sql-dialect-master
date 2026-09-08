@@ -68,7 +68,11 @@ class TransformRule:
             return sql, False
         
         try:
-            new_sql, count = re.subn(self.pattern, self.replacement, sql, flags=re.IGNORECASE)
+            pattern = getattr(self, "_compiled_pattern", None)
+            if pattern is None:
+                pattern = re.compile(self.pattern, re.IGNORECASE)
+                self._compiled_pattern = pattern
+            new_sql, count = pattern.subn(self.replacement, sql)
             return new_sql, count > 0
         except Exception:
             return sql, False
@@ -412,10 +416,8 @@ class RuleEngine:
         Args:
             rules: List of transformation rules. Uses default rules if None.
         """
-        self.rules = rules or TRANSFORM_RULES.copy()
-        # Sort by priority (higher first)
-        self.rules.sort(key=lambda r: r.priority, reverse=True)
-        # Pre-compile patterns for performance
+        self.rules = list(TRANSFORM_RULES if rules is None else rules)
+        self._sort_rules()
         self._compile_patterns()
     
     def apply_rules(self, sql: str, source: str, target: str) -> Tuple[str, List[str]]:
@@ -458,9 +460,19 @@ class RuleEngine:
         
         Args:
             rule: Rule to add
+        
+        Raises:
+            ValueError: If a rule with the same name already exists.
+            re.error: If the rule pattern is invalid.
         """
+        if any(existing.name == rule.name for existing in self.rules):
+            raise ValueError(f"Rule name already exists: {rule.name}")
+        try:
+            rule._compiled_pattern = re.compile(rule.pattern, re.IGNORECASE)
+        except re.error as exc:
+            raise ValueError(f"Invalid pattern in rule {rule.name}: {exc}") from exc
         self.rules.append(rule)
-        self.rules.sort(key=lambda r: r.priority, reverse=True)
+        self._sort_rules()
     
     def disable_rule(self, name: str) -> bool:
         """Disable a rule by name.
@@ -491,6 +503,10 @@ class RuleEngine:
                 rule.enabled = True
                 return True
         return False
+    
+    def _sort_rules(self) -> None:
+        """Sort rules deterministically: priority first, name as tie-breaker."""
+        self.rules.sort(key=lambda rule: (-rule.priority, rule.name))
     
     def _compile_patterns(self) -> None:
         """Pre-compile regex patterns for better performance."""
@@ -526,16 +542,23 @@ class RuleEngine:
         # Check for potential conflicts (same source/target with overlapping patterns)
         for i, r1 in enumerate(self.rules):
             for r2 in self.rules[i+1:]:
-                if (r1.matches_dialects(r2.source, r2.target) and 
-                    r1.category == r2.category and
-                    r1.enabled and r2.enabled):
-                    # Check if patterns might overlap
+                if (self._dialect_sets_intersect(r1.source, r2.source)
+                    and self._dialect_sets_intersect(r1.target, r2.target)
+                    and r1.category == r2.category
+                    and r1.enabled and r2.enabled):
                     if self._patterns_may_overlap(r1.pattern, r2.pattern):
                         warnings.append(
                             f"Potential conflict between rules '{r1.name}' and '{r2.name}'"
                         )
         
         return warnings
+    
+    @staticmethod
+    def _dialect_sets_intersect(left: str, right: str) -> bool:
+        """Return whether two comma-separated dialect selectors intersect."""
+        left_values = {value.strip().lower() for value in left.split(",")}
+        right_values = {value.strip().lower() for value in right.split(",")}
+        return "*" in left_values or "*" in right_values or bool(left_values & right_values)
     
     def _patterns_may_overlap(self, pattern1: str, pattern2: str) -> bool:
         """Check if two patterns might match the same text."""
