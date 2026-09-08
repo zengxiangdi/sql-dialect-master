@@ -30,7 +30,10 @@ from .semantic_ir import (
     TextPredicate,
 )
 from .semantic_parser import parse_condition_expression, parse_condition_list
-from .semantic_integration import enrich_result_with_semantic_ir
+from .semantic_integration import (
+    enrich_result_with_semantic_ir,
+    rewrite_result_sql_with_semantic_ir,
+)
 from .semantic_sql import build_condition_ast, build_select_ast
 from .exceptions import (
     SDMException,
@@ -61,6 +64,7 @@ def _generate_with_semantic_ir(self, text, dialect=None, table_hint=None, column
     conditions = extract_boolean_conditions(text.lower())
     if conditions:
         enrich_result_with_semantic_ir(result, conditions, selected_dialect)
+        rewrite_result_sql_with_semantic_ir(result, conditions, selected_dialect)
     return result
 
 
@@ -100,6 +104,7 @@ __all__ = [
     "parse_condition_expression",
     "parse_condition_list",
     "enrich_result_with_semantic_ir",
+    "rewrite_result_sql_with_semantic_ir",
     "build_condition_ast",
     "build_select_ast",
     "SDMException",
