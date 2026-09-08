@@ -43,7 +43,7 @@ def install_compatibility_patches() -> None:
         NL2SQLGenerator._sdm_boolean_patch_installed = True
 
     for module_name in _PATCH_MODULES:
-        import_module(f".\{module_name}", package=__package__)
+        import_module(f".{module_name}", package=__package__)
 
     _installed = True
 
