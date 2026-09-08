@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any
 
 from .config import SUPPORTED_DIALECTS, TYPE_CATEGORIES, TypeMappingInfo
+from .exceptions import ConfigurationError
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -45,12 +46,37 @@ class TypeMapper:
         self.precision_warnings: Dict[str, str] = self.data.get("precision_warnings", {})
     
     def _load_data(self) -> dict:
-        """Load type mapping data from JSON file."""
+        """Load and validate type mapping data from JSON file."""
         try:
             with open(self.data_path, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except Exception:
-            return {"mappings": {}, "precision_warnings": {}}
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ConfigurationError(
+                f"Unable to load type mapping data from {self.data_path}: {exc}",
+                details={"data_path": str(self.data_path)},
+            ) from exc
+
+        if not isinstance(data, dict):
+            raise ConfigurationError(
+                f"Invalid type mapping data in {self.data_path}: top-level JSON value must be an object",
+                details={"data_path": str(self.data_path)},
+            )
+
+        mappings = data.get("mappings", {})
+        if not isinstance(mappings, dict):
+            raise ConfigurationError(
+                f"Invalid type mapping data in {self.data_path}: 'mappings' must be an object",
+                details={"data_path": str(self.data_path)},
+            )
+
+        precision_warnings = data.get("precision_warnings", {})
+        if not isinstance(precision_warnings, dict):
+            raise ConfigurationError(
+                f"Invalid type mapping data in {self.data_path}: 'precision_warnings' must be an object",
+                details={"data_path": str(self.data_path)},
+            )
+
+        return data
     
     def map_type(self, type_name: str, source: str, target: str) -> Dict[str, Any]:
         """Map a type from source dialect to target dialect.
@@ -362,7 +388,7 @@ class TypeMapper:
             category: Category name
             
         Returns:
-            List of type names
+            List of types in a category
         """
         return self.TYPE_CATEGORIES.get(category, [])
     
@@ -434,7 +460,7 @@ class TypeMapper:
         """Get detailed conversion path with all considerations.
         
         Args:
-            source_type: Source data type
+            source_type: Source type name
             source: Source dialect
             target: Target dialect
             
