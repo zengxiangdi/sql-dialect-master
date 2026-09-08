@@ -17,6 +17,7 @@ _COMPOSITION_MARKERS = (
     "order by", "sort", "排序", "排列",
     "group by", "grouped by", "分组", "汇总",
     "limit", "top ", "top\t", "only ", "前",
+    " and ", " or ", "且", "并且", "或者", "或",
 )
 
 _TEMPLATE_BLOCKERS = {
