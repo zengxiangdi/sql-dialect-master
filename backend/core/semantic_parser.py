@@ -99,7 +99,7 @@ def _convert(node: exp.Expression) -> BooleanExpression:
             raise ValueError("Only IS NULL / IS NOT NULL are supported")
         return NullPredicate(
             field=_column_name(node.this),
-            is_null=not bool(node.args.get("negated")),
+            is_null=" IS NOT NULL" not in f" {node.sql().upper()}",
         )
 
     if isinstance(node, exp.In):
