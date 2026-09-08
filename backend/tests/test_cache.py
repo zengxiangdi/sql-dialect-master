@@ -8,6 +8,7 @@ Tests caching functionality including:
 - Thread safety
 - Statistics
 """
+import asyncio
 import pytest
 import time
 import threading
@@ -127,6 +128,16 @@ class TestTTLCache:
         removed = cache.cleanup_expired()
         assert removed == 1
         assert cache.get("key1") is None
+
+    def test_async_get_and_set_use_running_loop(self):
+        """Async cache accessors should work inside an active event loop."""
+        cache = TTLCache(ttl=60)
+
+        async def exercise() -> None:
+            await cache.set_async("key1", "value1")
+            assert await cache.get_async("key1") == "value1"
+
+        asyncio.run(exercise())
     
     def test_contains(self):
         """__contains__ should work correctly."""
