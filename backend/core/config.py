@@ -43,23 +43,16 @@ def setup_logging(
             "%(asctime)s | %(levelname)-8s | %(name)s:%(funcName)s:%(lineno)d | %(message)s"
         )
     
-    # Create formatter
     formatter = logging.Formatter(format_string, datefmt="%Y-%m-%d %H:%M:%S")
-    
-    # Get root logger for our package
     root_logger = logging.getLogger("backend")
     root_logger.setLevel(level)
-    
-    # Clear existing handlers
     root_logger.handlers.clear()
     
-    # Console handler
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(level)
     console_handler.setFormatter(formatter)
     root_logger.addHandler(console_handler)
     
-    # File handler (optional)
     if log_file:
         file_handler = logging.FileHandler(log_file, encoding="utf-8")
         file_handler.setLevel(level)
@@ -69,7 +62,6 @@ def setup_logging(
     return root_logger
 
 
-# Initialize default logger
 logger = logging.getLogger(__name__)
 
 # =============================================================================
@@ -101,7 +93,6 @@ class DialectInfo:
     color: str
     description: str = ""
 
-# Dialect metadata with icons and categories
 DIALECT_METADATA: Dict[str, DialectInfo] = {
     "hive": DialectInfo("hive", "Apache Hive", "🐝", DialectCategory.BIG_DATA, "#FDEE21", "Hadoop data warehouse"),
     "mysql": DialectInfo("mysql", "MySQL", "🐬", DialectCategory.RDBMS, "#00758F", "Popular open-source RDBMS"),
@@ -119,11 +110,7 @@ DIALECT_METADATA: Dict[str, DialectInfo] = {
 
 
 def get_dialect_ui_info() -> Dict[str, Dict[str, str]]:
-    """Get dialect info formatted for UI display.
-    
-    Returns:
-        Dictionary of dialect_id -> {"icon", "name", "color"}
-    """
+    """Get dialect info formatted for UI display."""
     return {
         d.id: {"icon": d.icon, "name": d.name, "color": d.color}
         for d in DIALECT_METADATA.values()
@@ -131,11 +118,7 @@ def get_dialect_ui_info() -> Dict[str, Dict[str, str]]:
 
 
 def get_dialect_api_info() -> Dict[str, Dict[str, str]]:
-    """Get dialect info formatted for API responses.
-    
-    Returns:
-        Dictionary of dialect_id -> {"icon", "name", "category"}
-    """
+    """Get dialect info formatted for API responses."""
     return {
         d.id: {"icon": d.icon, "name": d.name, "category": d.category.value}
         for d in DIALECT_METADATA.values()
@@ -143,14 +126,7 @@ def get_dialect_api_info() -> Dict[str, Dict[str, str]]:
 
 
 def get_dialect_label(dialect: str) -> str:
-    """Get formatted dialect label with icon for display.
-    
-    Args:
-        dialect: Dialect identifier
-        
-    Returns:
-        Formatted string like "🐬 MYSQL"
-    """
+    """Get formatted dialect label with icon for display."""
     info = DIALECT_METADATA.get(dialect)
     if info:
         return f"{info.icon} {dialect.upper()}"
@@ -202,6 +178,7 @@ class TranspileResultDict(TypedDict, total=False):
     source_dialect: str
     target_dialect: str
     error: Optional[str]
+    error_code: Optional[str]
     compatibility_notes: List[str]
     transformations: List[str]
     warnings: List[str]
@@ -269,7 +246,6 @@ class AppSettings(BaseSettings):
         return self.model_dump()
 
 
-# Global settings instance
 settings = AppSettings()
 
 
@@ -279,74 +255,52 @@ settings = AppSettings()
 
 import re
 
-# Patterns that indicate potentially dangerous SQL
 _DANGEROUS_SQL_PATTERNS_RAW: List[tuple] = [
-    # Multiple statements (SQL injection risk)
     (r";\s*(DROP|DELETE|TRUNCATE|ALTER|CREATE|INSERT|UPDATE)\s+", 
      "Multiple statements with dangerous operations detected"),
-    # Comments that might hide malicious code
     (r"--\s*.*\s*(DROP|DELETE|TRUNCATE)", 
      "SQL comment may hide dangerous operation"),
-    # UNION-based injection patterns
     (r"UNION\s+(ALL\s+)?SELECT\s+.*(FROM\s+information_schema|FROM\s+sys\.|@@version|user\(\))",
      "Potential SQL injection pattern detected"),
-    # System table access
     (r"(information_schema|sys\.tables|sysobjects|pg_catalog|all_tables)",
      "System table access detected"),
-    # Command execution attempts
     (r"(xp_cmdshell|sp_executesql|EXEC\s*\(|EXECUTE\s+IMMEDIATE)",
      "Command execution attempt detected"),
-    # File operations
     (r"(INTO\s+OUTFILE|INTO\s+DUMPFILE|LOAD_FILE|UTL_FILE)",
      "File operation detected"),
-    # Classic OR 1=1 injection
     (r"\bOR\s+['\"]?1['\"]?\s*=\s*['\"]?1['\"]?",
      "Classic OR 1=1 injection pattern detected"),
-    # OR with string comparison
     (r"\bOR\s+['\"][\w]+['\"]\s*=\s*['\"][\w]+['\"]",
      "OR string comparison injection pattern detected"),
-    # Tautology attacks (always true)
     (r"\b(AND|OR)\s+\d+\s*=\s*\d+",
      "Tautology attack pattern detected"),
-    # Hex encoding attacks
     (r"0x[0-9a-fA-F]{8,}",
      "Suspicious hex-encoded value detected"),
-    # Stacked queries via semicolon
     (r";\s*SELECT\s+",
      "Stacked query injection pattern detected"),
-    # Sleep/benchmark attacks (timing)
     (r"(SLEEP\s*\(\s*\d+\s*\)|BENCHMARK\s*\(|WAITFOR\s+DELAY|PG_SLEEP)",
      "Timing-based attack pattern detected"),
-    # Database/schema enumeration
     (r"(SHOW\s+DATABASES|SHOW\s+TABLES|DESCRIBE\s+|SP_COLUMNS)",
      "Database enumeration attempt detected"),
 ]
 
-# Patterns that warrant warnings but aren't blocked
 _WARNING_SQL_PATTERNS_RAW: List[tuple] = [
-    # DELETE/UPDATE without WHERE
     (r"DELETE\s+FROM\s+\w+\s*(?!WHERE)", 
      "DELETE without WHERE clause - will affect all rows"),
     (r"UPDATE\s+\w+\s+SET\s+.*(?!WHERE)",
      "UPDATE without WHERE clause - will affect all rows"),
-    # DROP operations
     (r"DROP\s+(TABLE|DATABASE|SCHEMA|INDEX|VIEW)",
      "DROP operation detected - data loss risk"),
-    # TRUNCATE
     (r"TRUNCATE\s+TABLE",
      "TRUNCATE operation detected - data loss risk"),
-    # Grant/Revoke
     (r"(GRANT|REVOKE)\s+",
      "Permission modification detected"),
-    # Large LIMIT values
     (r"LIMIT\s+\d{6,}",
      "Very large LIMIT value may impact performance"),
-    # SELECT * (code smell)
     (r"SELECT\s+\*\s+FROM",
      "SELECT * detected - consider specifying columns explicitly"),
 ]
 
-# Pre-compile regex patterns for better performance
 DANGEROUS_SQL_PATTERNS: List[tuple] = [
     (re.compile(pattern, re.IGNORECASE | re.MULTILINE), message)
     for pattern, message in _DANGEROUS_SQL_PATTERNS_RAW
@@ -399,7 +353,6 @@ TYPE_CATEGORIES: Dict[str, List[str]] = {
 # =============================================================================
 
 COMPATIBILITY_NOTES: Dict[tuple, List[str]] = {
-    # Hive conversions
     ("hive", "mysql"): [
         "Hive ARRAY/MAP types converted to JSON",
         "LATERAL VIEW EXPLODE may need manual adjustment",
@@ -430,7 +383,6 @@ COMPATIBILITY_NOTES: Dict[tuple, List[str]] = {
         "Check UDF compatibility",
         "Spark may have additional optimizations"
     ],
-    # Oracle conversions
     ("oracle", "hive"): [
         "LISTAGG → ARRAY_JOIN(COLLECT_LIST()) transformation",
         "CONNECT BY → WITH RECURSIVE transformation",
@@ -446,7 +398,6 @@ COMPATIBILITY_NOTES: Dict[tuple, List[str]] = {
         "SYSDATE → CURRENT_TIMESTAMP",
         "DECODE → CASE WHEN"
     ],
-    # MySQL conversions
     ("mysql", "postgres"): [
         "GROUP_CONCAT → STRING_AGG transformation",
         "IFNULL → COALESCE transformation",
@@ -462,7 +413,6 @@ COMPATIBILITY_NOTES: Dict[tuple, List[str]] = {
         "JSON functions syntax differs",
         "DATE_FORMAT patterns differ"
     ],
-    # SQL Server conversions
     ("tsql", "mysql"): [
         "STRING_AGG → GROUP_CONCAT transformation",
         "TOP → LIMIT transformation",
@@ -478,7 +428,6 @@ COMPATIBILITY_NOTES: Dict[tuple, List[str]] = {
         "CROSS/OUTER APPLY → LATERAL VIEW",
         "STRING_AGG → CONCAT_WS(COLLECT_LIST())"
     ],
-    # PostgreSQL conversions
     ("postgres", "mysql"): [
         "STRING_AGG → GROUP_CONCAT transformation",
         "ARRAY types → JSON transformation",
@@ -494,7 +443,6 @@ COMPATIBILITY_NOTES: Dict[tuple, List[str]] = {
         "UNNEST → LATERAL VIEW EXPLODE",
         "STRING_AGG → CONCAT_WS(COLLECT_LIST())"
     ],
-    # Spark conversions
     ("spark", "hive"): [
         "Most syntax compatible",
         "Check Spark-specific functions",
@@ -510,7 +458,6 @@ COMPATIBILITY_NOTES: Dict[tuple, List[str]] = {
         "COLLECT_LIST → ARRAY_AGG",
         "Check function availability"
     ],
-    # Snowflake conversions
     ("snowflake", "postgres"): [
         "FLATTEN → UNNEST",
         "VARIANT → JSONB",
@@ -521,7 +468,6 @@ COMPATIBILITY_NOTES: Dict[tuple, List[str]] = {
         "VARIANT → STRING (JSON)",
         "OBJECT → STRUCT"
     ],
-    # Trino conversions
     ("trino", "postgres"): [
         "ROW → composite type",
         "ARRAY syntax compatible",
@@ -532,7 +478,6 @@ COMPATIBILITY_NOTES: Dict[tuple, List[str]] = {
         "Most syntax compatible",
         "Check UDF availability"
     ],
-    # ClickHouse conversions
     ("clickhouse", "postgres"): [
         "Array JOIN → UNNEST",
         "groupArray → ARRAY_AGG",
@@ -543,7 +488,6 @@ COMPATIBILITY_NOTES: Dict[tuple, List[str]] = {
         "groupArray → JSON_ARRAYAGG",
         "DateTime64 → DATETIME(6)"
     ],
-    # Redshift conversions
     ("redshift", "postgres"): [
         "SUPER → JSONB",
         "GETDATE → CURRENT_TIMESTAMP",
@@ -554,7 +498,6 @@ COMPATIBILITY_NOTES: Dict[tuple, List[str]] = {
         "Similar cloud DW syntax",
         "Check function availability"
     ],
-    # DuckDB conversions
     ("duckdb", "postgres"): [
         "LIST → ARRAY",
         "Most syntax compatible",
@@ -565,7 +508,6 @@ COMPATIBILITY_NOTES: Dict[tuple, List[str]] = {
         "STRUCT syntax similar",
         "Check function availability"
     ],
-    # Databricks conversions
     ("databricks", "spark"): [
         "Fully compatible",
         "Databricks-specific features may not transfer",
