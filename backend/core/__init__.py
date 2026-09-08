@@ -61,6 +61,9 @@ from . import final_hardening  # noqa: F401,E402
 # conservative ROWNUM conversion, and semantic warning guards.
 from . import audit_hardening  # noqa: F401,E402
 
+# Install second-pass production guards after all compatibility patches.
+from . import production_hardening  # noqa: F401,E402
+
 __all__ = [
     "setup_logging",
     "SUPPORTED_DIALECTS",
