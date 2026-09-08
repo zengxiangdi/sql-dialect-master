@@ -9,7 +9,6 @@ from .nl2sql import NL2SQLGenerator
 from .parser import SQLParser
 from .post_processor import PostProcessor
 from .rules import TransformRule
-from .transpiler import SQLTranspiler
 
 
 _original_parser_init = SQLParser.__init__
@@ -71,9 +70,6 @@ PostProcessor.process = _process_with_group_concat_default_separator
 # can rewrite data inside string literals or quoted identifiers, which changes
 # query semantics without touching executable SQL. Apply each rule only to
 # unquoted SQL segments while preserving the original compiled-pattern cache.
-_original_rule_apply = TransformRule.apply
-
-
 def _apply_rule_quote_aware(self, sql: str):
     """Apply a transformation rule only outside SQL quoted regions."""
     if not self.enabled:
@@ -85,12 +81,11 @@ def _apply_rule_quote_aware(self, sql: str):
         self._compiled_pattern = pattern
 
     chunks = []
-    unquoted = []
-    changed = False
     i = 0
     start = 0
     quote = None
     length = len(sql)
+    changed = False
 
     while i < length:
         char = sql[i]
@@ -106,6 +101,7 @@ def _apply_rule_quote_aware(self, sql: str):
                 start = i
                 i += 1
                 continue
+
             if char == '[':
                 if start < i:
                     segment = sql[start:i]
@@ -116,11 +112,12 @@ def _apply_rule_quote_aware(self, sql: str):
                 start = i
                 i += 1
                 continue
+
             i += 1
             continue
 
-        # Inside a quoted region, preserve content verbatim. SQL-standard
-        # doubled quote escapes are handled for all quote styles that use them.
+        # Preserve quoted content verbatim. SQL-standard doubled quotes are
+        # escaped as two consecutive quote characters.
         if char == quote:
             if i + 1 < length and sql[i + 1] == quote:
                 i += 2
