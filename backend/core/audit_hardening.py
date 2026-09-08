@@ -15,6 +15,7 @@ from .transpiler import SQLTranspiler
 
 logger = logging.getLogger(__name__)
 _ORIGINAL_PROCESS = PostProcessor.process
+_ORIGINAL_REPLACE_FUNCTION_CALLS = PostProcessor._replace_function_calls
 
 
 def _scan_segments(sql: str):
@@ -103,6 +104,23 @@ def _replace_outside(sql: str, pattern: re.Pattern, replacement: str | Callable[
     return ''.join(parts), count
 
 
+def _replace_function_calls_safe(self, sql: str, function_name: str, replacer):
+    """Apply the legacy balanced-call replacer only to executable SQL segments."""
+    parts = []
+    changed = False
+    for kind, text in _scan_segments(sql):
+        if kind == "code":
+            replaced = _ORIGINAL_REPLACE_FUNCTION_CALLS(self, text, function_name, replacer)
+            changed = changed or replaced != text
+            parts.append(replaced)
+        else:
+            parts.append(text)
+    return ''.join(parts)
+
+
+PostProcessor._replace_function_calls = _replace_function_calls_safe
+
+
 def _top_level_keyword(text: str, keyword: str) -> int:
     wanted = keyword.upper(); depth = 0; quote = None; i = 0
     while i < len(text):
@@ -156,10 +174,7 @@ def _validate_security(self, sql: str):
     dml_without_where = set(_dml_without_where(sql))
     for op in sorted(dml_without_where): result["warnings"].append(f"⚠️ {op} without WHERE clause - may affect all rows")
     for pattern, message in WARNING_SQL_PATTERNS:
-        if message in {
-            "DELETE without WHERE clause - will affect all rows",
-            "UPDATE without WHERE clause - will affect all rows",
-        }:
+        if message in {"DELETE without WHERE clause - will affect all rows", "UPDATE without WHERE clause - will affect all rows"}:
             continue
         if pattern.search(masked): result["warnings"].append(f"⚠️ {message}")
     return result
