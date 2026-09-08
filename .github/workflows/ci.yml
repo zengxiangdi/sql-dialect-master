@@ -52,3 +52,22 @@ jobs:
           assert not missing, f"wheel missing runtime data files: {sorted(missing)}"
           print(f"Validated wheel: {wheels[-1].name}")
           PY
+
+      - name: Smoke test installed wheel
+        run: |
+          smoke_dir="$RUNNER_TEMP/wheel-smoke"
+          python -m pip install --target "$smoke_dir" --no-deps dist/*.whl
+          cd "$smoke_dir"
+          python - <<'PY'
+          from backend.core.functions_lookup import FunctionEncyclopedia
+          from backend.core.type_mapping import TypeMapper
+
+          functions = FunctionEncyclopedia()
+          mappings = TypeMapper()
+          assert len(functions.functions) > 0, "installed wheel loaded no function data"
+          assert len(mappings.mappings) > 0, "installed wheel loaded no type mapping data"
+          print(
+              "Installed wheel smoke test passed: "
+              f"{len(functions.functions)} functions, {len(mappings.mappings)} type mappings"
+          )
+          PY
