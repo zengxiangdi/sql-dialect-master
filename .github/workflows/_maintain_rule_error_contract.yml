@@ -1,0 +1,36 @@
+name: Temporary Rule Contract Maintenance
+
+on:
+  push:
+    branches:
+      - fix/rule-engine-error-contract
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: fix/rule-engine-error-contract
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('backend/core/rules.py'); t=p.read_text()
+          old='''        try:\n            pattern = getattr(self, "_compiled_pattern", None)\n            if pattern is None:\n                pattern = re.compile(self.pattern, re.IGNORECASE)\n                self._compiled_pattern = pattern\n            new_sql, count = pattern.subn(self.replacement, sql)\n            return new_sql, count > 0\n        except Exception:\n            return sql, False\n'''
+          new='''        pattern = getattr(self, "_compiled_pattern", None)\n        if pattern is None:\n            pattern = re.compile(self.pattern, re.IGNORECASE)\n            self._compiled_pattern = pattern\n        new_sql, count = pattern.subn(self.replacement, sql)\n        return new_sql, count > 0\n'''
+          assert old in t; p.write_text(t.replace(old,new,1))
+          p=Path('backend/tests/test_rule_engine_behaviour.py'); t=p.read_text()
+          a='''\n\ndef test_rule_apply_surfaces_regex_execution_errors() -> None:\n    rule = make_rule("bad_replacement")\n    rule.replacement = r"\\2"\n\n    import re\n    import pytest\n\n    with pytest.raises(re.error, match="invalid group reference"):\n        rule.apply("SELECT FOO")\n'''
+          if 'test_rule_apply_surfaces_regex_execution_errors' not in t: p.write_text(t.rstrip()+a+'\n')
+          PY
+          rm .github/workflows/_maintain_rule_error_contract.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add backend/core/rules.py backend/tests/test_rule_engine_behaviour.py .github/workflows/_maintain_rule_error_contract.yml
+          git commit -m 'fix: surface rule execution errors'
+          git push origin HEAD:fix/rule-engine-error-contract
