@@ -21,11 +21,13 @@ _COMPOSITION_MARKERS = (
 )
 
 _TEMPLATE_BLOCKERS = {
+    "condition_query": _COMPOSITION_MARKERS,
     "aggregate_query": _COMPOSITION_MARKERS,
     "time_range_query": _COMPOSITION_MARKERS,
     "select_with_columns": _COMPOSITION_MARKERS,
     "simple_select": _COMPOSITION_MARKERS,
 }
+
 
 @dataclass
 class QueryTemplate:
