@@ -64,7 +64,6 @@ def _generate_with_semantic_ir(self, text, dialect=None, table_hint=None, column
     conditions = extract_boolean_conditions(text.lower())
     if conditions:
         enrich_result_with_semantic_ir(result, conditions, selected_dialect)
-        rewrite_result_sql_with_semantic_ir(result, conditions, selected_dialect)
     return result
 
 
