@@ -15,7 +15,7 @@ class RateLimitStore(Protocol):
     """Minimal storage contract used by RateLimiter."""
 
     def check(self, key: str, limit: int, window_seconds: int) -> tuple[bool, int, int]:
-        """Return allowed, remaining requests, and reset seconds."""
+        """Return allowed, remaining, and reset seconds."""
 
     def stats(self) -> dict:
         """Return storage metadata."""
@@ -75,6 +75,10 @@ class RedisRateLimitStore:
         except ImportError as exc:
             raise RuntimeError("Redis rate limiting requires the optional 'redis' package") from exc
         self._client = redis.Redis.from_url(url, decode_responses=False)
+        try:
+            self._client.ping()
+        except Exception as exc:
+            raise RuntimeError("Redis rate-limit backend is unreachable") from exc
         self._script = self._client.register_script(self._SCRIPT)
         self._namespace = namespace
 
