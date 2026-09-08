@@ -12,6 +12,20 @@ from typing import Optional, Dict, Any, Callable
 logger = logging.getLogger(__name__)
 
 
+# Clause markers that mean a single-purpose template may truncate user intent.
+_COMPOSITION_MARKERS = (
+    "order by", "sort", "排序", "排列",
+    "group by", "grouped by", "分组", "汇总",
+    "limit", "top ", "top\t", "only ", "前",
+)
+
+_TEMPLATE_BLOCKERS = {
+    "condition_query": _COMPOSITION_MARKERS,
+    "aggregate_query": _COMPOSITION_MARKERS,
+    "time_range_query": ("order by", "sort", "排序", "排列", "group by", "分组", "汇总", "limit", "top ", "only ", "前"),
+}
+
+
 @dataclass
 class QueryTemplate:
     """Template for pattern-based SQL generation with priority.
@@ -43,6 +57,15 @@ class QueryTemplate:
         Returns:
             Dictionary of match groups, or None if no match
         """
+        normalized = text.lower()
+        blockers = _TEMPLATE_BLOCKERS.get(self.name, ())
+        if any(marker in normalized for marker in blockers):
+            logger.debug(
+                "Skipping template '%s' because composition markers require enhanced parsing",
+                self.name,
+            )
+            return None
+
         if self._compiled_pattern is None:
             # Fallback to non-compiled if compilation failed
             match = re.search(self.pattern, text, re.IGNORECASE)
