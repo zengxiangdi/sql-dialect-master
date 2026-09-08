@@ -55,6 +55,53 @@ def test_nl2sql_condition_preserves_predicate_semantics():
     assert "100" in predicate_sql
 
 
+def test_nl2sql_composed_condition_preserves_order_and_limit():
+    result = nl2sql.generate(
+        "find products with price greater than 100 order by price desc limit 10",
+        "postgres",
+    )
+
+    assert result.success
+    tree = parse_sql(result.sql, "postgres")
+
+    assert table_names(tree) == {"products"}
+    where = tree.find(exp.Where)
+    assert where is not None
+    predicate_sql = where.this.sql(dialect="postgres").upper()
+    assert "PRICE" in predicate_sql
+    assert ">" in predicate_sql
+    assert "100" in predicate_sql
+
+    order = tree.find(exp.Order)
+    assert order is not None
+    assert "PRICE" in order.sql(dialect="postgres").upper()
+    assert "DESC" in order.sql(dialect="postgres").upper()
+
+    limit = tree.find(exp.Limit)
+    assert limit is not None
+    assert limit.expression is not None
+    assert limit.expression.sql(dialect="postgres") == "10"
+
+
+def test_nl2sql_composed_aggregate_preserves_group_and_order():
+    result = nl2sql.generate(
+        "calculate average price for products grouped by category order by average price desc",
+        "postgres",
+    )
+
+    assert result.success
+    tree = parse_sql(result.sql, "postgres")
+
+    assert table_names(tree) == {"products"}
+    assert tree.find(exp.Avg) is not None
+    group = tree.find(exp.Group)
+    assert group is not None
+    assert "category" in group.sql(dialect="postgres").lower()
+    order = tree.find(exp.Order)
+    assert order is not None
+    assert "DESC" in order.sql(dialect="postgres").upper()
+
+
 def test_nl2sql_top_n_preserves_order_and_limit():
     result = nl2sql.generate("select top 10 customers", "mysql")
 
