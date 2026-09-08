@@ -19,8 +19,8 @@ import asyncio
 from .config import (
     SUPPORTED_DIALECTS, 
     get_compatibility_notes, 
-    settings,
-    DANGEROUS_SQL_PATTERNS,
+    settings, 
+    DANGEROUS_SQL_PATTERNS, 
     WARNING_SQL_PATTERNS,
 )
 from .post_processor import PostProcessor
@@ -202,11 +202,25 @@ class SQLTranspiler:
             # Step 4: Generate warnings
             warnings = self._generate_warnings(sql, source, target)
             
-            # Step 5: Validate output if requested
+            # Step 5: Validate output if requested. Invalid target SQL is a
+            # conversion failure, not a successful conversion with a warning.
             if validate:
                 validation_warning = self._validate_output(final_sql, target)
                 if validation_warning:
-                    warnings.append(validation_warning)
+                    logger.error(
+                        f"Output SQL validation failed: {source} -> {target}: "
+                        f"{validation_warning}"
+                    )
+                    return TranspileResult(
+                        success=False,
+                        source_sql=sql,
+                        source_dialect=source,
+                        target_dialect=target,
+                        error=validation_warning,
+                        compatibility_notes=compat_notes,
+                        transformations=transformations,
+                        warnings=warnings
+                    )
             
             # Add security warnings if enabled
             if self._security_enabled and not skip_security:
@@ -431,51 +445,27 @@ class SQLTranspiler:
             statements = statements[:settings.max_batch_size]
         
         semaphore = asyncio.Semaphore(max_concurrent)
+        loop = asyncio.get_event_loop()
         
-        async def limited_transpile(sql: str) -> TranspileResult:
+        async def transpile_one(sql: str) -> TranspileResult:
             async with semaphore:
-                # Run in thread pool to avoid blocking
-                loop = asyncio.get_event_loop()
                 return await loop.run_in_executor(
                     None,
-                    lambda: self.transpile(sql, source, target, pretty)
+                    self.transpile,
+                    sql,
+                    source,
+                    target,
+                    pretty
                 )
         
-        tasks = [limited_transpile(sql) for sql in statements]
-        return await asyncio.gather(*tasks)
-    
-    def get_supported_dialects(self) -> List[str]:
-        """Get list of supported dialects.
-        
-        Returns:
-            List of dialect names
-        """
-        return SUPPORTED_DIALECTS.copy()
+        return await asyncio.gather(*[transpile_one(sql) for sql in statements])
     
     def get_stats(self) -> Dict[str, Any]:
-        """Get transpiler statistics.
-        
-        Returns:
-            Dictionary with stats
-        """
+        """Get transpiler statistics."""
+        cache_stats = self._cache.stats() if self._cache_enabled else {"enabled": False}
         return {
-            "supported_dialects": len(SUPPORTED_DIALECTS),
-            "dialects": SUPPORTED_DIALECTS,
-            "post_processor": self.post_processor.get_stats(),
-            "cache": self._cache.get_stats() if self._cache_enabled else {"enabled": False},
-            "security": {
-                "enabled": self._security_enabled,
-                "block_dangerous": settings.security_block_dangerous
-            },
-            "settings": {
-                "cache_enabled": self._cache_enabled,
-                "max_batch_size": settings.max_batch_size,
-                "max_sql_length": settings.transpiler_max_sql_length
-            }
+            "cache": cache_stats,
+            "security_enabled": self._security_enabled,
+            "supported_dialects": SUPPORTED_DIALECTS,
+            "post_processor": self.post_processor.get_stats()
         }
-    
-    def clear_cache(self) -> None:
-        """Clear the transpile cache."""
-        if self._cache_enabled:
-            self._cache.clear()
-            logger.info("Transpile cache cleared")
