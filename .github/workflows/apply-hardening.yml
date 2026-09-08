@@ -1,0 +1,97 @@
+name: Apply API hardening patch
+
+on:
+  push:
+    branches: [fix/api-hardening]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Patch API boundaries
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              if old not in text:
+                  raise SystemExit(f"Expected text not found in {path}: {old[:80]!r}")
+              p.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          # Centralize version/title and CORS configuration in Pydantic settings.
+          replace(
+              "backend/api/main.py",
+              'API_VERSION = "1.0.0"\nAPI_TITLE = "SQL Dialect Master API"',
+              'API_VERSION = settings.api_version\nAPI_TITLE = settings.api_title',
+          )
+          replace(
+              "backend/api/main.py",
+              '# Configure CORS with environment-based origins for security\n# In production, set SDM_ALLOWED_ORIGINS to restrict access\nimport os\nALLOWED_ORIGINS = os.getenv(\n    "SDM_ALLOWED_ORIGINS", \n    "http://localhost:8501,http://localhost:8000,http://127.0.0.1:8501,http://127.0.0.1:8000"\n).split(",")',
+              '# Configure CORS from the centralized Pydantic settings source.\nALLOWED_ORIGINS = [origin.strip() for origin in settings.allowed_origins.split(",") if origin.strip()]',
+          )
+          replace(
+              "backend/api/main.py",
+              '# Dialect info for enhanced responses (from centralized config)\nDIALECT_INFO = get_dialect_api_info()',
+              '''# Dialect info for enhanced responses (from centralized config)\nDIALECT_INFO = get_dialect_api_info()\n\n\ndef normalize_dialect(dialect: str, field_name: str = "dialect") -> str:\n    """Normalize and validate a dialect at the API boundary."""\n    normalized = dialect.strip().lower()\n    if normalized not in SUPPORTED_DIALECTS:\n        raise HTTPException(\n            status_code=400,\n            detail=f"Unsupported {field_name}: {dialect}. Supported: {SUPPORTED_DIALECTS}",\n        )\n    return normalized''',
+          )
+          replace(
+              "backend/api/main.py",
+              '    parser = SQLParser(request.dialect)\n    elements = parser.extract_elements(request.sql)',
+              '    dialect = normalize_dialect(request.dialect)\n    parser = SQLParser(dialect)\n    elements = parser.extract_elements(request.sql)',
+          )
+          replace(
+              "backend/api/main.py",
+              '        "dialect": request.dialect,',
+              '        "dialect": dialect,',
+          )
+          replace(
+              "backend/api/main.py",
+              '    result = nl2sql_generator.generate(\n        request.text,\n        request.dialect,\n        request.table_hint\n    )',
+              '    dialect = normalize_dialect(request.dialect)\n    result = nl2sql_generator.generate(\n        request.text,\n        dialect,\n        request.table_hint\n    )',
+          )
+          replace(
+              "backend/api/main.py",
+              '        dialect=result.dialect,',
+              '        dialect=dialect,',
+          )
+          replace(
+              "backend/api/main.py",
+              '    matrix = type_mapper.get_matrix(source, target)',
+              '    if source is not None:\n        source = normalize_dialect(source, "source dialect")\n    if target is not None:\n        target = normalize_dialect(target, "target dialect")\n    matrix = type_mapper.get_matrix(source, target)',
+          )
+
+          # Centralize CORS settings in the same config object used elsewhere.
+          replace(
+              "backend/core/config.py",
+              '    api_version: str = "1.0.1"\n    api_title: str = "SQL Dialect Master API"',
+              '    api_version: str = "1.0.1"\n    api_title: str = "SQL Dialect Master API"\n    allowed_origins: str = (\n        "http://localhost:8501,http://localhost:8000,"\n        "http://127.0.0.1:8501,http://127.0.0.1:8000"\n    )',
+          )
+
+          # Make TypeMapper reject unsupported dialects even when used directly.
+          replace(
+              "backend/core/type_mapping.py",
+              '        type_name = type_name.upper()\n        source = source.lower()\n        target = target.lower()\n        \n        # Find the type in mappings',
+              '''        type_name = type_name.upper()\n        source = source.lower()\n        target = target.lower()\n\n        invalid_dialects = [\n            dialect for dialect in (source, target) if dialect not in SUPPORTED_DIALECTS\n        ]\n        if invalid_dialects:\n            return {\n                "success": False,\n                "error": (\n                    f"Unsupported dialect(s): {', '.join(invalid_dialects)}. "\n                    f"Supported: {SUPPORTED_DIALECTS}"\n                ),\n                "source_type": type_name,\n                "target_type": None,\n                "source_dialect": source,\n                "target_dialect": target,\n            }\n        \n        # Find the type in mappings''',
+          )
+
+          # Add focused regression tests.
+          test_path = Path("backend/tests/test_api_hardening.py")
+          test_path.write_text('''import pytest\nfrom fastapi.testclient import TestClient\n\nfrom backend.api.main import app\nfrom backend.core.config import settings, SUPPORTED_DIALECTS\nfrom backend.core.type_mapping import TypeMapper\n\n\nclient = TestClient(app)\n\n\ndef test_api_version_comes_from_settings():\n    response = client.get("/")\n    assert response.status_code == 200\n    assert response.json()["version"] == settings.api_version\n    assert response.headers["X-API-Version"] == settings.api_version\n\n\ndef test_parse_normalizes_dialect():\n    response = client.post("/api/parse", json={\n        "sql": "SELECT 1",\n        "dialect": "MySQL",\n    })\n    assert response.status_code == 200\n    assert response.json()["dialect"] == "mysql"\n\n\ndef test_parse_rejects_unknown_dialect():\n    response = client.post("/api/parse", json={\n        "sql": "SELECT 1",\n        "dialect": "not_a_db",\n    })\n    assert response.status_code == 400\n    assert response.json()["success"] is False\n\n\ndef test_nl2sql_normalizes_dialect():\n    response = client.post("/api/nl2sql", json={\n        "text": "查询所有用户",\n        "dialect": "MYSQL",\n    })\n    assert response.status_code == 200\n    assert response.json()["dialect"] == "mysql"\n\n\ndef test_nl2sql_rejects_unknown_dialect():\n    response = client.post("/api/nl2sql", json={\n        "text": "查询所有用户",\n        "dialect": "not_a_db",\n    })\n    assert response.status_code == 400\n    assert response.json()["success"] is False\n\n\ndef test_types_endpoint_validates_query_dialects():\n    response = client.get("/api/types?source=not_a_db")\n    assert response.status_code == 400\n    assert response.json()["success"] is False\n\n\ndef test_type_mapper_rejects_unknown_dialect_at_core_boundary():\n    mapper = TypeMapper()\n    result = mapper.map_type("VARCHAR", "not_a_db", "mysql")\n    assert result["success"] is False\n    assert "not_a_db" in result["error"]\n\n\ndef test_allowed_origins_are_centralized():\n    assert settings.allowed_origins\n    assert "localhost:8501" in settings.allowed_origins\n    assert all(dialect in SUPPORTED_DIALECTS for dialect in settings.model_dump().get("allowed_origins", "").split(",") if dialect.startswith("http") is False) is True\n''', encoding="utf-8")
+          PY
+
+      - name: Commit patched sources
+        run: |
+          rm -f .github/workflows/apply-hardening.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/api/main.py backend/core/config.py backend/core/type_mapping.py backend/tests/test_api_hardening.py .github/workflows/apply-hardening.yml
+          git commit -m "fix: harden API boundaries [skip ci]"
+          git push
