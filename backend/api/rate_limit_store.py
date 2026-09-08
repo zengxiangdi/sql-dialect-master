@@ -26,28 +26,38 @@ class InMemoryRateLimitStore:
 
     def __init__(self) -> None:
         self._entries: dict[str, tuple[int, float]] = {}
-        self._last_cleanup_at = 0.0
+        self._expirations: dict[str, float] = {}
+        self._next_cleanup_at = 0.0
         self._lock = Lock()
+
+    def _prune_expired(self, now: float) -> None:
+        if now < self._next_cleanup_at:
+            return
+        expired_keys = [
+            key for key, expires_at in self._expirations.items() if expires_at <= now
+        ]
+        for key in expired_keys:
+            self._entries.pop(key, None)
+            self._expirations.pop(key, None)
+        self._next_cleanup_at = min(self._expirations.values(), default=float("inf"))
 
     def check(self, key: str, limit: int, window_seconds: int) -> tuple[bool, int, int]:
         with self._lock:
             now = time.time()
-            if now - self._last_cleanup_at >= max(1.0, float(window_seconds)):
-                self._entries = {
-                    entry_key: entry
-                    for entry_key, entry in self._entries.items()
-                    if now - entry[1] < window_seconds
-                }
-                self._last_cleanup_at = now
+            self._prune_expired(now)
             count, window_start = self._entries.get(key, (0, now))
             if now - window_start >= window_seconds:
                 count, window_start = 0, now
             count += 1
+            expires_at = window_start + window_seconds
             self._entries[key] = (count, window_start)
-            return count <= limit, max(0, limit - count), max(0, int(window_start + window_seconds - now))
+            self._expirations[key] = expires_at
+            self._next_cleanup_at = min(self._next_cleanup_at, expires_at)
+            return count <= limit, max(0, limit - count), max(0, int(expires_at - now))
 
     def stats(self) -> dict:
         with self._lock:
+            self._prune_expired(time.time())
             return {"backend": "memory", "active_clients": len(self._entries)}
 
 
