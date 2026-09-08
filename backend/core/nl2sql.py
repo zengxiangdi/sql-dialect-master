@@ -288,12 +288,28 @@ class NL2SQLGenerator:
         )
 
         boolean_conditions = extract_boolean_conditions(text_lower)
-        if boolean_conditions:
+        has_explicit_null_predicate = any(
+            keyword in text_lower
+            for keyword in [
+                "为空",
+                "空值",
+                "is null",
+                "null",
+                "empty",
+                "非空",
+                "不为空",
+                "is not null",
+                "not null",
+                "not empty",
+            ]
+        )
+        if boolean_conditions or has_explicit_null_predicate:
             parsed = self._parse_text(text_lower, text)
             parsed.update(analysis)
             operation = self._detect_operation(text_lower)
             table = table_hint or self._extract_table(text_lower)
             columns = column_hints if column_hints else self._extract_columns(text_lower)
+            conditions = self._extract_conditions_enhanced(text_lower, text)
             aggregations = self._extract_aggregations(text_lower)
             group_by = self._extract_group_by(text_lower)
             ordering = self._extract_ordering(text_lower)
@@ -304,7 +320,7 @@ class NL2SQLGenerator:
                 operation,
                 table,
                 columns,
-                boolean_conditions,
+                conditions,
                 aggregations,
                 group_by,
                 ordering,
@@ -462,10 +478,14 @@ class NL2SQLGenerator:
                 col = condition_column or "column"
                 conditions.append(f"{col} LIKE '%{match.group(1)}%'")
 
-        if any(keyword in text for keyword in ["为空", "空值", "is null", "null", "empty"]):
-            conditions.append(f"{condition_column or 'column'} IS NULL")
-        if any(keyword in text for keyword in ["非空", "不为空", "is not null", "not null", "not empty"]):
+        has_negative_null = any(
+            keyword in text
+            for keyword in ["非空", "不为空", "is not null", "not null", "not empty"]
+        )
+        if has_negative_null:
             conditions.append(f"{condition_column or 'column'} IS NOT NULL")
+        elif any(keyword in text for keyword in ["为空", "空值", "is null", "null", "empty"]):
+            conditions.append(f"{condition_column or 'column'} IS NULL")
 
         date_col = "created_at" if "created_at" in text else "date"
         if "今天" in text or "today" in text:
