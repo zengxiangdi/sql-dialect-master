@@ -40,6 +40,10 @@ def _extract_conditions_with_boolean(self, text, original):
 
 NL2SQLGenerator._extract_conditions_enhanced = _extract_conditions_with_boolean
 
+# Install batch-size validation at the core boundary so oversized requests
+# cannot be silently truncated by the legacy batch implementations.
+from . import batch_validation  # noqa: F401,E402
+
 __all__ = [
     # Configuration
     "setup_logging",
