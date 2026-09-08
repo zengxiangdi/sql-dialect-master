@@ -49,8 +49,10 @@ def rewrite_result_sql_with_semantic_ir(
 
     The whole-query legacy generator remains the source of all non-WHERE
     clauses. Only the boolean predicate tree is replaced when both the
-    semantic parser and sqlglot can represent it. Unsupported expressions
-    leave the original SQL untouched.
+    semantic parser and sqlglot can represent it. Explicit legacy parenthesis
+    grouping is intentionally preserved by falling back to the original SQL,
+    because the current Semantic IR models boolean precedence but does not
+    encode formatting-level grouping nodes.
     """
     if not result or not getattr(result, "sql", None) or not conditions:
         return result
@@ -65,6 +67,14 @@ def rewrite_result_sql_with_semantic_ir(
         where = tree.find(exp.Where)
         if where is None:
             return result
+
+        # Do not normalize away explicit grouping produced by the legacy
+        # condition builder. Until grouping is represented in Semantic IR,
+        # preserving the original SQL is the safer compatibility behavior.
+        if where.this.find(exp.Paren) is not None:
+            result.parsed_elements["semantic_ast_rewrite"] = False
+            return result
+
         where.set("this", build_condition_ast(expression))
         rewritten = tree.sql(dialect=dialect)
         result.sql = header + rewritten
