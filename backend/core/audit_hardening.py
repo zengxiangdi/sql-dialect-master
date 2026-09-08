@@ -178,7 +178,11 @@ def _process(self, sql: str, source: str, target: str):
     working = sql; notes = []; source_l = source.lower(); target_l = target.lower()
     if source_l == "oracle" and target_l in {"mysql", "postgres", "hive", "spark"} and "ROWNUM" in _mask_non_executable(working).upper():
         converted, note = _simple_rownum_transform(working)
-        if note and converted != working: working = converted; notes.append(note)
+        if note and converted != working:
+            working = converted
+            notes.append(note)
+            result, legacy_notes = _ORIGINAL_PROCESS(self, working, source, target)
+            return result, notes + legacy_notes
         elif note:
             working, _ = _replace_outside(working, re.compile(r"\bROWNUM\b", re.IGNORECASE), "__SDM_ROWNUM_SENTINEL__")
             notes.append(note); result, legacy_notes = _ORIGINAL_PROCESS(self, working, source, target)
