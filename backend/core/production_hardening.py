@@ -65,7 +65,7 @@ def _validate_output_strict(self: SQLTranspiler, sql: str, dialect: str):
             and dialect == "hive"
         ):
             return None
-        return f"⚠️ Output SQL may have syntax issues: target {dialect} validation failed: {message[:160]}"
+        return f"⚠️ Output SQL may have syntax issues: {dialect} dialect validation failed: {message[:160]}"
 
 
 SQLParser.parse = _parse_with_length_guard
