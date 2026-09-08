@@ -256,6 +256,9 @@ class TTLCache:
         Returns:
             The cleanup thread (already started)
         """
+        if interval <= 0:
+            raise ValueError("interval must be positive")
+
         def cleanup_loop():
             while True:
                 time.sleep(interval)
