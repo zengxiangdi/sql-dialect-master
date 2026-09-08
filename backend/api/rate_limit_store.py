@@ -32,7 +32,8 @@ class InMemoryRateLimitStore:
     def check(self, key: str, limit: int, window_seconds: int) -> tuple[bool, int, int]:
         with self._lock:
             now = time.time()
-            if now - self._last_cleanup_at >= max(1.0, float(window_seconds)):
+            cleanup_interval = max(1.0, float(window_seconds))
+            if now - self._last_cleanup_at >= cleanup_interval:
                 self._entries = {
                     entry_key: entry
                     for entry_key, entry in self._entries.items()
@@ -51,12 +52,6 @@ class InMemoryRateLimitStore:
 
     def stats(self) -> dict:
         with self._lock:
-            now = time.time()
-            self._entries = {
-                entry_key: entry
-                for entry_key, entry in self._entries.items()
-                if now - entry[1] < max(1, int(entry[1] + 0) - int(entry[1] + 0) + 60)
-            }
             return {"backend": "memory", "active_clients": len(self._entries)}
 
 
