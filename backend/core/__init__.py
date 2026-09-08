@@ -44,6 +44,7 @@ from .exceptions import (
 from .nl2sql_components.boolean_conditions import extract_boolean_conditions
 
 _original_extract_conditions = NL2SQLGenerator._extract_conditions_enhanced
+_original_generate = NL2SQLGenerator.generate
 
 
 def _extract_conditions_with_boolean(self, text, original):
@@ -53,7 +54,17 @@ def _extract_conditions_with_boolean(self, text, original):
     return _original_extract_conditions(self, text, original)
 
 
+def _generate_with_semantic_ir(self, text, dialect=None, table_hint=None, column_hints=None):
+    result = _original_generate(self, text, dialect, table_hint, column_hints)
+    selected_dialect = dialect or self.default_dialect
+    conditions = extract_boolean_conditions(text.lower())
+    if conditions:
+        enrich_result_with_semantic_ir(result, conditions, selected_dialect)
+    return result
+
+
 NL2SQLGenerator._extract_conditions_enhanced = _extract_conditions_with_boolean
+NL2SQLGenerator.generate = _generate_with_semantic_ir
 
 __all__ = [
     "setup_logging",
