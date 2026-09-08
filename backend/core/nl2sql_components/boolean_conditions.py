@@ -1,7 +1,8 @@
 """Boolean condition extraction for NL2SQL.
 
-Extract explicit comparison and status predicates plus boolean connectors while
-preserving normal SQL AND-over-OR precedence and user-supplied parentheses.
+Extract explicit comparison, range, text, null, status, and set-membership
+predicates while preserving normal SQL AND-over-OR precedence and
+user-supplied parentheses.
 """
 import re
 from typing import List, Optional, Tuple
@@ -25,6 +26,53 @@ _COMPARISON_PATTERNS = (
         r"(大于等于|小于等于|不等于|大于|小于|超过|低于|等于)\s*"
         r"([0-9]+(?:\.[0-9]+)?)"
     ),
+)
+
+_RANGE_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_])(price|quantity|amount|age|score|rating|views|clicks)\s+"
+    r"(?:between\s+([0-9]+(?:\.[0-9]+)?)\s+and\s+([0-9]+(?:\.[0-9]+)?)|"
+    r"in\s+(?:the\s+)?range\s+([0-9]+(?:\.[0-9]+)?)\s*(?:to|-)\s*"
+    r"([0-9]+(?:\.[0-9]+)?))",
+    re.IGNORECASE,
+)
+
+_CN_RANGE_PATTERN = re.compile(
+    r"(价格|数量|金额|年龄|得分|评分|浏览量|点击量)\s*"
+    r"(?:在|介于)\s*([0-9]+(?:\.[0-9]+)?)\s*(?:和|到|至|-)\s*"
+    r"([0-9]+(?:\.[0-9]+)?)\s*(?:之间|范围内|以内)?"
+)
+
+_TEXT_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_])(name|title|description|category|brand)\s+"
+    r"(?:contains|containing|includes|including)\s+"
+    r"(?:the\s+)?[\"']?([^\"']+?)[\"']?(?=\s+(?:and|or)\s+|$)",
+    re.IGNORECASE,
+)
+
+_CN_TEXT_PATTERN = re.compile(
+    r"(名称|名字|标题|描述|分类|品牌)\s*(?:包含|含有|包括)\s*[“\"]?([^”\"]+?)[”\"]?(?=(?:且|并且|或者|或|和)|$)"
+)
+
+_NULL_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_])(name|title|description|category|brand|price|quantity|amount|"
+    r"age|score|rating|views|clicks)\s+(is\s+(?:not\s+)?null)\b",
+    re.IGNORECASE,
+)
+
+_CN_NULL_PATTERN = re.compile(
+    r"(名称|名字|标题|描述|分类|品牌|价格|数量|金额|年龄|得分|评分|浏览量|点击量)\s*"
+    r"(为空|为\s*空|是空|不为空|不为\s*空|非空)"
+)
+
+_SET_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_])(category|type|department|region|status)\s+"
+    r"(?:(not)\s+)?in\s*\(([^)]*)\)",
+    re.IGNORECASE,
+)
+
+_CN_SET_PATTERN = re.compile(
+    r"(类别|类型|部门|地区|状态)\s*(不在|在)\s*([^且并或和()，,]+?(?:[，,]\s*[^且并或和()，,]+?)*)"
+    r"\s*(?:之中|其中|中)?(?=且|并且|或者|或|和|$)"
 )
 
 _STATUS_PATTERN = re.compile(
@@ -63,6 +111,20 @@ _CN_COLUMNS = {
     "评分": "rating",
     "浏览量": "views",
     "点击量": "clicks",
+    "名称": "name",
+    "名字": "name",
+    "标题": "title",
+    "描述": "description",
+    "分类": "category",
+    "品牌": "brand",
+}
+
+_CN_SET_COLUMNS = {
+    "类别": "category",
+    "类型": "type",
+    "部门": "department",
+    "地区": "region",
+    "状态": "status",
 }
 
 _CN_OPERATORS = {
@@ -90,13 +152,68 @@ def _normalize_operator(raw: str) -> str:
     return _CN_OPERATORS.get(raw, normalized.upper())
 
 
+def _text_sql(column: str, value: str) -> str:
+    escaped = value.strip().replace("'", "''")
+    return f"{column} LIKE '%{escaped}%'"
+
+
+def _format_set_values(raw_values: str) -> str:
+    values = []
+    for raw in re.split(r"[,，]", raw_values):
+        value = raw.strip().strip("\"'")
+        if not value:
+            continue
+        values.append("'" + value.replace("'", "''") + "'")
+    return ", ".join(values)
+
+
 def _comparison_matches(text: str) -> List[Tuple[int, int, str]]:
     matches: List[Tuple[int, int, str]] = []
+
     for pattern in _COMPARISON_PATTERNS:
         for match in pattern.finditer(text):
             first, raw_operator, value = match.groups()
             column = _CN_COLUMNS.get(first, first)
             matches.append((match.start(), match.end(), f"{column} {_normalize_operator(raw_operator)} {value}"))
+
+    for pattern in (_RANGE_PATTERN, _CN_RANGE_PATTERN):
+        for match in pattern.finditer(text):
+            groups = match.groups()
+            if len(groups) == 5:
+                first, low1, high1, low2, high2 = groups
+                low, high = low1 or low2, high1 or high2
+            else:
+                first, low, high = groups
+            column = _CN_COLUMNS.get(first, first)
+            matches.append((match.start(), match.end(), f"{column} BETWEEN {low} AND {high}"))
+
+    for pattern in (_TEXT_PATTERN, _CN_TEXT_PATTERN):
+        for match in pattern.finditer(text):
+            first, value = match.groups()
+            column = _CN_COLUMNS.get(first, first)
+            matches.append((match.start(), match.end(), _text_sql(column, value)))
+
+    for pattern in (_NULL_PATTERN, _CN_NULL_PATTERN):
+        for match in pattern.finditer(text):
+            first, raw_predicate = match.groups()
+            column = _CN_COLUMNS.get(first, first)
+            normalized = raw_predicate.replace(" ", "").lower()
+            is_not_null = normalized.startswith(("isnotnull", "不为空", "非空", "不为"))
+            matches.append((match.start(), match.end(), f"{column} IS {'NOT ' if is_not_null else ''}NULL"))
+
+    for match in _SET_PATTERN.finditer(text):
+        column, negation, raw_values = match.groups()
+        values = _format_set_values(raw_values)
+        if values:
+            operator = "NOT IN" if negation else "IN"
+            matches.append((match.start(), match.end(), f"{column.lower()} {operator} ({values})"))
+
+    for match in _CN_SET_PATTERN.finditer(text):
+        column, operator_text, raw_values = match.groups()
+        values = _format_set_values(raw_values)
+        if values:
+            operator = "NOT IN" if operator_text == "不在" else "IN"
+            matches.append((match.start(), match.end(), f"{_CN_SET_COLUMNS[column]} {operator} ({values})"))
 
     for match in _STATUS_PATTERN.finditer(text):
         status = match.group(1).lower()
