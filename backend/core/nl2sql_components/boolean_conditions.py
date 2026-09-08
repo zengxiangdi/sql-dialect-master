@@ -1,8 +1,7 @@
 """Boolean condition extraction for NL2SQL.
 
-The existing NL2SQL generator already handles single predicates. This module
-adds a small, focused layer for queries that explicitly combine multiple
-predicates with AND/OR, while leaving the legacy extractor as the fallback.
+Extract explicit comparison predicates and boolean connectors while preserving
+normal SQL AND-over-OR precedence and user-supplied parentheses.
 """
 import re
 from typing import List, Optional, Tuple
@@ -70,6 +69,8 @@ _CN_OPERATORS = {
     "等于": "=",
 }
 
+_CONNECTOR_PATTERN = re.compile(r"\b(?:and|or)\b|以及|并且|且|或者|或|和", re.IGNORECASE)
+
 
 def _normalize_operator(raw: str) -> str:
     normalized = raw.lower()
@@ -82,16 +83,13 @@ def _normalize_operator(raw: str) -> str:
     return _CN_OPERATORS.get(raw, normalized.upper())
 
 
-def extract_boolean_conditions(text: str) -> Optional[List[str]]:
-    """Return a single SQL boolean expression when multiple predicates are explicit."""
+def _comparison_matches(text: str) -> List[Tuple[int, int, str]]:
     matches: List[Tuple[int, int, str]] = []
-
     for pattern in _COMPARISON_PATTERNS:
         for match in pattern.finditer(text):
             first, raw_operator, value = match.groups()
             column = _CN_COLUMNS.get(first, first)
-            predicate = f"{column} {_normalize_operator(raw_operator)} {value}"
-            matches.append((match.start(), match.end(), predicate))
+            matches.append((match.start(), match.end(), f"{column} {_normalize_operator(raw_operator)} {value}"))
 
     for match in _STATUS_PATTERN.finditer(text):
         status = match.group(1).lower()
@@ -103,22 +101,41 @@ def extract_boolean_conditions(text: str) -> Optional[List[str]]:
         if deduped and item[0] == deduped[-1][0] and item[1] <= deduped[-1][1]:
             continue
         deduped.append(item)
-    matches = deduped
+    return deduped
 
+
+def extract_boolean_conditions(text: str) -> Optional[List[str]]:
+    """Return one boolean SQL expression preserving connector precedence/grouping."""
+    matches = _comparison_matches(text)
     if len(matches) < 2:
         return None
 
-    connectors: List[str] = []
-    for left, right in zip(matches, matches[1:]):
-        separator = text[left[1] : right[0]].lower()
-        if re.search(r"\b(or)\b|或者|或", separator):
-            connectors.append("OR")
-        elif re.search(r"\b(and|以及|并且)\b|且|和", separator):
-            connectors.append("AND")
-        else:
-            return None
+    tokens: List[str] = []
+    prefix = text[: matches[0][0]]
+    tokens.extend(char for char in prefix if char in "()")
 
-    expression = f"({matches[0][2]})"
-    for connector, match in zip(connectors, matches[1:]):
-        expression += f" {connector} ({match[2]})"
-    return [expression]
+    for index, current in enumerate(matches):
+        tokens.append(f"({current[2]})")
+        if index == len(matches) - 1:
+            suffix = text[current[1] :]
+            tokens.extend(char for char in suffix if char in "()")
+            continue
+
+        separator = text[current[1] : matches[index + 1][0]]
+        events = []
+        for paren in re.finditer(r"[()]", separator):
+            events.append((paren.start(), paren.group(0)))
+        connector_matches = list(_CONNECTOR_PATTERN.finditer(separator))
+        if len(connector_matches) != 1:
+            return None
+        connector = connector_matches[0]
+        events.append((connector.start(), connector.group(0)))
+        events.sort(key=lambda item: item[0])
+        for _, event in events:
+            if event == "(" or event == ")":
+                tokens.append(event)
+            elif event:
+                normalized = event.lower()
+                tokens.append("OR" if normalized in {"or", "或者", "或"} else "AND")
+
+    return [" ".join(tokens)]
