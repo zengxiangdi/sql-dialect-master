@@ -17,10 +17,10 @@ import sqlglot
 import asyncio
 
 from .config import (
-    SUPPORTED_DIALECTS, 
-    get_compatibility_notes, 
-    settings, 
-    DANGEROUS_SQL_PATTERNS, 
+    SUPPORTED_DIALECTS,
+    get_compatibility_notes,
+    settings,
+    DANGEROUS_SQL_PATTERNS,
     WARNING_SQL_PATTERNS,
 )
 from .post_processor import PostProcessor
@@ -48,7 +48,7 @@ class TranspileResult:
     compatibility_notes: List[str] = field(default_factory=list)
     transformations: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         return {
@@ -65,21 +65,8 @@ class TranspileResult:
 
 
 class SQLTranspiler:
-    """SQL Transpiler using sqlglot with post-processing for edge cases.
-    
-    Supports all 12 dialects:
-    - RDBMS: MySQL, PostgreSQL, Oracle, SQL Server (T-SQL)
-    - Big Data: Hive, Spark, Trino, Databricks
-    - Cloud DW: Snowflake, Redshift
-    - OLAP: ClickHouse
-    - Embedded: DuckDB
-    
-    Features:
-    - Security validation for dangerous SQL patterns
-    - TTL caching with thread-safe operations
-    - Comprehensive warnings and compatibility notes
-    """
-    
+    """SQL Transpiler using sqlglot with post-processing for edge cases."""
+
     def __init__(self):
         """Initialize transpiler with post-processor and cache."""
         self.post_processor = PostProcessor()
@@ -89,7 +76,7 @@ class SQLTranspiler:
             ttl=settings.cache_ttl
         )
         self._security_enabled = settings.security_check_enabled
-    
+
     def transpile(
         self,
         sql: str,
@@ -99,26 +86,13 @@ class SQLTranspiler:
         validate: bool = True,
         skip_security: bool = False
     ) -> TranspileResult:
-        """Transpile SQL from source dialect to target dialect.
-        
-        Args:
-            sql: SQL statement to transpile
-            source: Source dialect
-            target: Target dialect
-            pretty: Whether to format output SQL
-            validate: Whether to validate input SQL first
-            skip_security: Skip security validation (use with caution)
-            
-        Returns:
-            TranspileResult with converted SQL or error
-        """
+        """Transpile SQL from source dialect to target dialect."""
         source = source.lower()
         target = target.lower()
-        
+
         logger.info(f"Transpiling SQL: {source} -> {target}, length={len(sql)}")
         logger.debug(f"Input SQL: {sql[:200]}{'...' if len(sql) > 200 else ''}")
-        
-        # Security validation
+
         if self._security_enabled and not skip_security:
             security_result = self._validate_security(sql)
             if security_result["blocked"]:
@@ -132,16 +106,13 @@ class SQLTranspiler:
                     warnings=security_result["warnings"]
                 )
 
-        # Validate before serving from cache. Otherwise a result cached by an
-        # internal call using skip_security=True could bypass this policy.
         if self._cache_enabled:
             cache_key = f"{sql}|{source}|{target}|{pretty}"
             cached = self._cache.get(cache_key)
             if cached:
                 logger.info("Returning cached result")
                 return TranspileResult(**cached)
-        
-        # Validate dialects
+
         if source not in SUPPORTED_DIALECTS:
             return TranspileResult(
                 success=False,
@@ -150,7 +121,7 @@ class SQLTranspiler:
                 target_dialect=target,
                 error=f"Unsupported source dialect: {source}. Supported: {', '.join(SUPPORTED_DIALECTS)}"
             )
-        
+
         if target not in SUPPORTED_DIALECTS:
             return TranspileResult(
                 success=False,
@@ -159,8 +130,7 @@ class SQLTranspiler:
                 target_dialect=target,
                 error=f"Unsupported target dialect: {target}. Supported: {', '.join(SUPPORTED_DIALECTS)}"
             )
-        
-        # Validate SQL length
+
         if len(sql) > settings.transpiler_max_sql_length:
             return TranspileResult(
                 success=False,
@@ -169,8 +139,7 @@ class SQLTranspiler:
                 target_dialect=target,
                 error=f"SQL exceeds maximum length of {settings.transpiler_max_sql_length} characters"
             )
-        
-        # Empty SQL check
+
         if not sql or not sql.strip():
             return TranspileResult(
                 success=False,
@@ -179,9 +148,8 @@ class SQLTranspiler:
                 target_dialect=target,
                 error="Empty SQL statement"
             )
-        
+
         try:
-            # Step 1: Transpile using sqlglot
             logger.debug("Step 1: Transpiling with sqlglot")
             transpiled = sqlglot.transpile(
                 sql,
@@ -189,21 +157,17 @@ class SQLTranspiler:
                 write=target,
                 pretty=pretty
             )[0]
-            
-            # Step 2: Apply post-processing for edge cases
+
             logger.debug("Step 2: Applying post-processing rules")
             final_sql, transformations = self.post_processor.process(
                 transpiled, source, target
             )
-            
-            # Step 3: Get compatibility notes
+
             compat_notes = self._get_compatibility_notes(source, target, sql)
-            
-            # Step 4: Generate warnings
             warnings = self._generate_warnings(sql, source, target)
-            
-            # Step 5: Validate output if requested. Invalid target SQL is a
-            # conversion failure, not a successful conversion with a warning.
+
+            # A malformed target is a conversion failure, not a successful
+            # conversion carrying only a warning.
             if validate:
                 validation_warning = self._validate_output(final_sql, target)
                 if validation_warning:
@@ -221,15 +185,11 @@ class SQLTranspiler:
                         transformations=transformations,
                         warnings=warnings
                     )
-            
-            # Add security warnings if enabled
+
             if self._security_enabled and not skip_security:
                 security_result = self._validate_security(sql)
                 warnings.extend(security_result["warnings"])
-            
-            logger.info(f"Transpile successful: {len(transformations)} transformations, {len(warnings)} warnings")
-            logger.debug(f"Output SQL: {final_sql[:200]}{'...' if len(final_sql) > 200 else ''}")
-            
+
             result = TranspileResult(
                 success=True,
                 source_sql=sql,
@@ -240,14 +200,13 @@ class SQLTranspiler:
                 transformations=transformations,
                 warnings=warnings
             )
-            
-            # Cache the result
+
             if self._cache_enabled:
                 cache_key = f"{sql}|{source}|{target}|{pretty}"
                 self._cache.set(cache_key, result.to_dict())
-            
+
             return result
-            
+
         except Exception as e:
             logger.error(f"Transpile failed: {source} -> {target}, error={str(e)}")
             return TranspileResult(
@@ -257,125 +216,73 @@ class SQLTranspiler:
                 target_dialect=target,
                 error=str(e)
             )
-    
+
     def _get_compatibility_notes(self, source: str, target: str, sql: str = "") -> List[str]:
-        """Get compatibility notes for source→target conversion.
-        
-        Args:
-            source: Source dialect
-            target: Target dialect
-            sql: Original SQL for context-specific notes
-            
-        Returns:
-            List of compatibility notes
-        """
+        """Get compatibility notes for source→target conversion."""
         notes = []
-        
-        # Get predefined notes from config
         notes.extend(get_compatibility_notes(source, target))
-        
-        # Add SQL-specific notes
         sql_upper = sql.upper()
-        
+
         if "LIMIT" in sql_upper and target == "oracle":
             notes.append("Oracle uses FETCH FIRST n ROWS ONLY (12c+) or ROWNUM for LIMIT")
-        
         if "AUTO_INCREMENT" in sql_upper and target not in ["mysql"]:
             notes.append("AUTO_INCREMENT syntax varies by database")
-        
         if "LATERAL VIEW" in sql_upper and target not in ["hive", "spark", "databricks"]:
             notes.append("LATERAL VIEW is Hive/Spark specific, converted to UNNEST/JSON_TABLE")
-        
         if "CONNECT BY" in sql_upper and target != "oracle":
             notes.append("CONNECT BY is Oracle specific, converted to WITH RECURSIVE")
-        
         if "MERGE" in sql_upper:
             notes.append("MERGE syntax varies significantly between databases")
-        
         if "PIVOT" in sql_upper or "UNPIVOT" in sql_upper:
             notes.append("PIVOT/UNPIVOT syntax varies by database")
-        
+
         return notes
-    
+
     def _generate_warnings(self, sql: str, source: str, target: str) -> List[str]:
-        """Generate warnings for potential issues.
-        
-        Args:
-            sql: Original SQL
-            source: Source dialect
-            target: Target dialect
-            
-        Returns:
-            List of warning messages
-        """
+        """Generate warnings for potential issues."""
         warnings = []
         sql_upper = sql.upper()
-        
-        # Dangerous operations
+
         if "DROP TABLE" in sql_upper or "TRUNCATE" in sql_upper:
             warnings.append("⚠️ Dangerous operation detected: DROP/TRUNCATE")
-        
         if "DELETE" in sql_upper and "WHERE" not in sql_upper:
             warnings.append("⚠️ DELETE without WHERE clause - will delete all rows")
-        
         if "UPDATE" in sql_upper and "WHERE" not in sql_upper:
             warnings.append("⚠️ UPDATE without WHERE clause - will update all rows")
-        
-        # Performance warnings
         if "SELECT *" in sql_upper:
             warnings.append("💡 Consider specifying columns instead of SELECT *")
-        
         if "CROSS JOIN" in sql_upper:
             warnings.append("💡 CROSS JOIN can produce large result sets")
-        
         if sql_upper.count("JOIN") > 5:
             warnings.append("💡 Query has many JOINs - consider query optimization")
-        
-        # Dialect-specific warnings
+
         if source == "hive" and target in ["mysql", "postgres", "oracle"]:
             if "DISTRIBUTE BY" in sql_upper or "CLUSTER BY" in sql_upper:
                 warnings.append("⚠️ DISTRIBUTE BY/CLUSTER BY are Hive-specific hints, removed in target")
             if "SORT BY" in sql_upper:
                 warnings.append("⚠️ SORT BY is Hive-specific, converted to ORDER BY")
-        
         if source in ["hive", "spark"] and target in ["mysql", "postgres"]:
             if "COLLECT_LIST" in sql_upper or "COLLECT_SET" in sql_upper:
                 warnings.append("💡 Array aggregation converted - verify result format")
-        
+
         return warnings
-    
+
     def _validate_output(self, sql: str, dialect: str) -> Optional[str]:
-        """Validate output SQL syntax.
-        
-        Args:
-            sql: SQL to validate
-            dialect: Target dialect
-            
-        Returns:
-            Warning message if validation fails, None otherwise
-        """
+        """Validate output SQL syntax."""
         try:
             sqlglot.parse_one(sql, read=dialect)
             return None
         except Exception as e:
             return f"⚠️ Output SQL may have syntax issues: {str(e)[:100]}"
-    
+
     def _validate_security(self, sql: str) -> Dict[str, Any]:
-        """Validate SQL for security issues.
-        
-        Args:
-            sql: SQL to validate
-            
-        Returns:
-            Dictionary with 'blocked', 'reason', and 'warnings' keys
-        """
+        """Validate SQL for security issues."""
         result = {
             "blocked": False,
             "reason": None,
             "warnings": []
         }
-        
-        # Check dangerous patterns (may block) - patterns are precompiled
+
         for pattern, message in DANGEROUS_SQL_PATTERNS:
             if pattern.search(sql):
                 logger.warning(f"Dangerous SQL pattern detected: {message}")
@@ -383,16 +290,14 @@ class SQLTranspiler:
                     result["blocked"] = True
                     result["reason"] = message
                     return result
-                else:
-                    result["warnings"].append(f"🔒 Security: {message}")
-        
-        # Check warning patterns (never block, just warn) - patterns are precompiled
+                result["warnings"].append(f"🔒 Security: {message}")
+
         for pattern, message in WARNING_SQL_PATTERNS:
             if pattern.search(sql):
                 result["warnings"].append(f"⚠️ {message}")
-        
+
         return result
-    
+
     def batch_transpile(
         self,
         statements: List[str],
@@ -400,26 +305,15 @@ class SQLTranspiler:
         target: str,
         pretty: bool = True
     ) -> List[TranspileResult]:
-        """Transpile multiple SQL statements.
-        
-        Args:
-            statements: List of SQL statements
-            source: Source dialect
-            target: Target dialect
-            pretty: Whether to format output SQL
-            
-        Returns:
-            List of TranspileResult objects
-        """
-        # Limit batch size
+        """Transpile multiple SQL statements."""
         if len(statements) > settings.max_batch_size:
             statements = statements[:settings.max_batch_size]
-        
+
         return [
             self.transpile(sql, source, target, pretty)
             for sql in statements
         ]
-    
+
     async def batch_transpile_async(
         self,
         statements: List[str],
@@ -428,44 +322,47 @@ class SQLTranspiler:
         pretty: bool = True,
         max_concurrent: int = 10
     ) -> List[TranspileResult]:
-        """Transpile multiple SQL statements asynchronously.
-        
-        Args:
-            statements: List of SQL statements
-            source: Source dialect
-            target: Target dialect
-            pretty: Whether to format output SQL
-            max_concurrent: Maximum concurrent transpilations
-            
-        Returns:
-            List of TranspileResult objects
-        """
-        # Limit batch size
+        """Transpile multiple SQL statements asynchronously."""
         if len(statements) > settings.max_batch_size:
             statements = statements[:settings.max_batch_size]
-        
+
         semaphore = asyncio.Semaphore(max_concurrent)
-        loop = asyncio.get_event_loop()
-        
-        async def transpile_one(sql: str) -> TranspileResult:
+
+        async def limited_transpile(sql: str) -> TranspileResult:
             async with semaphore:
+                loop = asyncio.get_event_loop()
                 return await loop.run_in_executor(
                     None,
-                    self.transpile,
-                    sql,
-                    source,
-                    target,
-                    pretty
+                    lambda: self.transpile(sql, source, target, pretty)
                 )
-        
-        return await asyncio.gather(*[transpile_one(sql) for sql in statements])
-    
+
+        tasks = [limited_transpile(sql) for sql in statements]
+        return await asyncio.gather(*tasks)
+
+    def get_supported_dialects(self) -> List[str]:
+        """Get list of supported dialects."""
+        return SUPPORTED_DIALECTS.copy()
+
     def get_stats(self) -> Dict[str, Any]:
         """Get transpiler statistics."""
-        cache_stats = self._cache.stats() if self._cache_enabled else {"enabled": False}
         return {
-            "cache": cache_stats,
-            "security_enabled": self._security_enabled,
-            "supported_dialects": SUPPORTED_DIALECTS,
-            "post_processor": self.post_processor.get_stats()
+            "supported_dialects": len(SUPPORTED_DIALECTS),
+            "dialects": SUPPORTED_DIALECTS,
+            "post_processor": self.post_processor.get_stats(),
+            "cache": self._cache.get_stats() if self._cache_enabled else {"enabled": False},
+            "security": {
+                "enabled": self._security_enabled,
+                "block_dangerous": settings.security_block_dangerous
+            },
+            "settings": {
+                "cache_enabled": self._cache_enabled,
+                "max_batch_size": settings.max_batch_size,
+                "max_sql_length": settings.transpiler_max_sql_length
+            }
         }
+
+    def clear_cache(self) -> None:
+        """Clear the transpile cache."""
+        if self._cache_enabled:
+            self._cache.clear()
+            logger.info("Transpile cache cleared")
