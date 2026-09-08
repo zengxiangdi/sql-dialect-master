@@ -46,6 +46,8 @@ class TTLCache:
             max_size: Maximum number of entries
             ttl: Time-to-live in seconds (0 = no expiration)
         """
+        if max_size <= 0:
+            raise ValueError("max_size must be greater than 0")
         self._cache: OrderedDict[str, CacheEntry] = OrderedDict()
         self._max_size = max_size
         self._ttl = ttl
@@ -97,8 +99,18 @@ class TTLCache:
             ttl: Optional TTL override
         """
         with self._lock:
-            # Remove oldest if at capacity
-            while len(self._cache) >= self._max_size:
+            if key in self._cache:
+                self._cache[key] = CacheEntry(
+                    value=value,
+                    created_at=time.time(),
+                    ttl=ttl if ttl is not None else self._ttl
+                )
+                self._cache.move_to_end(key)
+                logger.debug(f"Cache updated: {key[:8]}...")
+                return
+
+            # Remove oldest if at capacity.
+            if len(self._cache) >= self._max_size:
                 oldest_key = next(iter(self._cache))
                 del self._cache[oldest_key]
                 self._evictions += 1
