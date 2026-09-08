@@ -10,7 +10,7 @@ import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, Callable, Optional
+from typing import Dict
 from threading import Lock
 
 from fastapi import Request, Response
@@ -18,7 +18,9 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 logger = logging.getLogger(__name__)
-DEFAULT_MAX_REQUEST_BODY_BYTES = 256 * 1024
+# Keep the transport limit above the application's 100,000-character SQL limit
+# so SQL-specific validation remains responsible for SQL length errors.
+DEFAULT_MAX_REQUEST_BODY_BYTES = 512 * 1024
 
 
 @dataclass
@@ -98,7 +100,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self.max_body_bytes = max_body_bytes
 
     async def dispatch(self, request: Request, call_next) -> Response:
-        if request.url.path not in ["/health", "/health/deep", "/"]:
+        if request.method not in {"GET", "HEAD"}:
             content_length = request.headers.get("content-length")
             if content_length:
                 try:
@@ -106,7 +108,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 except ValueError:
                     return JSONResponse(
                         status_code=400,
-                        content={"success": False, "error": {"code": 400, "message": "Invalid Content-Length"}},
+                        content={
+                            "success": False,
+                            "error": {"code": 400, "message": "Invalid Content-Length"},
+                            "timestamp": datetime.now().isoformat(),
+                        },
                     )
                 if declared_length > self.max_body_bytes:
                     return JSONResponse(
@@ -125,7 +131,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if not self.enabled:
             return await call_next(request)
 
-        if request.url.path in ["/health", "/health/deep", "/"]:
+        if request.url.path in ["/health", "/health/deep", "/"] and request.method in {"GET", "HEAD"}:
             return await call_next(request)
 
         client_id = self._get_client_id(request)
