@@ -54,8 +54,12 @@ from . import nl2sql_null_predicate_fix  # noqa: F401,E402
 # Install the focused comparison precedence fix after the NULL-predicate fix.
 from . import nl2sql_comparison_precedence_fix  # noqa: F401,E402
 
-# Install the final compatibility hardening layer after all legacy condition patches.
+# Install the consolidated final hardening layer after all legacy compatibility patches.
 from . import final_hardening  # noqa: F401,E402
+
+# Install the audit boundary last: quote-aware rewrites, AST-first security,
+# conservative ROWNUM conversion, and semantic warning guards.
+from . import audit_hardening  # noqa: F401,E402
 
 __all__ = [
     "setup_logging",
