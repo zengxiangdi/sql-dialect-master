@@ -1,9 +1,9 @@
 # SQL Dialect Master - Core Module
 from .config import (
-    setup_logging, 
-    SUPPORTED_DIALECTS, 
+    setup_logging,
+    SUPPORTED_DIALECTS,
     DIALECT_METADATA,
-    settings, 
+    settings,
     AppSettings,
     get_dialect_ui_info,
     get_dialect_api_info,
@@ -24,6 +24,21 @@ from .exceptions import (
     SecurityViolationError,
     ValidationError,
 )
+
+# Install the focused multi-condition enhancement after NL2SQLGenerator is loaded.
+from .nl2sql_components.boolean_conditions import extract_boolean_conditions
+
+_original_extract_conditions = NL2SQLGenerator._extract_conditions_enhanced
+
+
+def _extract_conditions_with_boolean(self, text, original):
+    boolean_conditions = extract_boolean_conditions(text)
+    if boolean_conditions:
+        return boolean_conditions
+    return _original_extract_conditions(self, text, original)
+
+
+NL2SQLGenerator._extract_conditions_enhanced = _extract_conditions_with_boolean
 
 __all__ = [
     # Configuration

@@ -26,6 +26,7 @@ from .nl2sql_components.mappings import (
 )
 from .nl2sql_components.templates import DEFAULT_QUERY_TEMPLATES, QueryTemplate
 from .nl2sql_components.tokenizer import Tokenizer
+from .nl2sql_components.boolean_conditions import extract_boolean_conditions
 
 logger = logging.getLogger(__name__)
 
@@ -285,6 +286,44 @@ class NL2SQLGenerator:
             len(analysis["tables"]),
             len(analysis["columns"]),
         )
+
+        boolean_conditions = extract_boolean_conditions(text_lower)
+        if boolean_conditions:
+            parsed = self._parse_text(text_lower, text)
+            parsed.update(analysis)
+            operation = self._detect_operation(text_lower)
+            table = table_hint or self._extract_table(text_lower)
+            columns = column_hints if column_hints else self._extract_columns(text_lower)
+            aggregations = self._extract_aggregations(text_lower)
+            group_by = self._extract_group_by(text_lower)
+            ordering = self._extract_ordering(text_lower)
+            limit = self._extract_limit(text_lower)
+            joins = self._extract_joins(text_lower)
+            distinct = self._check_distinct(text_lower)
+            sql, explanation, confidence = self._build_sql_enhanced(
+                operation,
+                table,
+                columns,
+                boolean_conditions,
+                aggregations,
+                group_by,
+                ordering,
+                limit,
+                joins,
+                distinct,
+                dialect,
+            )
+            suggestions = self._generate_suggestions(text, sql, dialect)
+            return NL2SQLResult(
+                success=sql is not None,
+                input_text=text,
+                sql=sql,
+                dialect=dialect,
+                explanation=explanation,
+                confidence=confidence,
+                suggestions=suggestions,
+                parsed_elements=parsed,
+            )
 
         template, match_groups = self._match_templates(text_lower)
         if template:
@@ -661,8 +700,10 @@ class NL2SQLGenerator:
                 explanation_parts.append(f"关联: {join['table']}")
                 confidence += 0.1
             if conditions:
-                sql += f"\nWHERE {' AND '.join(conditions)}"
-                explanation_parts.append(f"条件: {len(conditions)}个")
+                condition_sql = conditions if isinstance(conditions, str) else " AND ".join(conditions)
+                sql += f"\nWHERE {condition_sql}"
+                count = len(conditions) if not isinstance(conditions, str) else 1
+                explanation_parts.append(f"条件: {count}个")
                 confidence += 0.1
             if group_by:
                 sql += f"\nGROUP BY {', '.join(group_by)}"
@@ -689,14 +730,16 @@ class NL2SQLGenerator:
             set_clause = ", ".join([f"{c} = ?" for c in update_cols])
             sql = f"UPDATE {table}\nSET {set_clause}"
             if conditions:
-                sql += f"\nWHERE {' AND '.join(conditions)}"
+                condition_sql = conditions if isinstance(conditions, str) else " AND ".join(conditions)
+                sql += f"\nWHERE {condition_sql}"
             else:
                 sql += "\nWHERE id = ?"
             explanation_parts.append(f"更新: {table}")
         elif operation == "DELETE":
             sql = f"DELETE FROM {table}"
             if conditions:
-                sql += f"\nWHERE {' AND '.join(conditions)}"
+                condition_sql = conditions if isinstance(conditions, str) else " AND ".join(conditions)
+                sql += f"\nWHERE {condition_sql}"
             else:
                 sql += "\nWHERE id = ?"
             explanation_parts.append(f"删除: {table}")
