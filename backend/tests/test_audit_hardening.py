@@ -15,6 +15,17 @@ def test_english_inclusive_comparison_preserves_gte():
     assert len(list(where.this.find_all(exp.GT))) == 0
 
 
+def test_english_inclusive_comparison_does_not_upgrade_other_greater_than_condition():
+    generator = NL2SQLGenerator()
+    conditions = generator._extract_conditions_enhanced(
+        "find products with price greater than or equal to 10 and age greater than 5",
+        "find products with price greater than or equal to 10 and age greater than 5",
+    )
+    assert "price >= 10" in conditions
+    assert "age > 5" in conditions
+    assert "age >= 5" not in conditions
+
+
 def test_english_inclusive_comparison_preserves_lte():
     result = NL2SQLGenerator().generate("find products with price less than or equal to 10", "postgres")
     assert result.success
