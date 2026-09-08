@@ -49,7 +49,7 @@ Enterprise-grade multi-database SQL conversion engine.
 |---------|-------------|
 | 🔄 **SQL Conversion** | Convert SQL between 12 database dialects |
 | 📚 **Function Encyclopedia** | 298 SQL functions with cross-database comparison |
-| 🗂️ **Type Mapping** | 36 data types × 12 databases matrix |
+| 🗂️ **Type Mapping** | 36 data type mappings × 12 databases matrix |
 | 💬 **NL2SQL** | Natural language to SQL (Chinese/English) |
 
 ## 💾 Supported Databases
@@ -77,7 +77,7 @@ print(response.json()["target_sql"])
 
 ## 📖 API Endpoints
 
-- `POST /api/convert` - Convert SQL between dialects
+- `POST /api/convert` - Convert SQL between 12 database dialects
 - `GET /api/functions` - Search SQL functions
 - `GET /api/types` - Get type mapping matrix
 - `POST /api/nl2sql` - Generate SQL from natural language
@@ -96,24 +96,24 @@ app = FastAPI(
     },
     openapi_tags=[
         {
-            "name": "conversion", 
+            "name": "conversion",
             "description": "🔄 SQL dialect conversion operations",
             "externalDocs": {"description": "Learn more", "url": "https://sqlglot.com/"}
         },
         {
-            "name": "functions", 
+            "name": "functions",
             "description": "📚 SQL function encyclopedia with 298 functions"
         },
         {
-            "name": "types", 
+            "name": "types",
             "description": "🗂️ Data type mapping matrix (36 types × 12 databases)"
         },
         {
-            "name": "nl2sql", 
+            "name": "nl2sql",
             "description": "💬 Natural language to SQL generation"
         },
         {
-            "name": "system", 
+            "name": "system",
             "description": "⚙️ System and health endpoints"
         }
     ]
@@ -167,7 +167,7 @@ async def add_process_time_header(request: Request, call_next):
     process_time = time.time() - start_time
     response.headers["X-Process-Time"] = f"{process_time:.4f}s"
     response.headers["X-API-Version"] = API_VERSION
-    
+
     # Log request details
     api_logger.info(
         f"{request.method} {request.url.path} - {response.status_code} - {process_time:.4f}s"
@@ -276,7 +276,7 @@ class APIResponse(BaseModel):
 async def root():
     """
     🏠 API Root - Welcome & Service Information
-    
+
     Returns comprehensive API information including:
     - Service statistics
     - Available endpoints
@@ -320,7 +320,7 @@ async def root():
 async def get_dialects():
     """
     💾 Get Supported SQL Dialects
-    
+
     Returns all 12 supported database dialects with:
     - Display name and icon
     - Category (RDBMS, Big Data, Cloud DW, etc.)
@@ -337,7 +337,7 @@ async def get_dialects():
             "name": info["name"],
             "icon": info["icon"]
         })
-    
+
     return {
         "success": True,
         "dialects": SUPPORTED_DIALECTS,
@@ -351,13 +351,13 @@ async def get_dialects():
 async def convert_sql(request: ConvertRequest):
     """
     Convert SQL from one dialect to another.
-    
+
     Supports conversion between 12 database dialects with:
     - Automatic syntax transformation
     - Function mapping
     - Type conversion
     - Compatibility notes
-    
+
     **Example:**
     ```json
     {
@@ -367,11 +367,11 @@ async def convert_sql(request: ConvertRequest):
     }
     ```
     """
-    source_dialect = request.source_dialect.lower()
-    target_dialect = request.target_dialect.lower()
+    source_dialect = request.source_dialect.strip().lower()
+    target_dialect = request.target_dialect.strip().lower()
     if source_dialect not in SUPPORTED_DIALECTS:
         raise HTTPException(
-            status_code=400, 
+            status_code=400,
             detail=f"Unsupported source dialect: {request.source_dialect}. Supported: {SUPPORTED_DIALECTS}"
         )
     if target_dialect not in SUPPORTED_DIALECTS:
@@ -379,7 +379,7 @@ async def convert_sql(request: ConvertRequest):
             status_code=400,
             detail=f"Unsupported target dialect: {request.target_dialect}. Supported: {SUPPORTED_DIALECTS}"
         )
-    
+
     result = transpiler.transpile(
         request.sql,
         source_dialect,
@@ -403,7 +403,7 @@ async def convert_sql(request: ConvertRequest):
 async def parse_sql(request: ParseRequest):
     """
     Parse SQL and extract elements.
-    
+
     Extracts tables, columns, functions, and other elements from SQL.
     """
     dialect = normalize_dialect(request.dialect)
@@ -424,9 +424,9 @@ async def list_functions(
 ):
     """
     List or search SQL functions.
-    
+
     **Categories:** string, date, math, aggregate, window, conditional, conversion, json, array, system, geo
-    
+
     **Examples:**
     - `/api/functions?search=date` - Search for date functions
     - `/api/functions?category=string` - List all string functions
@@ -438,7 +438,7 @@ async def list_functions(
         functions = func_encyclopedia.list_by_category(category)
     else:
         functions = func_encyclopedia.functions[:limit]
-    
+
     return {
         "success": True,
         "functions": functions,
@@ -451,7 +451,7 @@ async def list_functions(
 async def get_function_categories():
     """
     Get all function categories with counts.
-    
+
     Returns list of categories and number of functions in each.
     """
     categories = func_encyclopedia.get_all_categories()
@@ -465,16 +465,16 @@ async def get_function_categories():
 async def get_function(name: str):
     """
     Get detailed function information.
-    
+
     Returns function details with syntax for all 12 database dialects.
     """
     func = func_encyclopedia.get_function(name)
     if not func:
         raise HTTPException(
-            status_code=404, 
+            status_code=404,
             detail=f"Function '{name}' not found. Try searching with /api/functions?search={name}"
         )
-    
+
     comparison = func_encyclopedia.compare_dialects(name)
     return {
         "success": True,
@@ -489,9 +489,9 @@ async def list_types(
 ):
     """
     Get type mapping matrix.
-    
+
     Returns complete 36 types × 12 databases mapping matrix.
-    
+
     **Type Categories:**
     - String: STRING, VARCHAR, CHAR, TEXT, etc.
     - Numeric: BIGINT, INT, DECIMAL, FLOAT, etc.
@@ -516,13 +516,13 @@ async def list_types(
 async def get_type(type_name: str):
     """
     Get type mapping details for a specific type.
-    
+
     Returns mapping for all 12 database dialects.
     """
     comparison = type_mapper.compare_types(type_name)
     if "error" in comparison:
         raise HTTPException(
-            status_code=404, 
+            status_code=404,
             detail=f"Type '{type_name}' not found. Available types: STRING, VARCHAR, INT, BIGINT, DECIMAL, DATE, TIMESTAMP, ARRAY, MAP, JSON, etc."
         )
     return {
@@ -534,7 +534,7 @@ async def get_type(type_name: str):
 async def map_type(request: TypeMapRequest):
     """
     Map a type from source to target dialect.
-    
+
     Returns the equivalent type in the target database with notes.
     """
     source_dialect = request.source_dialect.lower()
@@ -568,9 +568,9 @@ async def map_type(request: TypeMapRequest):
 async def generate_sql(request: NL2SQLRequest):
     """
     Generate SQL from natural language.
-    
+
     Supports both Chinese and English input.
-    
+
     **Examples:**
     - "查询最近7天的订单" → SELECT * FROM orders WHERE created_at >= DATE_SUB(CURRENT_DATE, 7)
     - "统计每个部门的员工数量" → SELECT dept, COUNT(*) FROM employees GROUP BY dept
@@ -596,7 +596,7 @@ async def generate_sql(request: NL2SQLRequest):
 async def health_check():
     """
     ❤️ Health Check Endpoint
-    
+
     Returns comprehensive service status including:
     - Overall health status
     - Individual service status
@@ -608,9 +608,9 @@ async def health_check():
         "types": {"status": "✅ healthy", "count": len(type_mapper.mappings), "description": "Type mapping service"},
         "nl2sql": {"status": "✅ healthy", "description": "Natural language processor"}
     }
-    
+
     all_healthy = all("healthy" in s["status"] for s in services.values())
-    
+
     return {
         "status": "✅ healthy" if all_healthy else "⚠️ degraded",
         "version": API_VERSION,
@@ -630,7 +630,7 @@ async def health_check():
 async def deep_health_check():
     """
     🔍 Deep Health Check Endpoint
-    
+
     Performs actual validation of all components:
     - Tests transpiler with sample SQL
     - Validates function encyclopedia data
@@ -638,7 +638,7 @@ async def deep_health_check():
     - Verifies NL2SQL generation
     """
     checks = {}
-    
+
     # Test transpiler
     try:
         result = transpiler.transpile("SELECT 1 AS test", "mysql", "postgres")
@@ -649,7 +649,7 @@ async def deep_health_check():
         }
     except Exception as e:
         checks["transpiler"] = {"status": "❌ error", "message": str(e)}
-    
+
     # Test function encyclopedia
     try:
         func = func_encyclopedia.get_function("CONCAT")
@@ -660,7 +660,7 @@ async def deep_health_check():
         }
     except Exception as e:
         checks["functions"] = {"status": "❌ error", "message": str(e)}
-    
+
     # Test type mapper
     try:
         type_result = type_mapper.map_type("VARCHAR", "mysql", "postgres")
@@ -671,7 +671,7 @@ async def deep_health_check():
         }
     except Exception as e:
         checks["types"] = {"status": "❌ error", "message": str(e)}
-    
+
     # Test NL2SQL
     try:
         nl_result = nl2sql_generator.generate("查询所有用户", "mysql")
@@ -682,11 +682,11 @@ async def deep_health_check():
         }
     except Exception as e:
         checks["nl2sql"] = {"status": "❌ error", "message": str(e)}
-    
+
     # Overall status
     all_ok = all("ok" in c.get("status", "") for c in checks.values())
     has_errors = any("error" in c.get("status", "") for c in checks.values())
-    
+
     return {
         "status": "✅ healthy" if all_ok else ("❌ unhealthy" if has_errors else "⚠️ degraded"),
         "version": API_VERSION,
@@ -698,7 +698,7 @@ async def deep_health_check():
 async def get_stats():
     """
     📊 Get API Statistics
-    
+
     Returns comprehensive statistics about:
     - Function encyclopedia
     - Type mappings
@@ -706,7 +706,7 @@ async def get_stats():
     - Supported dialects
     """
     func_categories = func_encyclopedia.get_all_categories()
-    
+
     return {
         "success": True,
         "stats": {
@@ -757,7 +757,7 @@ async def sdm_exception_handler(request: Request, exc: SDMException):
     status_code = 400
     if isinstance(exc, UnsupportedDialectError):
         status_code = 400
-    
+
     return JSONResponse(
         status_code=status_code,
         content={
