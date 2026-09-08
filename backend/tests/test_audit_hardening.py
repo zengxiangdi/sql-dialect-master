@@ -59,6 +59,14 @@ def test_security_ignores_strings_and_comments():
     assert result["warnings"] == []
 
 
+def test_security_ignores_postgres_dollar_quoted_strings():
+    result = SQLTranspiler()._validate_security(
+        "SELECT $$DROP TABLE users; OR 1=1; SLEEP(10)$$ AS payload"
+    )
+    assert result["blocked"] is False
+    assert result["warnings"] == []
+
+
 def test_security_detects_update_without_where_using_ast():
     result = SQLTranspiler()._validate_security("UPDATE users SET name = 'x'")
     assert any("UPDATE without WHERE" in warning for warning in result["warnings"])
