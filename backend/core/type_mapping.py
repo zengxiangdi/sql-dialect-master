@@ -66,6 +66,22 @@ class TypeMapper:
         type_name = type_name.upper()
         source = source.lower()
         target = target.lower()
+
+        invalid_dialects = [
+            dialect for dialect in (source, target) if dialect not in SUPPORTED_DIALECTS
+        ]
+        if invalid_dialects:
+            return {
+                "success": False,
+                "error": (
+                    f"Unsupported dialect(s): {', '.join(invalid_dialects)}. "
+                    f"Supported: {SUPPORTED_DIALECTS}"
+                ),
+                "source_type": type_name,
+                "target_type": None,
+                "source_dialect": source,
+                "target_dialect": target,
+            }
         
         # Find the type in mappings
         type_info = self.mappings.get(type_name)
