@@ -54,14 +54,31 @@ def test_enrichment_is_noop_for_empty_conditions():
     assert "semantic_ir" not in result.parsed_elements
 
 
-def test_generation_applies_semantic_where_ast_rewrite():
+def test_generation_keeps_legacy_sql_rewrite_disabled_by_default():
     result = NL2SQLGenerator().generate(
         "find products with price greater than 100 and quantity less than 10",
         "postgres",
     )
 
     assert result.success
+    assert "semantic_ir" in result.parsed_elements
+    assert "semantic_ast_rewrite" not in result.parsed_elements
+
+
+def test_explicit_semantic_where_ast_rewrite_is_supported():
+    result = NL2SQLGenerator().generate(
+        "find products with price greater than 100 and quantity less than 10",
+        "postgres",
+    )
+    original_sql = result.sql
+    conditions = extract_boolean_conditions(
+        "find products with price greater than 100 and quantity less than 10"
+    )
+
+    rewrite_result_sql_with_semantic_ir(result, conditions, "postgres")
+
     assert result.parsed_elements["semantic_ast_rewrite"] is True
+    assert result.sql != original_sql
     tree = sqlglot.parse_one(result.sql.split("\n", 1)[1], read="postgres")
     where = tree.find(exp.Where)
     assert where is not None
@@ -91,6 +108,10 @@ def test_rewrite_preserves_non_where_query_clauses():
         "postgres",
     )
     assert result.success
+    conditions = extract_boolean_conditions(
+        "find products with price greater than 100 sorted by price descending top 10"
+    )
+    rewrite_result_sql_with_semantic_ir(result, conditions, "postgres")
     assert result.parsed_elements["semantic_ast_rewrite"] is True
     assert "ORDER BY" in result.sql.upper()
     assert "LIMIT 10" in result.sql.upper()
