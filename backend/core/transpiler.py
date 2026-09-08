@@ -116,8 +116,8 @@ class SQLTranspiler:
         Returns:
             TranspileResult with converted SQL or error
         """
-        source = source.lower()
-        target = target.lower()
+        source = source.strip().lower()
+        target = target.strip().lower()
 
         logger.info(f"Transpiling SQL: {source} -> {target}, length={len(sql)}")
         logger.debug(f"Input SQL: {sql[:200]}{'...' if len(sql) > 200 else ''}")
@@ -498,6 +498,7 @@ class SQLTranspiler:
             source: Source dialect
             target: Target dialect
             pretty: Whether to format output SQL
+            max_concurrent: Maximum number of concurrent transpilations
 
         Returns:
             List of TranspileResult objects
@@ -505,6 +506,13 @@ class SQLTranspiler:
         # Limit batch size
         if len(statements) > settings.max_batch_size:
             statements = statements[:settings.max_batch_size]
+
+        if max_concurrent <= 0:
+            raise ValidationError(
+                "max_concurrent must be positive",
+                field="max_concurrent",
+                value=str(max_concurrent),
+            )
 
         semaphore = asyncio.Semaphore(max_concurrent)
 
