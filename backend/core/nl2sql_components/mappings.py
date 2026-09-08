@@ -117,7 +117,7 @@ TABLE_PATTERNS: Dict[str, str] = {
     "数据": "data", "data": "data", "表": "table", "table": "table",
     "配置": "configs", "config": "configs", "settings": "configs",
     # Categories
-    "分类": "categories", "category": "categories", "categories": "categories",
+    "分类": "categories", "categories": "categories",
     "标签": "tags", "tag": "tags", "tags": "tags",
     # Messages
     "消息": "messages", "message": "messages", "messages": "messages",
@@ -174,6 +174,8 @@ COLUMN_PATTERNS: Dict[str, str] = {
     "产品id": "product_id", "product_id": "product_id",
     "部门id": "dept_id", "dept_id": "dept_id", "department_id": "department_id",
     "父级": "parent_id", "parent_id": "parent_id",
+    # Categorization
+    "分类": "category", "category": "category",
     # Metrics
     "得分": "score", "score": "score", "分数": "score",
     "评分": "rating", "rating": "rating",
