@@ -97,11 +97,18 @@ def _convert(node: exp.Expression) -> BooleanExpression:
         value = node.expression
         if not isinstance(value, exp.Null):
             raise ValueError("Only IS NULL / IS NOT NULL are supported")
-        return NullPredicate(field=_column_name(node.this), is_null=True)
+        return NullPredicate(
+            field=_column_name(node.this),
+            is_null=not bool(node.args.get("negated")),
+        )
 
     if isinstance(node, exp.In):
         values = tuple(_literal_value(item) for item in node.expressions)
-        return SetPredicate(field=_column_name(node.this), operator="in", values=values)
+        return SetPredicate(
+            field=_column_name(node.this),
+            operator="not_in" if bool(node.args.get("not")) else "in",
+            values=values,
+        )
 
     raise ValueError(f"Unsupported semantic expression: {type(node).__name__}")
 
