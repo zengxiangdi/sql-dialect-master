@@ -17,7 +17,11 @@ def test_empty_sql_has_validation_error_code() -> None:
     assert result.error_code == ErrorCode.VALIDATION_FAILED.value
 
 
-def test_security_block_has_security_error_code() -> None:
+def test_security_block_has_security_error_code(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "backend.core.transpiler.settings.security_block_dangerous",
+        True,
+    )
     transpiler = SQLTranspiler()
     result = transpiler.transpile(
         "SELECT 1; SELECT 2",
