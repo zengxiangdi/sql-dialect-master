@@ -22,6 +22,16 @@ def _validate_batch_size(statements: List[str]) -> None:
         )
 
 
+def _validate_max_concurrent(max_concurrent: int) -> None:
+    """Reject non-positive async concurrency to prevent semaphore deadlocks."""
+    if max_concurrent <= 0:
+        raise ValidationError(
+            f"max_concurrent must be positive; got {max_concurrent}",
+            field="max_concurrent",
+            value=str(max_concurrent),
+        )
+
+
 def _batch_transpile_validated(
     self: SQLTranspiler,
     statements: List[str],
@@ -42,8 +52,9 @@ async def _batch_transpile_async_validated(
     pretty: bool = True,
     max_concurrent: int = 10,
 ) -> List[TranspileResult]:
-    """Validate batch size before delegating to the async implementation."""
+    """Validate batch inputs before delegating to the async implementation."""
     _validate_batch_size(statements)
+    _validate_max_concurrent(max_concurrent)
     return await _original_batch_transpile_async(
         self, statements, source, target, pretty, max_concurrent
     )
