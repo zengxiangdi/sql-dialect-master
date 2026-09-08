@@ -8,7 +8,7 @@ construction.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, List, Literal, Union
+from typing import Any, Dict, Literal, Union
 
 ComparisonOperator = Literal["=", "!=", ">", ">=", "<", "<="]
 TextOperator = Literal["contains", "not_contains"]
@@ -81,6 +81,10 @@ class And:
         if len(self.operands) < 2:
             raise ValueError("And requires at least two operands")
 
+    def to_dict(self) -> Dict[str, Any]:
+        """Return a recursively serializable representation."""
+        return asdict(self)
+
 
 @dataclass(frozen=True)
 class Or:
@@ -92,12 +96,20 @@ class Or:
         if len(self.operands) < 2:
             raise ValueError("Or requires at least two operands")
 
+    def to_dict(self) -> Dict[str, Any]:
+        """Return a recursively serializable representation."""
+        return asdict(self)
+
 
 @dataclass(frozen=True)
 class Not:
     """Logical negation of one expression."""
 
     operand: "BooleanExpression"
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return a recursively serializable representation."""
+        return asdict(self)
 
 
 BooleanExpression = Union[Predicate, And, Or, Not]
