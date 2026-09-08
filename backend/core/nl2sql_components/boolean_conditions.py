@@ -1,8 +1,8 @@
 """Boolean condition extraction for NL2SQL.
 
-Extract explicit comparison, range, text, null, and status predicates plus boolean
-connectors while preserving normal SQL AND-over-OR precedence and user-supplied
-parentheses.
+Extract explicit comparison, range, text, null, status, and set-membership
+predicates while preserving normal SQL AND-over-OR precedence and
+user-supplied parentheses.
 """
 import re
 from typing import List, Optional, Tuple
@@ -64,6 +64,16 @@ _CN_NULL_PATTERN = re.compile(
     r"(为空|为\s*空|是空|不为空|不为\s*空|非空)"
 )
 
+_SET_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_])(category|type|department|region|status)\s+"
+    r"(?:(not)\s+)?in\s*\(([^)]*)\)",
+    re.IGNORECASE,
+)
+
+_CN_SET_PATTERN = re.compile(
+    r"(类别|类型|部门|地区|状态)\s*(不在|在)\s*([^()，,]+(?:[，,]\s*[^()，,]+)*)\s*(?:之中|其中|中)?"
+)
+
 _STATUS_PATTERN = re.compile(
     r"(?:\bstatus\s+|状态\s*(?:为|是|=)\s*)"
     r"(active|enabled|valid|inactive|disabled|invalid|completed|done|pending|paid|unpaid|"
@@ -108,6 +118,14 @@ _CN_COLUMNS = {
     "品牌": "brand",
 }
 
+_CN_SET_COLUMNS = {
+    "类别": "category",
+    "类型": "type",
+    "部门": "department",
+    "地区": "region",
+    "状态": "status",
+}
+
 _CN_OPERATORS = {
     "大于等于": ">=",
     "小于等于": "<=",
@@ -136,6 +154,16 @@ def _normalize_operator(raw: str) -> str:
 def _text_sql(column: str, value: str) -> str:
     escaped = value.strip().replace("'", "''")
     return f"{column} LIKE '%{escaped}%'"
+
+
+def _format_set_values(raw_values: str) -> str:
+    values = []
+    for raw in re.split(r"[,，]", raw_values):
+        value = raw.strip().strip("\"'")
+        if not value:
+            continue
+        values.append("'" + value.replace("'", "''") + "'")
+    return ", ".join(values)
 
 
 def _comparison_matches(text: str) -> List[Tuple[int, int, str]]:
@@ -169,8 +197,22 @@ def _comparison_matches(text: str) -> List[Tuple[int, int, str]]:
             first, raw_predicate = match.groups()
             column = _CN_COLUMNS.get(first, first)
             normalized = raw_predicate.replace(" ", "").lower()
-            is_not_null = normalized.startswith(("isnotnull", "不为空", "不为空", "非空", "不为"))
+            is_not_null = normalized.startswith(("isnotnull", "不为空", "非空", "不为"))
             matches.append((match.start(), match.end(), f"{column} IS {'NOT ' if is_not_null else ''}NULL"))
+
+    for match in _SET_PATTERN.finditer(text):
+        column, negation, raw_values = match.groups()
+        values = _format_set_values(raw_values)
+        if values:
+            operator = "NOT IN" if negation else "IN"
+            matches.append((match.start(), match.end(), f"{column.lower()} {operator} ({values})"))
+
+    for match in _CN_SET_PATTERN.finditer(text):
+        column, operator_text, raw_values = match.groups()
+        values = _format_set_values(raw_values)
+        if values:
+            operator = "NOT IN" if operator_text == "不在" else "IN"
+            matches.append((match.start(), match.end(), f"{_CN_SET_COLUMNS[column]} {operator} ({values})"))
 
     for match in _STATUS_PATTERN.finditer(text):
         status = match.group(1).lower()
