@@ -59,6 +59,40 @@ def test_security_ignores_strings_and_comments():
     assert result["warnings"] == []
 
 
+def test_security_ignores_postgres_dollar_quoted_strings():
+    result = SQLTranspiler()._validate_security(
+        "SELECT $$DROP TABLE users; OR 1=1 SLEEP(10)$$ AS body"
+    )
+    assert result["blocked"] is False
+    assert result["warnings"] == []
+
+
+def test_security_ignores_postgres_tagged_dollar_quoted_strings():
+    result = SQLTranspiler()._validate_security(
+        "SELECT $payload$UNION SELECT information_schema.tables$payload$ AS body"
+    )
+    assert result["blocked"] is False
+    assert result["warnings"] == []
+
+
+def test_security_ignores_oracle_q_quoted_strings():
+    result = SQLTranspiler()._validate_security(
+        "SELECT q'[DROP TABLE users; OR 1=1]' AS body"
+    )
+    assert result["blocked"] is False
+    assert result["warnings"] == []
+
+
+def test_dialect_rewrite_ignores_dollar_quoted_strings():
+    generator = NL2SQLGenerator()
+    adjusted = generator._apply_dialect_adjustments(
+        "SELECT $$CURRENT_DATE DATE_SUB(CURRENT_DATE, 7)$$, CURRENT_DATE",
+        "oracle",
+    )
+    assert "$$CURRENT_DATE DATE_SUB(CURRENT_DATE, 7)$$" in adjusted
+    assert "TRUNC(SYSDATE)" in adjusted
+
+
 def test_security_detects_update_without_where_using_ast():
     result = SQLTranspiler()._validate_security("UPDATE users SET name = 'x'")
     assert any("UPDATE without WHERE" in warning for warning in result["warnings"])
