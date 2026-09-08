@@ -4,10 +4,11 @@ import sys
 import types
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.api.main import app, transpiler
-from backend.api.middleware import RateLimiter
+from backend.api.middleware import RateLimiter, RateLimitMiddleware
 from backend.api.rate_limit_store import InMemoryRateLimitStore, RedisRateLimitStore, create_rate_limit_store
 
 
@@ -52,6 +53,9 @@ def test_redis_store_uses_atomic_script(monkeypatch):
 
             return invoke
 
+        def ping(self):
+            return True
+
     fake_redis = types.SimpleNamespace(
         Redis=types.SimpleNamespace(from_url=lambda *args, **kwargs: FakeClient())
     )
@@ -62,6 +66,19 @@ def test_redis_store_uses_atomic_script(monkeypatch):
     assert allowed is True
     assert remaining == 1
     assert reset == 59
+
+
+def test_redis_backend_fails_fast_when_unreachable(monkeypatch):
+    class FakeClient:
+        def ping(self):
+            raise ConnectionError("connection refused")
+
+    fake_redis = types.SimpleNamespace(
+        Redis=types.SimpleNamespace(from_url=lambda *args, **kwargs: FakeClient())
+    )
+    monkeypatch.setitem(sys.modules, "redis", fake_redis)
+    with pytest.raises(RuntimeError, match="Redis rate-limit backend is unreachable"):
+        RedisRateLimitStore("redis://localhost/0")
 
 
 def test_redis_backend_requires_url(monkeypatch):
@@ -85,16 +102,18 @@ def test_readiness_endpoint_runs_component_checks():
     assert set(payload["checks"]) == {"transpiler", "functions", "types", "nl2sql"}
 
 
-def test_readiness_bypasses_rate_limit(monkeypatch):
-    limiter = app.user_middleware[0].kwargs.get("limiter") if app.user_middleware else None
-    if limiter is None:
-        pytest.skip("Application middleware order is implementation-dependent")
-    limiter._requests_per_window = 1
-    client = TestClient(app)
-    first = client.get("/ready")
-    second = client.get("/ready")
-    assert first.status_code in {200, 503}
-    assert second.status_code in {200, 503}
+def test_readiness_path_bypasses_rate_limit():
+    test_app = FastAPI()
+    limiter = RateLimiter(requests_per_window=1, window_seconds=60, store=InMemoryRateLimitStore())
+    test_app.add_middleware(RateLimitMiddleware, limiter=limiter, enabled=True)
+
+    @test_app.get("/ready")
+    async def ready():
+        return {"status": "ready"}
+
+    client = TestClient(test_app)
+    assert client.get("/ready").status_code == 200
+    assert client.get("/ready").status_code == 200
 
 
 def test_stats_uses_actual_rule_count():
