@@ -9,14 +9,14 @@ from typing import List, Optional, Tuple
 
 _COMPARISON_PATTERNS = (
     re.compile(
-        r"\b(price|quantity|amount|age|score|rating|views|clicks)\s+"
+        r"(?<![A-Za-z0-9_])(price|quantity|amount|age|score|rating|views|clicks)\s+"
         r"(greater(?:\s+than)?|more\s+than|above|over|less(?:\s+than)?|"
         r"below|under|equal(?:\s+to)?|equals)\s+"
         r"([0-9]+(?:\.[0-9]+)?)",
         re.IGNORECASE,
     ),
     re.compile(
-        r"\b(price|quantity|amount|age|score|rating|views|clicks)\s*"
+        r"(?<![A-Za-z0-9_])(price|quantity|amount|age|score|rating|views|clicks)\s*"
         r"(>=|<=|!=|=|>|<)\s*([0-9]+(?:\.[0-9]+)?)",
         re.IGNORECASE,
     ),
