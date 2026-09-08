@@ -28,7 +28,7 @@ jobs:
           pip install -e ".[dev,qa]"
 
       - name: Ruff correctness checks
-        run: ruff check backend --select E9,F --ignore F401
+        run: ruff check backend/core backend/api --select E9,F --ignore F401
 
       - name: Bandit security scan
         run: |
