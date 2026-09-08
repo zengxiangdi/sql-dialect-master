@@ -11,12 +11,16 @@ Enterprise-grade multi-database SQL conversion engine supporting 12 database dia
 
 | Feature | Description |
 |---------|-------------|
-| 🔄 **SQL Conversion** | Convert SQL between 12 database dialects |
-| 📚 **Function Encyclopedia** | 50+ SQL functions with cross-database comparison |
+| 🔄 **SQL Conversion** | Convert SQL between 12 database dialects with a complete 12 × 12 conversion matrix |
+| ✅ **Output Validation** | Validate converted SQL with target-dialect parsing plus safe generic-parser fallback |
+| 🧠 **Semantic Regression Coverage** | Preserve predicates, joins, grouping, ordering, limits, windows, and round-trip validity |
+| 📚 **Function Encyclopedia** | 298 SQL functions with cross-database comparison |
 | 🗂️ **Type Mapping** | 36 data types × 12 databases matrix |
 | 💬 **NL2SQL** | Natural language to SQL (Chinese/English) |
-| 🔧 **40+ Rules** | Intelligent transformation rules |
-| 🎨 **Modern UI** | Beautiful Streamlit interface with 5 themes + Custom Theme Editor |
+| 🔧 **Rule Engine** | Deterministic priority ordering, compiled patterns, dialect-aware conflict detection |
+| 🛡️ **Security Validation** | Statement-level stacked-query detection with configurable blocking policy |
+| ⚡ **Performance** | Rule-aware cache versioning, bounded async batch conversion, and reproducible benchmark |
+| 🎨 **Modern UI** | Streamlit interface with 5 themes + Custom Theme Editor |
 
 ## 💾 Supported Databases
 
@@ -85,6 +89,8 @@ curl -X POST http://localhost:8000/api/convert \
   }'
 ```
 
+Successful and failed conversions return structured metadata. Failed conversions expose a stable machine-readable `error_code` alongside the human-readable `error` message.
+
 ### NL2SQL (Natural Language)
 
 ```python
@@ -104,6 +110,8 @@ sql-dialect-master/
 │   ├── api/
 │   │   ├── main.py              # FastAPI application
 │   │   └── middleware.py        # Rate limiting, logging
+│   ├── benchmarks/
+│   │   └── transpiler_benchmark.py # Reproducible conversion benchmark
 │   ├── core/
 │   │   ├── nl2sql_components/   # Modular NL2SQL components
 │   │   │   ├── tokenizer.py     # Language tokenization
@@ -120,10 +128,10 @@ sql-dialect-master/
 │   │   ├── type_mapping.py      # Type mapping
 │   │   ├── type_mapping.json    # Types database
 │   │   ├── cache.py             # TTL cache
-│   │   └── exceptions.py        # Custom exceptions
+│   │   └── exceptions.py        # Custom exceptions + ErrorCode taxonomy
 │   ├── utils/
 │   │   └── validators.py        # Input validation
-│   └── tests/                   # Test suite
+│   └── tests/                   # Test suite and regression coverage
 ├── frontend/                    # Streamlit UI Components
 │   ├── tabs/                    # Modular Tab Pages
 │   │   ├── convert.py
@@ -151,7 +159,8 @@ sql-dialect-master/
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/convert` | POST | Convert SQL between dialects |
+| `/api/convert` | POST | Convert SQL between dialects; response includes `error_code` on failure |
+| `/api/parse` | POST | Parse SQL and extract structural elements |
 | `/api/nl2sql` | POST | Generate SQL from natural language |
 | `/api/functions` | GET | Search SQL functions |
 | `/api/functions/{name}` | GET | Get function details |
@@ -160,21 +169,21 @@ sql-dialect-master/
 | `/api/dialects` | GET | List supported dialects |
 | `/health` | GET | Health check |
 | `/health/deep` | GET | Deep health check |
+| `/api/stats` | GET | Service and dataset statistics |
 
-## 🎨 Themes
+## 🧪 Quality, Validation & Performance
 
-The Streamlit UI supports 5 beautiful themes:
-- 🌙 Dark
-- ☀️ Light  
-- 🌊 Ocean (default)
-- 🌸 Sakura
-- 🌲 Forest
+The project maintains a 12 × 12 source-to-target dialect regression matrix, semantic regression tests, post-processing safety regressions, security boundary checks, deterministic rule-engine tests, cache-versioning tests, async concurrency tests, and stable error-code tests.
 
-**New in v1.0.1:** You can now create, import, and export custom themes directly from the UI sidebar!
+Converted SQL is validated after post-processing. Target-dialect parsing is preferred; when a target parser limitation prevents validation but the generic parser accepts the SQL, the result is retained with a compatibility warning. Only when both validations fail is the conversion reported as unsuccessful.
+
+Security validation structurally detects stacked SQL statements using the parser when available, with configurable policy controlling whether dangerous input is blocked or only warned about.
+
+The async batch API bounds concurrent work and preserves input order. A reproducible transpiler benchmark is available under `backend/benchmarks/` and is intentionally kept outside CI performance assertions.
 
 ## ⚙️ Configuration
 
-The project uses `pydantic-settings` for robust configuration. 
+The project uses `pydantic-settings` for robust configuration.
 
 Copy `.env.example` to `.env` and customize:
 
@@ -187,6 +196,7 @@ Key settings (prefixed with `SDM_`):
 - `SDM_CACHE_TTL` - Cache time-to-live (seconds)
 - `SDM_RATE_LIMIT_REQUESTS` - Rate limit per window
 - `SDM_LOG_LEVEL` - Logging level
+- `SDM_SECURITY_BLOCK_DANGEROUS` - Block dangerous SQL instead of warning
 
 ## 🧪 Testing
 
@@ -196,7 +206,12 @@ pytest
 
 # Run with coverage
 pytest --cov=backend
+
+# Run the reproducible benchmark
+python backend/benchmarks/transpiler_benchmark.py
 ```
+
+CI runs the complete pytest suite and Python compilation checks on Python 3.11 and 3.12.
 
 ## 📄 License
 
