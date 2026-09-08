@@ -537,21 +537,8 @@ async def map_type(request: TypeMapRequest):
 
     Returns the equivalent type in the target database with notes.
     """
-    source_dialect = request.source_dialect.lower()
-    target_dialect = request.target_dialect.lower()
-    invalid_dialects = [
-        dialect
-        for dialect in (source_dialect, target_dialect)
-        if dialect not in SUPPORTED_DIALECTS
-    ]
-    if invalid_dialects:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Unsupported dialect(s): {', '.join(invalid_dialects)}. "
-                f"Supported: {SUPPORTED_DIALECTS}"
-            ),
-        )
+    source_dialect = normalize_dialect(request.source_dialect, "source dialect")
+    target_dialect = normalize_dialect(request.target_dialect, "target dialect")
 
     result = type_mapper.suggest_type(
         request.type_name,
