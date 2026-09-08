@@ -200,7 +200,8 @@ class TTLCache:
             if result is not None:
                 return result
             
-            # Compute value outside of race condition
+            # Compute value while holding the reentrant lock so competing
+            # callers cannot publish a second value for the same key.
             value = factory()
             self.set(key, value, ttl)
             return value
@@ -215,7 +216,7 @@ class TTLCache:
             Cached value or None
         """
         import asyncio
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self.get, key)
     
     async def set_async(self, key: str, value: Any, ttl: int = None) -> None:
@@ -227,7 +228,7 @@ class TTLCache:
             ttl: Optional TTL override
         """
         import asyncio
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, lambda: self.set(key, value, ttl))
     
     def start_background_cleanup(self, interval: int = 60) -> threading.Thread:
