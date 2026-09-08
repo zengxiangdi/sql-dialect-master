@@ -31,3 +31,24 @@ jobs:
 
       - name: Compile Python sources
         run: python -m compileall -q backend frontend sdm_local.py
+
+      - name: Build distributable wheel
+        run: |
+          python -m pip install build
+          python -m build --wheel
+          python - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          wheels = sorted(Path("dist").glob("*.whl"))
+          assert wheels, "wheel build produced no artifact"
+          with ZipFile(wheels[-1]) as wheel:
+              names = set(wheel.namelist())
+          required = {
+              "backend/core/functions_db.json",
+              "backend/core/type_mapping.json",
+          }
+          missing = required - names
+          assert not missing, f"wheel missing runtime data files: {sorted(missing)}"
+          print(f"Validated wheel: {wheels[-1].name}")
+          PY
