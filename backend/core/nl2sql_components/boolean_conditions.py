@@ -21,6 +21,11 @@ _COMPARISON_PATTERNS = (
         r"(>=|<=|!=|=|>|<)\s*([0-9]+(?:\.[0-9]+)?)",
         re.IGNORECASE,
     ),
+    re.compile(
+        r"(价格|数量|金额|年龄|得分|评分|浏览量|点击量)\s*"
+        r"(大于等于|小于等于|不等于|大于|小于|超过|低于|等于)\s*"
+        r"([0-9]+(?:\.[0-9]+)?)"
+    ),
 )
 
 _STATUS_PATTERN = re.compile(
@@ -43,6 +48,28 @@ _STATUS_CONDITIONS = {
     "unpaid": "status = 'unpaid'",
 }
 
+_CN_COLUMNS = {
+    "价格": "price",
+    "数量": "quantity",
+    "金额": "amount",
+    "年龄": "age",
+    "得分": "score",
+    "评分": "rating",
+    "浏览量": "views",
+    "点击量": "clicks",
+}
+
+_CN_OPERATORS = {
+    "大于等于": ">=",
+    "小于等于": "<=",
+    "不等于": "!=",
+    "大于": ">",
+    "小于": "<",
+    "超过": ">",
+    "低于": "<",
+    "等于": "=",
+}
+
 
 def _normalize_operator(raw: str) -> str:
     normalized = raw.lower()
@@ -52,7 +79,7 @@ def _normalize_operator(raw: str) -> str:
         return "<"
     if normalized.startswith(("equal", "equals")):
         return "="
-    return normalized.upper()
+    return _CN_OPERATORS.get(raw, normalized.upper())
 
 
 def extract_boolean_conditions(text: str) -> Optional[List[str]]:
@@ -61,7 +88,8 @@ def extract_boolean_conditions(text: str) -> Optional[List[str]]:
 
     for pattern in _COMPARISON_PATTERNS:
         for match in pattern.finditer(text):
-            column, raw_operator, value = match.groups()
+            first, raw_operator, value = match.groups()
+            column = _CN_COLUMNS.get(first, first)
             predicate = f"{column} {_normalize_operator(raw_operator)} {value}"
             matches.append((match.start(), match.end(), predicate))
 
@@ -69,16 +97,23 @@ def extract_boolean_conditions(text: str) -> Optional[List[str]]:
         status = match.group(1).lower()
         matches.append((match.start(), match.end(), _STATUS_CONDITIONS[status]))
 
-    matches.sort(key=lambda item: item[0])
+    matches.sort(key=lambda item: (item[0], item[1]))
+    deduped: List[Tuple[int, int, str]] = []
+    for item in matches:
+        if deduped and item[0] == deduped[-1][0] and item[1] <= deduped[-1][1]:
+            continue
+        deduped.append(item)
+    matches = deduped
+
     if len(matches) < 2:
         return None
 
     connectors: List[str] = []
     for left, right in zip(matches, matches[1:]):
         separator = text[left[1] : right[0]].lower()
-        if re.search(r"\b(or|或者)\b|或", separator):
+        if re.search(r"\b(or)\b|或者|或", separator):
             connectors.append("OR")
-        elif re.search(r"\b(and|以及|并且)\b|且", separator):
+        elif re.search(r"\b(and|以及|并且)\b|且|和", separator):
             connectors.append("AND")
         else:
             return None
