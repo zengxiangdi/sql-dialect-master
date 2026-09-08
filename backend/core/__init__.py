@@ -51,6 +51,9 @@ from . import input_validation  # noqa: F401,E402
 # Install the focused NULL-predicate precedence fix after NL2SQLGenerator is loaded.
 from . import nl2sql_null_predicate_fix  # noqa: F401,E402
 
+# Install the focused comparison precedence fix after the NULL-predicate fix.
+from . import nl2sql_comparison_precedence_fix  # noqa: F401,E402
+
 __all__ = [
     "setup_logging",
     "SUPPORTED_DIALECTS",
