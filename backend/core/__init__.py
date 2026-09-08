@@ -57,6 +57,10 @@ from . import nl2sql_comparison_precedence_fix  # noqa: F401,E402
 # Install the final compatibility hardening layer after all legacy condition patches.
 from . import final_hardening  # noqa: F401,E402
 
+# Install the second-pass semantic/security hardening layer last so its
+# quote-aware and AST-first guards take precedence over legacy implementations.
+from . import audit_hardening  # noqa: F401,E402
+
 __all__ = [
     "setup_logging",
     "SUPPORTED_DIALECTS",
