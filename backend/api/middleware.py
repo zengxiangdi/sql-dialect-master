@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 class RateLimitEntry:
     """Rate limit tracking entry."""
     requests: int = 0
-    window_start: float = field(default_factory=time.time)
+    window_start: float = field(default_factory=lambda: time.time())
 
 
 class RateLimiter:
