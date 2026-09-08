@@ -16,6 +16,7 @@ from .functions_lookup import FunctionEncyclopedia
 from .type_mapping import TypeMapper
 from .nl2sql import NL2SQLGenerator, NL2SQLResult
 from .cache import TTLCache
+from .schema_context import SchemaColumn, SchemaContext, SchemaTable
 from .semantic_ir import (
     And,
     BooleanExpression,
@@ -34,7 +35,7 @@ from .semantic_integration import (
     enrich_result_with_semantic_ir,
     rewrite_result_sql_with_semantic_ir,
 )
-from .semantic_sql import build_condition_ast, build_select_ast
+from .semantic_sql import build_condition_ast, build_query_ast, build_select_ast
 from .exceptions import (
     SDMException,
     UnsupportedDialectError,
@@ -89,6 +90,9 @@ __all__ = [
     "TypeMapper",
     "NL2SQLGenerator",
     "NL2SQLResult",
+    "SchemaColumn",
+    "SchemaTable",
+    "SchemaContext",
     "Predicate",
     "ComparisonPredicate",
     "RangePredicate",
@@ -105,6 +109,7 @@ __all__ = [
     "enrich_result_with_semantic_ir",
     "rewrite_result_sql_with_semantic_ir",
     "build_condition_ast",
+    "build_query_ast",
     "build_select_ast",
     "SDMException",
     "UnsupportedDialectError",
