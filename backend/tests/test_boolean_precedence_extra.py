@@ -16,4 +16,5 @@ def test_nested_parentheses_keep_group_structure():
     assert isinstance(left.this, exp.And)
     assert isinstance(left.this.this, exp.Paren)
     assert isinstance(left.this.this.this, exp.Or)
-    assert isinstance(boolean.expression, exp.GT)
+    assert isinstance(boolean.expression, exp.Paren)
+    assert isinstance(boolean.expression.this, exp.GT)
