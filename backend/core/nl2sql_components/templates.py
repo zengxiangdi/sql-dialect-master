@@ -3,8 +3,8 @@
 
 Provides pattern-based SQL generation using prioritized templates.
 """
-import re
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, Callable
 
@@ -75,7 +75,7 @@ class QueryTemplate:
 DEFAULT_QUERY_TEMPLATES = [
     QueryTemplate(
         name="top_n_query",
-        pattern=r"(?:查询|获取|get|show|find)?\s*(?:前|top)\s*(\d+)\s*(?:个|条|名)?\s*(.+?)(?:按|by)?\s*(.+?)?\s*(?:排序|排列|order)?",
+        pattern=r"(?:查询|获取|get|show|find)?\s*(?:前|top|bottom|最低|最少|lowest|smallest)\s*(\d+)\s*(?:个|条|名)?\s*(.+?)(?:按|by)?\s*(.+?)?\s*(?:排序|排列|order)?",
         sql_template="SELECT * FROM {table} ORDER BY {order_col} DESC LIMIT {n}",
         priority=90,
     ),
