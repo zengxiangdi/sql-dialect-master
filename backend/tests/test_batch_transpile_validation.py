@@ -41,3 +41,23 @@ def test_batch_transpile_async_rejects_oversized_input(monkeypatch) -> None:
     assert error.error_code == ErrorCode.VALIDATION_FAILED
     assert error.details["field"] == "statements"
     assert error.details["value"] == "3"
+
+
+def test_batch_transpile_async_rejects_non_positive_concurrency() -> None:
+    transpiler = SQLTranspiler()
+
+    for max_concurrent in (0, -1):
+        with pytest.raises(ValidationError) as exc_info:
+            asyncio.run(
+                transpiler.batch_transpile_async(
+                    ["SELECT 1"],
+                    "mysql",
+                    "postgres",
+                    max_concurrent=max_concurrent,
+                )
+            )
+
+        error = exc_info.value
+        assert error.error_code == ErrorCode.VALIDATION_FAILED
+        assert error.details["field"] == "max_concurrent"
+        assert error.details["value"] == str(max_concurrent)
