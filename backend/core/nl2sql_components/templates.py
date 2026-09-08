@@ -83,7 +83,7 @@ DEFAULT_QUERY_TEMPLATES = [
     ),
     QueryTemplate(
         name="condition_query",
-        pattern=r"(?:查询|获取|find|get)?\s*(.+?)\s*(大于|小于|等于|超过|不等于|greater|less|equal|>|<|=)\s*(\d+\.?\d*)\s*(?:的)?\s*(.+)?",
+        pattern=r"(?:查询|获取|find|get)?\s*(.+?)\s*(大于|小于|等于|超过|不等于|greater(?:\s+than)?|less(?:\s+than)?|equal(?:\s+to)?|>|<|=)\s*(\d+\.?\d*)\s*(?:的)?\s*(.+)?",
         sql_template="SELECT * FROM {table} WHERE {col} {op} {value}",
         priority=75
     ),
