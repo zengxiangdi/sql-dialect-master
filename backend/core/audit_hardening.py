@@ -18,41 +18,87 @@ _ORIGINAL_PROCESS = PostProcessor.process
 
 
 def _scan_segments(sql: str):
-    i = 0; start = 0; n = len(sql)
+    """Split SQL into executable and non-executable segments."""
+    i = 0
+    start = 0
+    n = len(sql)
     while i < n:
         ch = sql[i]
+        # PostgreSQL dollar-quoted strings (including tagged forms) can contain
+        # arbitrary SQL-looking text and must not be scanned as executable SQL.
+        if ch == "$":
+            dollar_match = re.match(r"\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$", sql[i:])
+            if dollar_match:
+                tag = dollar_match.group(0)
+                end = sql.find(tag, i + len(tag))
+                if end >= 0:
+                    if start < i:
+                        yield "code", sql[start:i]
+                    end += len(tag)
+                    yield "quoted", sql[i:end]
+                    i = end
+                    start = i
+                    continue
         if ch in ("'", '"', '`') or ch == '[':
-            if start < i: yield "code", sql[start:i]
-            quote = ']' if ch == '[' else ch; qstart = i; i += 1
+            if start < i:
+                yield "code", sql[start:i]
+            quote = ']' if ch == '[' else ch
+            qstart = i
+            i += 1
             while i < n:
-                if quote == "'" and sql[i] == '\\' and i + 1 < n: i += 2; continue
+                if quote == "'" and sql[i] == '\\' and i + 1 < n:
+                    i += 2
+                    continue
                 if sql[i] == quote:
-                    if i + 1 < n and sql[i + 1] == quote: i += 2; continue
-                    i += 1; break
+                    if i + 1 < n and sql[i + 1] == quote:
+                        i += 2
+                        continue
+                    i += 1
+                    break
                 i += 1
-            yield "quoted", sql[qstart:i]; start = i; continue
+            yield "quoted", sql[qstart:i]
+            start = i
+            continue
         if ch == '-' and i + 1 < n and sql[i + 1] == '-':
-            if start < i: yield "code", sql[start:i]
+            if start < i:
+                yield "code", sql[start:i]
             j = i + 2
-            while j < n and sql[j] not in '\r\n': j += 1
-            yield "comment", sql[i:j]; i = j; start = i; continue
+            while j < n and sql[j] not in '\r\n':
+                j += 1
+            yield "comment", sql[i:j]
+            i = j
+            start = i
+            continue
         if ch == '/' and i + 1 < n and sql[i + 1] == '*':
-            if start < i: yield "code", sql[start:i]
+            if start < i:
+                yield "code", sql[start:i]
             j = i + 2
-            while j + 1 < n and not (sql[j] == '*' and sql[j + 1] == '/'): j += 1
-            j = min(n, j + 2); yield "comment", sql[i:j]; i = j; start = i; continue
+            while j + 1 < n and not (sql[j] == '*' and sql[j + 1] == '/'):
+                j += 1
+            j = min(n, j + 2)
+            yield "comment", sql[i:j]
+            i = j
+            start = i
+            continue
         i += 1
-    if start < n: yield "code", sql[start:]
+    if start < n:
+        yield "code", sql[start:]
 
 
 def _mask_non_executable(sql: str) -> str:
-    return ''.join(text if kind == "code" else ''.join('\n' if c in '\r\n' else ' ' for c in text) for kind, text in _scan_segments(sql))
+    return ''.join(
+        text if kind == "code" else ''.join('\n' if c in '\r\n' else ' ' for c in text)
+        for kind, text in _scan_segments(sql)
+    )
 
 
 def _replace_outside(sql: str, pattern: re.Pattern, replacement: str | Callable[[re.Match], str]):
-    parts = []; count = 0
+    parts = []
+    count = 0
     for kind, text in _scan_segments(sql):
-        if kind == "code": text, changed = pattern.subn(replacement, text); count += changed
+        if kind == "code":
+            text, changed = pattern.subn(replacement, text)
+            count += changed
         parts.append(text)
     return ''.join(parts), count
 
