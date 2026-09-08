@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   static-quality:
     runs-on: ubuntu-latest
@@ -24,8 +27,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev,qa]"
 
-      - name: Ruff correctness checks (audit changes)
-        run: ruff check backend/core/audit_hardening.py backend/core/final_hardening.py backend/core/cache.py backend/tests/test_audit_hardening.py backend/tests/test_rule_quote_safety.py --select E9,F --ignore F401
+      - name: Ruff correctness checks
+        run: ruff check backend --select E9,F --ignore F401
 
       - name: Bandit security scan
         run: |
