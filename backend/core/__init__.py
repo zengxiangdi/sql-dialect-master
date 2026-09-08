@@ -16,6 +16,19 @@ from .functions_lookup import FunctionEncyclopedia
 from .type_mapping import TypeMapper
 from .nl2sql import NL2SQLGenerator, NL2SQLResult
 from .cache import TTLCache
+from .semantic_ir import (
+    And,
+    BooleanExpression,
+    ComparisonPredicate,
+    Not,
+    NullPredicate,
+    Or,
+    Predicate,
+    RangePredicate,
+    SemanticQuery,
+    SetPredicate,
+    TextPredicate,
+)
 from .exceptions import (
     SDMException,
     UnsupportedDialectError,
@@ -67,6 +80,18 @@ __all__ = [
     # NL2SQL
     "NL2SQLGenerator",
     "NL2SQLResult",
+    # Semantic IR
+    "Predicate",
+    "ComparisonPredicate",
+    "RangePredicate",
+    "TextPredicate",
+    "NullPredicate",
+    "SetPredicate",
+    "BooleanExpression",
+    "And",
+    "Or",
+    "Not",
+    "SemanticQuery",
     # Exceptions
     "SDMException",
     "UnsupportedDialectError",
