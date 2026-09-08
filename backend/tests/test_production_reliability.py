@@ -18,6 +18,16 @@ def test_memory_store_enforces_limit():
     assert limiter.is_allowed("client")[0] is False
 
 
+def test_memory_store_prunes_expired_entries(monkeypatch):
+    store = InMemoryRateLimitStore()
+    clock = iter([100.0, 100.0, 161.0])
+    monkeypatch.setattr("backend.api.rate_limit_store.time.time", lambda: next(clock))
+    store.check("old-client", 10, 60)
+    assert store.stats()["active_clients"] == 1
+    store.check("new-client", 10, 60)
+    assert store.stats()["active_clients"] == 1
+
+
 def test_rate_limit_store_selection(monkeypatch):
     monkeypatch.setenv("SDM_RATE_LIMIT_BACKEND", "memory")
     store = create_rate_limit_store()
@@ -32,6 +42,8 @@ def test_redis_store_uses_atomic_script(monkeypatch):
     class FakeClient:
         def register_script(self, script):
             self.script = script
+            assert "INCR" in script
+            assert "EXPIRE" in script
 
             def invoke(*, keys, args):
                 assert keys == ["sdm:rate-limit:client"]
@@ -71,6 +83,18 @@ def test_readiness_endpoint_runs_component_checks():
     payload = response.json()
     assert payload["probe"] == "readiness"
     assert set(payload["checks"]) == {"transpiler", "functions", "types", "nl2sql"}
+
+
+def test_readiness_bypasses_rate_limit(monkeypatch):
+    limiter = app.user_middleware[0].kwargs.get("limiter") if app.user_middleware else None
+    if limiter is None:
+        pytest.skip("Application middleware order is implementation-dependent")
+    limiter._requests_per_window = 1
+    client = TestClient(app)
+    first = client.get("/ready")
+    second = client.get("/ready")
+    assert first.status_code in {200, 503}
+    assert second.status_code in {200, 503}
 
 
 def test_stats_uses_actual_rule_count():
