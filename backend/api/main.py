@@ -635,7 +635,7 @@ async def deep_health_check():
             "cache_stats": transpiler.get_stats().get("cache", {})
         }
     except Exception as e:
-        checks["transpiler"] = {"status": "❌ error", "message": str(e)}
+        checks["transpiler"] = {"status": "❌ error", "code": "probe_failed"}
 
     # Test function encyclopedia
     try:
@@ -646,7 +646,7 @@ async def deep_health_check():
             "sample_lookup": "CONCAT" if func else None
         }
     except Exception as e:
-        checks["functions"] = {"status": "❌ error", "message": str(e)}
+        checks["functions"] = {"status": "❌ error", "code": "probe_failed"}
 
     # Test type mapper
     try:
@@ -657,7 +657,7 @@ async def deep_health_check():
             "sample_mapping": type_result.get("target_type")
         }
     except Exception as e:
-        checks["types"] = {"status": "❌ error", "message": str(e)}
+        checks["types"] = {"status": "❌ error", "code": "probe_failed"}
 
     # Test NL2SQL
     try:
@@ -668,7 +668,7 @@ async def deep_health_check():
             "generated_sql": nl_result.sql[:50] if nl_result.sql else None
         }
     except Exception as e:
-        checks["nl2sql"] = {"status": "❌ error", "message": str(e)}
+        checks["nl2sql"] = {"status": "❌ error", "code": "probe_failed"}
 
     # Overall status
     all_ok = all("ok" in c.get("status", "") for c in checks.values())
