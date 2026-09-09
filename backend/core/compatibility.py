@@ -10,6 +10,7 @@ _PATCH_MODULES = (
     "final_hardening",
     "audit_hardening",
     "production_hardening",
+    "p1_hardening",
 )
 
 _installed = False
