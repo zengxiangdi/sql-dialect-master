@@ -29,7 +29,7 @@ class Tokenizer:
     """
     
     # Chinese punctuation to remove
-    CN_PUNCTUATION = r'[，。！？、；：""''（）【】《》]'
+    CN_PUNCTUATION = r"[，。！？、；：\"'（）【】《》]"
     
     # Pre-compiled regex patterns for performance
     _RE_CN_PUNCT = re.compile(CN_PUNCTUATION)
