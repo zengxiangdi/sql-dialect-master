@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from .rate_limit_store import RateLimitStore, create_rate_limit_store
-from .readiness import readiness_response
+from .readiness import deep_health_response, readiness_response
 
 logger = logging.getLogger(__name__)
 DEFAULT_MAX_REQUEST_BODY_BYTES = 512 * 1024
@@ -112,19 +112,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                     status_code=403,
                     content={"success": False, "error": {"code": 403, "message": "health probe access denied"}},
                 )
-            if request.url.path == "/ready":
-                return await readiness_response(request)
-            from . import readiness
-            checks = await readiness._get_checks()
-            failed = [name for name, check in checks.items() if check.get("status") != "ok"]
-            return JSONResponse(
-                status_code=503 if failed else 200,
-                content={
-                    "status": "❌ unhealthy" if failed else "✅ healthy",
-                    "version": readiness._api_version(),
-                    "checks": checks,
-                },
-            )
+            return await call_next(request)
 
         if request.url.path == "/api/nl2sql" and request.method == "POST":
             try:
