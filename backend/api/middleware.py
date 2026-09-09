@@ -16,7 +16,6 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from .rate_limit_store import RateLimitStore, create_rate_limit_store
-from .readiness import health_probe_response
 
 logger = logging.getLogger(__name__)
 DEFAULT_MAX_REQUEST_BODY_BYTES = 512 * 1024
@@ -93,9 +92,6 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         body_error = await self._read_bounded_body(request)
         if body_error is not None:
             return body_error
-
-        if request.url.path in {"/ready", "/health/deep"} and request.method in {"GET", "HEAD"}:
-            return await health_probe_response(request)
 
         if request.url.path == "/api/nl2sql" and request.method == "POST":
             try:
