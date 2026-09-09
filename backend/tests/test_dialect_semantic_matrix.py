@@ -12,6 +12,7 @@ runtime equality across database engines.
 from dataclasses import dataclass
 
 import pytest
+import sqlglot
 from sqlglot import exp
 
 from backend.core.parser import SUPPORTED_DIALECTS
@@ -154,8 +155,8 @@ def test_structural_properties_are_explicitly_asserted(
     assert result.success, result.error
     assert result.target_sql
 
-    source_tree = exp.parse(case.sql, dialect=case.source_dialect)[0]
-    target_tree = exp.parse(result.target_sql, dialect=case.target_dialect)[0]
+    source_tree = sqlglot.parse_one(case.sql, read=case.source_dialect)
+    target_tree = sqlglot.parse_one(result.target_sql, read=case.target_dialect)
 
     source_structural = _without_aliases(source_tree)
     target_structural = _without_aliases(target_tree)
@@ -193,8 +194,8 @@ def test_date_arithmetic_semantics_are_checked_by_ast_shape(
     assert result.success, f"{source} -> {target}: {result.error}"
     assert result.target_sql
 
-    source_tree = exp.parse(sql, dialect=source)[0]
-    target_tree = exp.parse(result.target_sql, dialect=target)[0]
+    source_tree = sqlglot.parse_one(sql, read=source)
+    target_tree = sqlglot.parse_one(result.target_sql, read=target)
 
     assert list(source_tree.find_all(exp.Column))[0].name == list(
         target_tree.find_all(exp.Column)
@@ -228,8 +229,8 @@ def test_boolean_precedence_contract_is_preserved(
     assert result.success, result.error
     assert result.target_sql
 
-    source_tree = exp.parse(sql, dialect=source)[0]
-    target_tree = exp.parse(result.target_sql, dialect=target)[0]
+    source_tree = sqlglot.parse_one(sql, read=source)
+    target_tree = sqlglot.parse_one(result.target_sql, read=target)
 
     source_booleans = [type(node).__name__ for node in source_tree.walk() if isinstance(node, (exp.And, exp.Or))]
     target_booleans = [type(node).__name__ for node in target_tree.walk() if isinstance(node, (exp.And, exp.Or))]
