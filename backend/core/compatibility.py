@@ -1,6 +1,7 @@
 """Explicit compatibility installation for remaining legacy hardening adapters."""
 
 from importlib import import_module
+import re
 
 _PATCH_MODULES = (
     "batch_validation",
@@ -11,6 +12,11 @@ _PATCH_MODULES = (
     "audit_hardening",
     "production_hardening",
     "p1_hardening",
+)
+
+_DANGEROUS_OPERATION_PATTERN = re.compile(
+    r"\b(?:DROP|TRUNCATE|ALTER|CREATE|INSERT|UPDATE|DELETE)\b",
+    re.IGNORECASE,
 )
 
 _installed = False
@@ -42,10 +48,30 @@ def install_compatibility_patches() -> None:
 
     from .function_call_scanner import replace_function_calls
     from .post_processor import PostProcessor
+    from .transpiler import SQLTranspiler
 
     if not getattr(PostProcessor, "_sdm_function_scanner_installed", False):
         PostProcessor._replace_function_calls = staticmethod(replace_function_calls)
         PostProcessor._sdm_function_scanner_installed = True
+
+    if not getattr(SQLTranspiler, "_sdm_default_security_patch_installed", False):
+        original_validate_security = SQLTranspiler._validate_security
+
+        def validate_security_with_default_dangerous_block(self, sql):
+            result = original_validate_security(self, sql)
+            # Stacked statements have a dedicated P1 boundary and stable
+            # VALIDATION_FAILED error code; do not consume that result here.
+            if result.get("reason") == "Multiple SQL statements detected":
+                result["blocked"] = False
+                result["reason"] = None
+                return result
+            if settings.security_block_dangerous and _DANGEROUS_OPERATION_PATTERN.search(sql):
+                result["blocked"] = True
+                result["reason"] = "Dangerous SQL operation detected"
+            return result
+
+        SQLTranspiler._validate_security = validate_security_with_default_dangerous_block
+        SQLTranspiler._sdm_default_security_patch_installed = True
 
     _installed = True
 
