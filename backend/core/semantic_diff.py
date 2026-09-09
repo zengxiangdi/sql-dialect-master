@@ -75,8 +75,8 @@ def _context_sensitive_functions(tree: exp.Expression) -> List[str]:
             continue
         try:
             name = str(sql_name()).upper()
-        except Exception:
-            continue
+        except (AttributeError, TypeError, ValueError):
+            name = ""
         if name in _CONTEXT_SENSITIVE_FUNCTIONS:
             names.add(name)
     return sorted(names)
