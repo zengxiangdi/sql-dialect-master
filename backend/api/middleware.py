@@ -147,9 +147,22 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self.log_body = log_body
 
+    @staticmethod
+    def _get_request_id(request: Request) -> str:
+        """Reuse a valid RFC 4122 request ID; otherwise issue a fresh UUID."""
+        candidate = request.headers.get("X-Request-ID")
+        if candidate:
+            try:
+                parsed = uuid.UUID(candidate)
+                if parsed.variant == uuid.RFC_4122:
+                    return candidate
+            except (ValueError, AttributeError, TypeError):
+                pass
+        return str(uuid.uuid4())
+
     async def dispatch(self, request: Request, call_next) -> Response:
         start_time = time.time()
-        request_id = str(uuid.uuid4())
+        request_id = self._get_request_id(request)
         status_code = 500
         error = None
         log_data = {"event": "request_start", "request_id": request_id, "method": _sanitize_log_value(request.method), "path": _sanitize_log_value(request.url.path), "query": _sanitize_log_value(str(request.query_params)), "client": _sanitize_log_value(request.client.host if request.client else "unknown"), "timestamp": datetime.now().isoformat()}
@@ -168,7 +181,7 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
         return response
 
 
-class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+class SecurityHeadersMiddleware:
     """Add security headers to responses."""
 
     async def dispatch(self, request: Request, call_next) -> Response:
