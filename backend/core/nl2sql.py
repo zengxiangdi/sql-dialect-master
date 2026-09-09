@@ -15,6 +15,14 @@ class NL2SQLGenerator(_NL2SQLGenerator):
             return None, None
         return template, match_groups
 
+    def _extract_aggregations(self, text: str) -> list:
+        """Preserve the established ``count`` alias for COUNT aggregates."""
+        aggregations = super()._extract_aggregations(text)
+        return [
+            "COUNT(*) AS count" if aggregation == "COUNT(*)" else aggregation
+            for aggregation in aggregations
+        ]
+
     def _extract_group_by(self, text: str) -> list:
         """Extract explicit per-group intent such as '每个部门' when needed."""
         group_cols = super()._extract_group_by(text)
