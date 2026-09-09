@@ -1,24 +1,25 @@
 #!/usr/bin/env python3
 """SQL Transpiler - Convert SQL between different database dialects."""
+import asyncio
 import hashlib
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any
-import sqlglot
-import asyncio
+from typing import Any, Dict, List, Optional
 
+import sqlglot
+
+from .cache import TTLCache
 from .config import (
+    DANGEROUS_SQL_PATTERNS,
     SUPPORTED_DIALECTS,
+    WARNING_SQL_PATTERNS,
     get_compatibility_notes,
     settings,
-    DANGEROUS_SQL_PATTERNS,
-    WARNING_SQL_PATTERNS,
 )
-from .post_processor import PostProcessor
-from .cache import TTLCache
 from .exceptions import ErrorCode, ValidationError
 from .p1_sql_scanner import mask_non_executable
+from .post_processor import PostProcessor
 
 logger = logging.getLogger(__name__)
 _DANGEROUS_OPERATION_PATTERN = re.compile(
@@ -322,8 +323,8 @@ class SQLTranspiler:
                     result["reason"] = message
                     return result
                 result["warnings"].append(f"🔒 Security: {message}")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("SQL statement parsing failed during security validation: %s", exc)
         for pattern, message in DANGEROUS_SQL_PATTERNS:
             if pattern.search(executable_sql):
                 if settings.security_block_dangerous:

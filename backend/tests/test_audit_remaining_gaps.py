@@ -8,7 +8,6 @@ from backend.api.middleware import RateLimitMiddleware, StructuredLoggingMiddlew
 from backend.core.nl2sql import NL2SQLGenerator
 from backend.core.post_processor import PostProcessor
 
-
 PROBE_HEADERS = {"X-Health-Probe-Token": "test-health-token"}
 
 
@@ -241,7 +240,7 @@ def test_nl2sql_openapi_exposes_column_hints():
 
 
 def test_nl2sql_api_passes_valid_column_hints_to_generator(monkeypatch):
-    import backend.api.main as main_module
+    from backend.api import main as main_module
 
     captured = {}
 
