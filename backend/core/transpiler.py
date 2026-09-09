@@ -27,6 +27,11 @@ _DANGEROUS_OPERATION_PATTERN = re.compile(
 )
 
 
+def _contains_sql_keyword(sql: str, keyword: str) -> bool:
+    """Return true when a keyword appears as a standalone SQL token."""
+    return re.search(rf"\b{re.escape(keyword)}\b", sql, re.IGNORECASE) is not None
+
+
 @dataclass
 class TranspileResult:
     """Result of SQL transpilation."""
@@ -256,9 +261,9 @@ class SQLTranspiler:
         warnings = []
         if "DROP TABLE" in sql_upper or "TRUNCATE" in sql_upper:
             warnings.append("⚠️ Dangerous operation detected: DROP/TRUNCATE")
-        if "DELETE" in sql_upper and "WHERE" not in sql_upper:
+        if _contains_sql_keyword(sql_upper, "DELETE") and not _contains_sql_keyword(sql_upper, "WHERE"):
             warnings.append("⚠️ DELETE without WHERE clause - will delete all rows")
-        if "UPDATE" in sql_upper and "WHERE" not in sql_upper:
+        if _contains_sql_keyword(sql_upper, "UPDATE") and not _contains_sql_keyword(sql_upper, "WHERE"):
             warnings.append("⚠️ UPDATE without WHERE clause - will update all rows")
         if "SELECT *" in sql_upper:
             warnings.append("💡 Consider specifying columns instead of SELECT *")
