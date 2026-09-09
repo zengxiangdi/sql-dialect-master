@@ -14,21 +14,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.12"
           cache: pip
 
-      - name: Install project and quality tools
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev,qa]"
+      - name: Install uv
+        run: python -m pip install uv==0.8.17
+
+      - name: Install project and quality tools from locked dependencies
+        run: uv sync --locked --extra dev --extra qa
 
       - name: Ruff correctness checks
-        run: ruff check backend/core backend/api --select E9,F --ignore F401
+        run: uv run ruff check backend/core backend/api --select E9,F --ignore F401
 
       - name: Bandit security scan
         run: |
@@ -36,7 +37,7 @@ jobs:
           # B104 = intentional API service bind in the local/server entry point.
           # B110 = legacy parser fallback intentionally continues with regex checks.
           # B608 = NL2SQL returns generated SQL, never executes it; output is parser-validated.
-          bandit -q -r backend -x backend/tests -s B104,B110,B608
+          uv run bandit -q -r backend -x backend/tests -s B104,B110,B608
 
       - name: Dependency vulnerability audit
-        run: pip-audit
+        run: uv run pip-audit
