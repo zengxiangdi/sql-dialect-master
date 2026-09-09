@@ -15,13 +15,20 @@ _ORIGINAL_VALIDATE_OUTPUT = SQLTranspiler._validate_output
 
 def _transpile_single_statement(self, sql, source, target, *args, **kwargs):
     if isinstance(sql, str) and sql.strip():
+        normalized_source = str(source).strip().lower()
+        normalized_target = str(target).strip().lower()
         try:
-            statements = sqlglot.parse(sql, read=source)
-        except Exception:
-            statements = None
-        if statements is not None and len(statements) != 1:
-            normalized_source = str(source).strip().lower()
-            normalized_target = str(target).strip().lower()
+            statements = sqlglot.parse(sql, read=normalized_source)
+        except Exception as exc:
+            return TranspileResult(
+                success=False,
+                source_sql=sql,
+                source_dialect=normalized_source,
+                target_dialect=normalized_target,
+                error=f"Invalid SQL statement: {str(exc)[:200]}",
+                error_code=ErrorCode.VALIDATION_FAILED.value,
+            )
+        if len(statements) != 1:
             return TranspileResult(
                 success=False,
                 source_sql=sql,
@@ -39,7 +46,7 @@ def _validate_single_output(self, sql, dialect):
         if len(statements) != 1:
             return "Output SQL must contain exactly one statement"
     except Exception as exc:
-        return f"⚠️ Output SQL may have syntax issues: {str(exc)[:100]}"
+        return f"Output SQL validation failed: {str(exc)[:200]}"
     return _ORIGINAL_VALIDATE_OUTPUT(self, sql, dialect)
 
 
