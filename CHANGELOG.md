@@ -16,6 +16,8 @@ All notable changes to SQL Dialect Master are documented here.
 - Added an AST-based semantic diff detector for structural conversion regressions.
 - Added PostgreSQL + DuckDB runtime semantic regression coverage and a dedicated CI gate.
 - Added locked semantic-test dependencies for DuckDB and Psycopg.
+- Added README source-of-truth validation for release version, Python requirement, supported dialects, and benchmark references.
+- Added a CI benchmark workflow for reproducible transpiler performance observability.
 
 ### Fixed
 
