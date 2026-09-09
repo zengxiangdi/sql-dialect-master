@@ -5,8 +5,6 @@ Provides rate limiting, request-size protection, logging, and security headers.
 """
 import json
 import logging
-import os
-import secrets
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -18,7 +16,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from .rate_limit_store import RateLimitStore, create_rate_limit_store
-from .readiness import deep_health_response, readiness_response
+from .readiness import health_probe_response
 
 logger = logging.getLogger(__name__)
 DEFAULT_MAX_REQUEST_BODY_BYTES = 512 * 1024
@@ -55,16 +53,6 @@ class RateLimiter:
         stats = self._store.stats()
         stats.update({"requests_per_window": self._requests_per_window, "window_seconds": self._window_seconds})
         return stats
-
-
-def _probe_allowed(request: Request) -> bool:
-    """Allow health probes only from loopback or with the configured probe secret."""
-    token = os.getenv("SDM_HEALTH_PROBE_TOKEN", "").strip()
-    supplied = request.headers.get("X-Health-Probe-Token", "")
-    if token and supplied and secrets.compare_digest(supplied, token):
-        return True
-    client = request.client
-    return bool(client and client.host in {"127.0.0.1", "::1", "localhost"})
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -107,14 +95,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return body_error
 
         if request.url.path in {"/ready", "/health/deep"} and request.method in {"GET", "HEAD"}:
-            if not _probe_allowed(request):
-                return JSONResponse(
-                    status_code=403,
-                    content={"success": False, "error": {"code": 403, "message": "health probe access denied"}},
-                )
-            if request.url.path == "/ready":
-                return await readiness_response(request)
-            return await deep_health_response(request)
+            return await health_probe_response(request)
 
         if request.url.path == "/api/nl2sql" and request.method == "POST":
             try:
