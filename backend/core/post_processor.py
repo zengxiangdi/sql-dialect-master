@@ -55,12 +55,7 @@ class PostProcessor:
             notes.extend(gc_notes)
         return result, notes
 
-    def _replace_function_calls(
-        self,
-        sql: str,
-        function_name: str,
-        replacer: Callable[[str, str], str],
-    ) -> str:
+    def _replace_function_calls(self, sql: str, function_name: str, replacer: Callable[[str, str], str]) -> str:
         """Replace function calls using the shared quote/comment-aware scanner."""
         return replace_function_calls(sql, function_name, replacer)
 
@@ -68,6 +63,7 @@ class PostProcessor:
         notes = []
         if "DECODE" not in mask_non_executable(sql).upper():
             return sql, notes
+
         def decode_to_case(args_str: str, original: str) -> str:
             args = self._parse_function_args(args_str)
             if len(args) < 3:
@@ -77,10 +73,13 @@ class PostProcessor:
             case_parts = []
             i = 0
             while i < len(pairs) - 1:
-                case_parts.append(f"WHEN {col} = {pairs[i]} THEN {pairs[i+1]}")
+                value = pairs[i]
+                comparator = "IS NULL" if value.strip().upper() == "NULL" else f"= {value}"
+                case_parts.append(f"WHEN {col} {comparator} THEN {pairs[i + 1]}")
                 i += 2
             default = pairs[-1] if len(pairs) % 2 == 1 else "NULL"
             return f"CASE {' '.join(case_parts)} ELSE {default} END"
+
         result = self._replace_function_calls(sql, "DECODE", decode_to_case)
         if result != sql:
             notes.append("Converted DECODE to CASE WHEN")
