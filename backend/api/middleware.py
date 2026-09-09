@@ -15,6 +15,8 @@ from fastapi import Request, Response
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from backend.core.exceptions import ErrorCode
+
 from .rate_limit_store import RateLimitStore, create_rate_limit_store
 from .readiness import health_probe_response
 
@@ -160,6 +162,66 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
                 pass
         return str(uuid.uuid4())
 
+    @staticmethod
+    async def _normalize_error_response(response: Response, request_id: str) -> Response:
+        """Normalize generic 4xx JSON responses, including streamed responses."""
+        if response.status_code not in {400, 404, 422}:
+            return response
+
+        try:
+            if hasattr(response, "body"):
+                raw_body = response.body
+            else:
+                chunks = []
+                async for chunk in response.body_iterator:
+                    chunks.append(chunk)
+                raw_body = b"".join(chunks)
+            payload = json.loads(raw_body.decode("utf-8"))
+        except (AttributeError, UnicodeDecodeError, json.JSONDecodeError):
+            return response
+
+        error = payload.get("error") if isinstance(payload, dict) else None
+        if not isinstance(error, dict):
+            detail = payload.get("detail") if isinstance(payload, dict) else None
+            if response.status_code == 422:
+                error = {
+                    "code": ErrorCode.VALIDATION_FAILED.value,
+                    "message": "Request validation failed",
+                    "details": detail if isinstance(detail, list) else ([detail] if detail else []),
+                }
+            elif response.status_code == 404:
+                error = {
+                    "code": ErrorCode.NOT_FOUND.value,
+                    "message": str(detail or "Resource not found"),
+                    "details": {},
+                }
+            else:
+                error = {
+                    "code": ErrorCode.BAD_REQUEST.value,
+                    "message": str(detail or "Bad request"),
+                    "details": {},
+                }
+        else:
+            code = error.get("code")
+            if response.status_code == 404 and not isinstance(code, str):
+                error["code"] = ErrorCode.NOT_FOUND.value
+            elif response.status_code == 400 and not isinstance(code, str):
+                error["code"] = ErrorCode.BAD_REQUEST.value
+            elif response.status_code == 422 and not isinstance(code, str):
+                error["code"] = ErrorCode.VALIDATION_FAILED.value
+            error.setdefault("details", {})
+
+        payload = {
+            "success": False,
+            "error": error,
+            "timestamp": payload.get("timestamp", datetime.now().isoformat()),
+            "request_id": request_id,
+        }
+        headers = dict(response.headers)
+        headers.pop("content-length", None)
+        headers.pop("content-type", None)
+        return JSONResponse(status_code=response.status_code, content=payload, headers=headers)
+
     async def dispatch(self, request: Request, call_next) -> Response:
         start_time = time.time()
         request_id = self._get_request_id(request)
@@ -170,6 +232,7 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
         logger.info(json.dumps(log_data))
         try:
             response = await call_next(request)
+            response = await self._normalize_error_response(response, request_id)
             status_code = response.status_code
         except Exception as exc:
             error = _sanitize_log_value(str(exc))
