@@ -25,6 +25,10 @@ qa = [
     "bandit>=1.7",
     "pip-audit>=2.7",
 ]
+semantic = [
+    "duckdb>=1.5.5",
+    "psycopg[binary]>=3.3.5",
+]
 redis = [
     "redis>=5.0.0",
 ]
