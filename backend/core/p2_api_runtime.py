@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse
 from pydantic import Field
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from backend.api.middleware import StructuredLoggingMiddleware
+from backend.api.middleware import RateLimitMiddleware, StructuredLoggingMiddleware
 from backend.api.readiness import deep_health_response
 from backend.core.config import settings
 from backend.core.nl2sql import NL2SQLGenerator
@@ -33,8 +33,8 @@ def _validate_column_hints(value: Any) -> Optional[list[str]]:
 
     if not isinstance(value, list):
         raise ValueError("column_hints must be a list of SQL identifiers")
-    if len(value) > 32:
-        raise ValueError("column_hints must contain at most 32 items")
+    if not 1 <= len(value) <= 32:
+        raise ValueError("column_hints must contain 1 to 32 items")
     normalized: list[str] = []
     for index, item in enumerate(value):
         if not isinstance(item, str):
@@ -81,6 +81,7 @@ class ColumnHintsValidationMiddleware(BaseHTTPMiddleware):
 _ORIGINAL_FASTAPI_INIT = FastAPI.__init__
 _ORIGINAL_ADD_API_ROUTE = FastAPI.add_api_route
 _ORIGINAL_GENERATE = NL2SQLGenerator.generate
+_ORIGINAL_RATE_LIMIT_INIT = RateLimitMiddleware.__init__
 
 
 def _fastapi_init_hardened(self, *args, **kwargs):
@@ -89,6 +90,15 @@ def _fastapi_init_hardened(self, *args, **kwargs):
         self.add_middleware(ColumnHintsValidationMiddleware)
         self.add_middleware(StructuredLoggingMiddleware)
         self._sdm_runtime_hardening = True
+
+
+def _rate_limit_init_hardened(self, app, *args, **kwargs):
+    _ORIGINAL_RATE_LIMIT_INIT(self, app, *args, **kwargs)
+    if any(
+        middleware.cls is StructuredLoggingMiddleware
+        for middleware in getattr(app, "user_middleware", [])
+    ):
+        self._structured_logging = None
 
 
 def _liveness_endpoint():
@@ -136,6 +146,18 @@ if not getattr(FastAPI, "_sdm_api_runtime_hardening", False):
     FastAPI.__init__ = _fastapi_init_hardened
     FastAPI.add_api_route = _add_api_route_hardened
     FastAPI._sdm_api_runtime_hardening = True
+
+if not getattr(RateLimitMiddleware, "_sdm_structured_logging_runtime_patch", False):
+    RateLimitMiddleware.__init__ = _rate_limit_init_hardened
+    _original_rate_limit_dispatch = RateLimitMiddleware.dispatch
+
+    async def _rate_limit_dispatch_hardened(self, request, call_next):
+        if self._structured_logging is None:
+            return await self._dispatch_inner(request, call_next)
+        return await _original_rate_limit_dispatch(self, request, call_next)
+
+    RateLimitMiddleware.dispatch = _rate_limit_dispatch_hardened
+    RateLimitMiddleware._sdm_structured_logging_runtime_patch = True
 
 if not getattr(NL2SQLGenerator, "_sdm_column_hints_runtime_patch", False):
     NL2SQLGenerator.generate = wraps(_ORIGINAL_GENERATE)(_generate_with_column_hints)
