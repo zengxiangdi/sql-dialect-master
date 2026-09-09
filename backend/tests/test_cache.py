@@ -48,32 +48,6 @@ class TestTTLCache:
         cache.set("key1", "value1")
         assert cache.get("key1") == "value1"
 
-    def test_security_policy_is_checked_before_a_cached_result(self, monkeypatch):
-        """A result cached by an internal bypass must not bypass normal checks."""
-        monkeypatch.setattr(settings, "security_block_dangerous", True)
-        transpiler = SQLTranspiler()
-        sql = "SELECT * FROM users WHERE id = 1 OR 1=1"
-
-        bypassed = transpiler.transpile(sql, "mysql", "postgres", skip_security=True)
-        assert bypassed.success
-
-        checked = transpiler.transpile(sql, "mysql", "postgres")
-        assert not checked.success
-        assert "Security check failed" in checked.error
-
-    def test_skip_security_is_part_of_cache_identity(self, monkeypatch):
-        """Security-warning metadata must not leak between bypassed and checked calls."""
-        monkeypatch.setattr(settings, "security_block_dangerous", False)
-        transpiler = SQLTranspiler()
-        sql = "SELECT * FROM users WHERE id = 1 OR 1=1"
-
-        bypassed = transpiler.transpile(sql, "mysql", "postgres", skip_security=True)
-        checked = transpiler.transpile(sql, "mysql", "postgres", skip_security=False)
-
-        assert bypassed.success and checked.success
-        assert not any(w.startswith("🔒 Security:") for w in bypassed.warnings)
-        assert any(w.startswith("🔒 Security:") for w in checked.warnings)
-
     def test_security_policy_change_is_part_of_cache_identity(self, monkeypatch):
         """Changing warning/block mode must not reuse a result cached under another policy."""
         transpiler = SQLTranspiler()

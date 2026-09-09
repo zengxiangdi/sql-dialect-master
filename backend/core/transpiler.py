@@ -71,7 +71,6 @@ class SQLTranspiler:
         target: str,
         pretty: bool = True,
         validate: bool = True,
-        skip_security: bool = False
     ) -> TranspileResult:
         if not isinstance(sql, str):
             return TranspileResult(
@@ -120,7 +119,7 @@ class SQLTranspiler:
         security_warnings: List[str] = []
         security_enabled = settings.security_check_enabled
         self._security_enabled = security_enabled
-        if security_enabled and not skip_security:
+        if security_enabled:
             security_result = self._validate_security(sql)
             security_warnings = list(security_result["warnings"])
             if security_result["blocked"]:
@@ -166,7 +165,7 @@ class SQLTranspiler:
             )
 
         if self._cache_enabled:
-            cache_key = self._cache_key(sql, source, target, pretty, validate, skip_security)
+            cache_key = self._cache_key(sql, source, target, pretty, validate)
             cached = self._cache.get(cache_key)
             if cached:
                 logger.info("Returning cached result")
@@ -200,7 +199,7 @@ class SQLTranspiler:
             )
 
             if self._cache_enabled:
-                cache_key = self._cache_key(sql, source, target, pretty, validate, skip_security)
+                cache_key = self._cache_key(sql, source, target, pretty, validate)
                 self._cache.set(cache_key, result.to_dict())
             return result
         except Exception as e:
@@ -220,7 +219,7 @@ class SQLTranspiler:
         except Exception:
             return False
 
-    def _cache_key(self, sql: str, source: str, target: str, pretty: bool, validate: bool = True, skip_security: bool = False) -> str:
+    def _cache_key(self, sql: str, source: str, target: str, pretty: bool, validate: bool = True,) -> str:
         rule_payload = "\n".join(
             "|".join([
                 rule.name, rule.source, rule.target, rule.pattern, rule.replacement,
@@ -230,7 +229,7 @@ class SQLTranspiler:
         )
         rule_version = hashlib.sha256(rule_payload.encode("utf-8")).hexdigest()[:16]
         security_version = f"{settings.security_check_enabled}|{settings.security_block_dangerous}"
-        return f"v4|{rule_version}|{security_version}|{skip_security}|{sql}|{source}|{target}|{pretty}|{validate}"
+        return f"v4|{rule_version}|{security_version}|{sql}|{source}|{target}|{pretty}|{validate}"
 
     def _get_compatibility_notes(self, source: str, target: str, sql: str = "") -> List[str]:
         notes = list(get_compatibility_notes(source, target))

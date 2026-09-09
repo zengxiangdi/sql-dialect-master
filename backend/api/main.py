@@ -300,7 +300,7 @@ async def root():
             "functions": {"count": len(func_encyclopedia.functions), "label": "📚 SQL Functions"},
             "types": {"count": len(type_mapper.mappings), "label": "🗂️ Data Types"},
             "dialects": {"count": len(SUPPORTED_DIALECTS), "label": "💾 Databases"},
-            "rules": {"count": 40, "label": "🔧 Conversion Rules"}
+            "rules": {"count": len(transpiler.post_processor.engine.rules), "label": "🔧 Conversion Rules"}
         },
         "endpoints": {
             "🔄 conversion": {"url": "/api/convert", "method": "POST"},
@@ -630,7 +630,7 @@ async def get_stats():
                 "total_functions": len(func_encyclopedia.functions),
                 "total_types": len(type_mapper.mappings),
                 "total_dialects": len(SUPPORTED_DIALECTS),
-                "conversion_rules": 40
+                "conversion_rules": len(transpiler.post_processor.engine.rules)
             },
             "functions": {
                 "total": len(func_encyclopedia.functions),
