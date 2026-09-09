@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Custom exceptions for SQL Dialect Master.
 
 Provides a hierarchy of exceptions for better error handling and debugging.
@@ -31,10 +30,12 @@ class SDMException(Exception):
         self.details = details or {}
 
     def to_dict(self) -> dict:
-        """Convert exception to dictionary for API responses."""
+        """Convert exception to a backward-compatible API error dictionary."""
+        code = self.error_code.value
         return {
             "error_type": self.__class__.__name__,
-            "error_code": self.error_code.value,
+            "error_code": code,
+            "code": code,
             "message": self.message,
             "details": self.details
         }
