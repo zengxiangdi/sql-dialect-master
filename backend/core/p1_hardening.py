@@ -28,9 +28,6 @@ def _reject_stacked_statements(
     sql: str,
     source: str,
     target: str,
-    pretty: bool = True,
-    validate: bool = True,
-    skip_security: bool = False,
 ) -> TranspileResult | None:
     """Reject multi-statement input instead of silently returning statement #1."""
     if not isinstance(sql, str) or not sql.strip():
@@ -67,19 +64,46 @@ def _transpile_single_statement(
     validate: bool = True,
     skip_security: bool = False,
 ):
+    # Keep the original input-type contract. The pre-existing implementation
+    # returns a structured result for non-string dialect values.
+    if not isinstance(source, str) or not isinstance(target, str):
+        return _ORIGINAL_TRANSPILER(
+            self,
+            sql,
+            source,
+            target,
+            pretty,
+            validate,
+            skip_security,
+        )
+
     source_normalized = source.strip().lower()
     target_normalized = target.strip().lower()
+
+    # Security validation intentionally retains precedence over stacked-query
+    # rejection, matching the original transpiler's observable error contract.
+    if self._security_enabled and not skip_security and isinstance(sql, str):
+        security_result = self._validate_security(sql)
+        if security_result["blocked"]:
+            return _ORIGINAL_TRANSPILER(
+                self,
+                sql,
+                source,
+                target,
+                pretty,
+                validate,
+                skip_security,
+            )
+
     rejection = _reject_stacked_statements(
         self,
         sql,
         source_normalized,
         target_normalized,
-        pretty,
-        validate,
-        skip_security,
     )
     if rejection is not None:
         return rejection
+
     return _ORIGINAL_TRANSPILER(
         self,
         sql,
