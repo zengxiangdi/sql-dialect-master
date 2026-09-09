@@ -314,20 +314,18 @@ class TestHealthEndpoints:
         response = client.get("/health")
         assert response.status_code == 200
     
-    def test_health_contains_status(self):
-        """Health response contains status."""
+    def test_health_is_liveness(self):
+        """Health endpoint exposes only process liveness."""
         response = client.get("/health")
         data = response.json()
-        assert "status" in data
-        assert "healthy" in data["status"]
-    
-    def test_health_contains_services(self):
-        """Health response contains services info."""
-        response = client.get("/health")
-        data = response.json()
-        assert "services" in data
-        assert "transpiler" in data["services"]
-        assert "functions" in data["services"]
+        assert response.status_code == 200
+        assert data["status"] == "alive"
+        assert data["version"]
+        assert "timestamp" in data
+        assert "services" not in data
+        assert "stats" not in data
+        assert "uptime" not in data
+        assert "checks" not in data
     
     def test_deep_health_returns_200(self):
         """Deep health check returns 200 OK for an authenticated internal probe."""
