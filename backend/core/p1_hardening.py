@@ -1,7 +1,7 @@
 """P1 hardening adapter for stacked-statement correctness.
 
 SQL custom transformations live in ``PostProcessor`` and are scanner-aware.
-This adapter only preserves the legacy core transpiler boundary for rejecting
+This adapter preserves the legacy core transpiler boundary for rejecting
 multi-statement input before the original transpiler can silently keep the
 first statement.
 """
@@ -49,7 +49,7 @@ def _reject_stacked_statements(
         source_dialect=source,
         target_dialect=target,
         error="Multiple SQL statements are not supported; submit one statement per request",
-        error_code=ErrorCode.VALIDATION_FAILED.value,
+        error_code=ErrorCode.SECURITY_VIOLATION.value,
     )
 
 
@@ -77,8 +77,9 @@ def _transpile_single_statement(
     source_normalized = source.strip().lower()
     target_normalized = target.strip().lower()
 
-    # The single-statement boundary owns the stable VALIDATION_FAILED contract.
-    # Security scanning still runs for each accepted single statement below.
+    # The single-statement boundary owns the explicit rejection and stable
+    # SECURITY_VIOLATION contract; generic security validation remains active
+    # for accepted single statements.
     rejection = _reject_stacked_statements(
         self,
         sql,
