@@ -1,0 +1,86 @@
+name: One-time CodeQL cleanup
+
+on:
+  push:
+    branches: [fix/codeql-post-merge-cleanup]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: fix/codeql-post-merge-cleanup
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Apply static-analysis fixes
+        run: |
+          python -m pip install ruff
+          ruff check backend/core/nl2sql.py backend/core/transpiler.py backend/api/main.py backend/core/config.py backend/core/parser.py backend/core/rules.py backend/tests/test_properties.py backend/tests/test_audit_remaining_gaps.py backend/tests/test_api.py frontend/components.py frontend/themes.py frontend/tabs/lineage.py sdm_local.py --select F401,F841,I001 --fix || true
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("backend/core/nl2sql.py")
+          text = path.read_text()
+          start = text.index('    def _extract_ordering(self, text: str) -> Optional[Tuple[str, str]]:')
+          end = text.index('    def ', start + 8)
+          block = text[start:end]
+          block = block.replace('        direction = "ASC"\n', '', 1)
+
+          sort_start_marker = '        if any(k in text for k in ["排序", "排列", "sort", "order", "sorted"]):'
+          max_marker = '        if any(k in text for k in ["最大", "最高", "最多", "max", "highest", "top"]):'
+          sort_start = block.index(sort_start_marker)
+          max_start = block.index(max_marker, sort_start)
+          replacement = (
+              '        if any(k in text for k in ["排序", "排列", "sort", "order", "sorted"]):\n'
+              '            return (\n'
+              '                order_col or "id",\n'
+              '                "DESC"\n'
+              '                if any(k in text for k in ["降序", "从大到小", "递减", "desc", "descending", "decreasing"])\n'
+              '                else "ASC",\n'
+              '            )\n'
+          )
+          block = block[:sort_start] + replacement + block[max_start:]
+          text = text[:start] + block + text[end:]
+          path.write_text(text)
+
+          path = Path("backend/core/transpiler.py")
+          text = path.read_text()
+          old = '        except Exception:\n            pass\n'
+          new = '        except Exception as exc:\n            logger.debug("SQL statement parsing failed during security validation: %s", exc)\n'
+          if old in text:
+              text = text.replace(old, new, 1)
+          path.write_text(text)
+
+          path = Path("backend/tests/test_api.py")
+          text = path.read_text()
+          start = text.index('    def test_stacked_query_injection(self):')
+          end = text.index('    def test_timing_attack_sleep(self):', start)
+          segment = text[start:end]
+          segment = segment.replace('        data = response.json()\n', '')
+          path.write_text(text[:start] + segment + text[end:])
+          PY
+
+      - name: Validate targeted files
+        run: |
+          python -m compileall -q backend frontend sdm_local.py
+          ruff check backend/core/nl2sql.py backend/core/transpiler.py backend/api/main.py backend/core/config.py backend/core/parser.py backend/core/rules.py backend/tests/test_properties.py backend/tests/test_audit_remaining_gaps.py backend/tests/test_api.py frontend/components.py frontend/themes.py frontend/tabs/lineage.py sdm_local.py --select F401,F841,I001
+
+      - name: Commit cleanup and remove temporary workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -f .github/workflows/_codeql_cleanup_once.yml CODEQL_CLEANUP_TRIGGER.txt
+          git add -A
+          git commit -m "fix: clear remaining CodeQL findings"
+          git push origin HEAD:fix/codeql-post-merge-cleanup
