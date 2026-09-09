@@ -129,7 +129,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         if request.url.path == "/api/nl2sql" and request.method == "POST":
             try:
-                payload = json.loads(request.body.decode("utf-8")) if request.body else {}
+                body = await request.body()
+                payload = json.loads(body.decode("utf-8")) if body else {}
             except (UnicodeDecodeError, json.JSONDecodeError):
                 payload = None
             if isinstance(payload, dict):
