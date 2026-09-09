@@ -1,0 +1,40 @@
+name: One-time CodeQL import cleanup
+
+on:
+  push:
+    branches: [fix/codeql-post-merge-cleanup]
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: fix/codeql-post-merge-cleanup
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Fix mixed import
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("backend/tests/test_audit_remaining_gaps.py")
+          text = path.read_text()
+          old = "    import backend.api.main as main_module\n"
+          new = "    from backend.api import main as main_module\n"
+          if old not in text:
+              raise SystemExit("mixed import not found")
+          path.write_text(text.replace(old, new, 1))
+          PY
+      - name: Validate and commit
+        run: |
+          python -m compileall -q backend/tests/test_audit_remaining_gaps.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -f .github/workflows/_fix_codeql_import.yml
+          git add -A
+          git commit -m "fix: normalize CodeQL import"
+          git push origin HEAD:fix/codeql-post-merge-cleanup
