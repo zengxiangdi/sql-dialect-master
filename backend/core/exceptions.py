@@ -80,3 +80,45 @@ class ParseError(SDMException):
     def __init__(self, message: str, sql: str = None, dialect: str = None):
         details = {"sql": sql[:200] if sql else None, "dialect": dialect}
         super().__init__(message, details)
+
+
+class SecurityViolationError(SDMException):
+    """Raised when SQL contains potentially dangerous patterns."""
+
+    error_code = ErrorCode.SECURITY_VIOLATION
+
+    def __init__(self, message: str, pattern: str = None):
+        details = {"pattern": pattern}
+        super().__init__(message, details)
+
+
+class ValidationError(SDMException):
+    """Raised when input validation fails."""
+
+    error_code = ErrorCode.VALIDATION_FAILED
+
+    def __init__(self, message: str, field: str = None, value: str = None):
+        details = {"field": field, "value": value}
+        super().__init__(message, details)
+
+
+class CacheError(SDMException):
+    """Raised when cache operations fail."""
+
+    error_code = ErrorCode.CACHE_FAILED
+
+
+class ConfigurationError(SDMException):
+    """Raised when configuration is invalid."""
+
+    error_code = ErrorCode.CONFIGURATION_INVALID
+
+
+class RuleConflictError(SDMException):
+    """Raised when transformation rules conflict."""
+
+    error_code = ErrorCode.RULE_CONFLICT
+
+    def __init__(self, message: str, rule1: str = None, rule2: str = None):
+        details = {"rule1": rule1, "rule2": rule2}
+        super().__init__(message, details)
