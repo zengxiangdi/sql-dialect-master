@@ -10,14 +10,12 @@ Supports configuration via:
 - Default values
 """
 import logging
-import os
 import sys
-from pathlib import Path
-from typing import List, Dict, Any, TypedDict, Optional
 from enum import Enum
+from typing import Any, Dict, List, Optional, TypedDict
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
 
 # =============================================================================
 # Logging Configuration
@@ -82,6 +80,7 @@ class DialectCategory(Enum):
     EMBEDDED = "Embedded"
 
 from dataclasses import dataclass
+
 
 @dataclass
 class DialectInfo:

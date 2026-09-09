@@ -3,14 +3,14 @@
 
 Provides helper functions to render common UI elements consistently.
 """
-from typing import Dict, Any, Optional
 import sys
 from pathlib import Path
+from typing import Dict
 
 # Add parent to path for backend imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from backend.core.config import DIALECT_METADATA, get_dialect_label
+from backend.core.config import DIALECT_METADATA
 
 
 def render_dialect_chip(dialect: str, theme: Dict[str, str]) -> str:

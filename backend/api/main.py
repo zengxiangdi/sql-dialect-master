@@ -13,23 +13,23 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
-from pydantic import BaseModel, Field, ConfigDict
-from typing import Optional, List, Dict, Any
+from pydantic import BaseModel, ConfigDict, Field
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from core.config import settings, setup_logging, get_dialect_api_info
-from core.transpiler import SQLTranspiler
-from core.parser import SQLParser, SUPPORTED_DIALECTS
+from core.config import get_dialect_api_info, settings, setup_logging
 from core.functions_lookup import FunctionEncyclopedia
-from core.type_mapping import TypeMapper
 from core.nl2sql import NL2SQLGenerator
+from core.parser import SUPPORTED_DIALECTS, SQLParser
+from core.transpiler import SQLTranspiler
+from core.type_mapping import TypeMapper
+
 from backend.api.readiness import health_probe_response
 
 # Configure logging for the application
@@ -124,8 +124,8 @@ app = FastAPI(
 from backend.api.middleware import (
     RateLimiter,
     RateLimitMiddleware,
+    SecurityHeadersMiddleware,
     StructuredLoggingMiddleware,
-    SecurityHeadersMiddleware
 )
 from backend.core.exceptions import SDMException, UnsupportedDialectError
 

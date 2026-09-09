@@ -18,16 +18,19 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import sqlglot
 
-from .config import SUPPORTED_DIALECTS, settings
 from .column_hint_validation import validate_column_hints
+from .nl2sql_components.boolean_conditions import extract_boolean_conditions
+from .nl2sql_components.mappings import (
+    COLUMN_PATTERNS as MAPPING_COLUMN_PATTERNS,
+)
 from .nl2sql_components.mappings import (
     KEYWORDS as MAPPING_KEYWORDS,
+)
+from .nl2sql_components.mappings import (
     TABLE_PATTERNS as MAPPING_TABLE_PATTERNS,
-    COLUMN_PATTERNS as MAPPING_COLUMN_PATTERNS,
 )
 from .nl2sql_components.templates import DEFAULT_QUERY_TEMPLATES, QueryTemplate
 from .nl2sql_components.tokenizer import Tokenizer
-from .nl2sql_components.boolean_conditions import extract_boolean_conditions
 
 logger = logging.getLogger(__name__)
 
@@ -288,7 +291,8 @@ class NL2SQLGenerator:
             )
         text_lower = text.lower()
 
-        logger.info("NL2SQL: Processing '%s...' for dialect %s", text[:50], dialect)
+        log_text = text[:50].replace("\r", "\\r").replace("\n", "\\n")
+        logger.info("NL2SQL: Processing '%s...' for dialect %s", log_text, dialect)
         analysis = self._tokenize_and_analyze(text)
         logger.debug(
             "Token analysis: %d tokens, %d tables, %d columns",
@@ -609,18 +613,17 @@ class NL2SQLGenerator:
     def _extract_ordering(self, text: str) -> Optional[Tuple[str, str]]:
         """Extract ORDER BY clause from text."""
         order_col = None
-        direction = "ASC"
         for pattern, column in self.COLUMN_PATTERNS.items():
             if pattern in text:
                 order_col = column
                 break
         if any(k in text for k in ["排序", "排列", "sort", "order", "sorted"]):
-            direction = (
+            return (
+                order_col or "id",
                 "DESC"
                 if any(k in text for k in ["降序", "从大到小", "递减", "desc", "descending", "decreasing"])
-                else "ASC"
+                else "ASC",
             )
-            return (order_col or "id", direction)
         if any(k in text for k in ["最大", "最高", "最多", "max", "highest", "top"]):
             return (order_col or "amount", "DESC")
         if any(k in text for k in ["最小", "最低", "最少", "min", "lowest"]):

@@ -3,9 +3,10 @@
 
 Handles SQL Lineage visualization using Mermaid diagrams.
 """
-import streamlit as st
 import sqlglot
-from frontend.app_context import DIALECTS, DIALECT_INFO, get_dialect_label
+import streamlit as st
+
+from frontend.app_context import DIALECTS, get_dialect_label
 
 
 def render_lineage_tab(current_theme):

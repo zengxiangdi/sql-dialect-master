@@ -6,9 +6,9 @@ that sqlglot doesn't handle natively.
 """
 import logging
 import re
-from dataclasses import dataclass, field
-from typing import Optional, List, Callable, Tuple
+from dataclasses import dataclass
 from enum import Enum
+from typing import List, Tuple
 
 # Configure module logger
 logger = logging.getLogger(__name__)

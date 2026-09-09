@@ -7,9 +7,8 @@ Provides centralized theme management with:
 - CSS variable support for consistent styling
 - Import/Export functionality for custom themes
 """
-from typing import Dict, Any
 import json
-
+from typing import Dict
 
 # =============================================================================
 # Theme Definitions

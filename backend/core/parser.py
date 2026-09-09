@@ -8,7 +8,8 @@ Provides comprehensive SQL parsing with:
 - Query type detection
 """
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any
+from typing import Any, Dict, List, Optional
+
 import sqlglot
 from sqlglot import exp
 

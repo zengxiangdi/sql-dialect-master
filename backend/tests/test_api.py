@@ -10,9 +10,10 @@ Tests all API endpoints for correct behavior:
 - /health - Health check endpoints
 """
 import os
-import pytest
 import sys
 from pathlib import Path
+
+import pytest
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -22,6 +23,7 @@ os.environ.setdefault("SDM_HEALTH_PROBE_TOKEN", "test-health-token")
 HEALTH_HEADERS = {"X-Health-Probe-Token": "test-health-token"}
 
 from fastapi.testclient import TestClient
+
 from backend.api.main import app
 
 # Create test client
@@ -435,7 +437,6 @@ class TestSecurityValidation:
             "target_dialect": "postgres"
         })
         assert response.status_code == 200
-        data = response.json()
     
     def test_timing_attack_sleep(self):
         """SLEEP-based timing attack should be detected."""

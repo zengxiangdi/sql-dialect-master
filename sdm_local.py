@@ -4,8 +4,9 @@
 Optimized version with modular architecture.
 Run: pip install sqlglot streamlit && streamlit run sdm_local.py
 """
-import streamlit as st
 import logging
+
+import streamlit as st
 
 # Set page config first
 st.set_page_config(
@@ -16,33 +17,29 @@ st.set_page_config(
 )
 
 # Import shared context (single source of truth for app state/logic)
-from frontend.app_context import (
-    load_data, 
-    DIALECT_INFO,
-    get_dialect_label
-)
-from frontend.themes import (
-    THEMES, 
-    generate_theme_css, 
-    generate_keyboard_shortcuts_js,
-    export_theme_to_json,
-    import_theme_from_json
-)
+from frontend.app_context import load_data
 
 # Import reusable components
 from frontend.components import (
-    render_sidebar_branding, 
     render_history_card,
-    render_main_header
+    render_main_header,
+    render_sidebar_branding,
 )
 
 # Import modular tabs
 from frontend.tabs.convert import render_convert_tab
-from frontend.tabs.functions import render_functions_tab
-from frontend.tabs.types import render_types_tab
-from frontend.tabs.nl2sql import render_nl2sql_tab
 from frontend.tabs.explain import render_explain_tab
+from frontend.tabs.functions import render_functions_tab
 from frontend.tabs.lineage import render_lineage_tab
+from frontend.tabs.nl2sql import render_nl2sql_tab
+from frontend.tabs.types import render_types_tab
+from frontend.themes import (
+    THEMES,
+    export_theme_to_json,
+    generate_keyboard_shortcuts_js,
+    generate_theme_css,
+    import_theme_from_json,
+)
 
 # Module logger
 logger = logging.getLogger(__name__)

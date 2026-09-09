@@ -8,7 +8,6 @@ from backend.api.middleware import RateLimitMiddleware, StructuredLoggingMiddlew
 from backend.core.nl2sql import NL2SQLGenerator
 from backend.core.post_processor import PostProcessor
 
-
 PROBE_HEADERS = {"X-Health-Probe-Token": "test-health-token"}
 
 
