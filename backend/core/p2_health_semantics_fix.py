@@ -15,18 +15,17 @@ async def _dispatch(self, request, call_next):
     if request.url.path != "/health/deep":
         return response
     try:
-        raw_body = b"".join([chunk async for chunk in response.body_iterator])
+        raw_body = getattr(response, "body", None)
+        if raw_body is None:
+            raw_body = b"".join([chunk async for chunk in response.body_iterator])
         payload = json.loads(raw_body.decode("utf-8"))
         if isinstance(payload, dict):
             checks = payload.get("checks")
             if isinstance(checks, dict):
                 for check in checks.values():
-                    if isinstance(check, dict) and "message" in check:
+                    if isinstance(check, dict) and check.get("status") == "error":
                         check["message"] = "internal health check failure"
-            if payload.get("status") == "❌ unhealthy":
-                status = 503
-            else:
-                status = response.status_code
+            status = 503 if payload.get("status") == "❌ unhealthy" else response.status_code
             return JSONResponse(
                 status_code=status,
                 content=payload,
