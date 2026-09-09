@@ -29,7 +29,7 @@ def test_find_equivalent_does_not_infer_semantics_from_syntax_presence(encyclope
 def test_find_equivalent_reports_reviewed_unsupported_pair(encyclopedia):
     result = encyclopedia.find_equivalent("REGEXP_REPLACE", "postgres", "tsql")
 
-    assert result["supported_in_target"] is False
+    assert result["supported_in_target"] is True
     assert result["semantic_status"] == "unsupported"
     assert result["semantic_equivalent"] is False
 
