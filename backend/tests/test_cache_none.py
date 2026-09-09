@@ -1,5 +1,3 @@
-import pytest
-
 from backend.core.cache import CachedFunction, TTLCache
 
 

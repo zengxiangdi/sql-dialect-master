@@ -95,6 +95,7 @@ def duckdb_connection():
 
 @pytest.fixture(scope="module")
 def postgres_connection():
+    connection = None
     try:
         connection = psycopg.connect(POSTGRES_DSN)
     except Exception as exc:
@@ -104,7 +105,8 @@ def postgres_connection():
         _prepare_postgres(connection)
         yield connection
     finally:
-        connection.close()
+        if connection is not None:
+            connection.close()
 
 
 QUERY = """

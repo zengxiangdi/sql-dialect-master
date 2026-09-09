@@ -103,7 +103,6 @@ GROUP BY u.name, u.email""",
                 # Source tables
                 st.markdown("**Source Tables:**")
                 for t in tables:
-                    info = DIALECT_INFO.get(lineage_dialect, {})
                     st.markdown(f"""
                     <div style="background: {current_theme['secondary']}; padding: 8px 12px; border-radius: 8px; margin-bottom: 4px;">
                         <code>{t['name']}</code>

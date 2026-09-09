@@ -7,15 +7,12 @@ Provides comprehensive SQL parsing with:
 - Element extraction (tables, columns, functions, joins)
 - Query type detection
 """
-import logging
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any
 import sqlglot
 from sqlglot import exp
 
 from .config import SUPPORTED_DIALECTS, settings
-
-logger = logging.getLogger(__name__)
 
 __all__ = ['SUPPORTED_DIALECTS', 'ParseResult', 'SQLParser']
 

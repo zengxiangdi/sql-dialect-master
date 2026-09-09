@@ -4,13 +4,15 @@ from backend.api.main import app
 
 
 def test_deep_health_sanitizes_internal_error_and_returns_503(monkeypatch):
-    from backend.api import main, readiness
+    from backend.api import readiness
 
     def explode(*args, **kwargs):
         raise RuntimeError("SECRET_DATABASE_PASSWORD=leak-me")
 
     monkeypatch.setenv("SDM_HEALTH_PROBE_TOKEN", "test-health-token")
-    monkeypatch.setattr(main.transpiler, "transpile", explode)
+    monkeypatch.setattr("backend.core.transpiler.SQLTranspiler.transpile", explode)
+    readiness._READINESS_CACHE["checks"] = None
+    readiness._READINESS_CACHE["cached_at"] = 0.0
     readiness._cached_checks = None
     readiness._cached_at = 0.0
 

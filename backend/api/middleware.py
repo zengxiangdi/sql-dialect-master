@@ -22,11 +22,16 @@ logger = logging.getLogger(__name__)
 DEFAULT_MAX_REQUEST_BODY_BYTES = 512 * 1024
 
 
+def _sanitize_log_value(value: str, max_length: int = 500) -> str:
+    """Prevent control characters from forging or corrupting log records."""
+    return value.replace("\r", "\\r").replace("\n", "\\n")[:max_length]
+
+
 @dataclass
 class RateLimitEntry:
     """Legacy compatibility entry."""
     requests: int = 0
-    window_start: float = field(default_factory=lambda: time.time())
+    window_start: float = field(default_factory=time.time)
 
 
 class RateLimiter:
@@ -119,7 +124,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         client_id = self._get_client_id(request)
         is_allowed, remaining, reset_time = self.limiter.is_allowed(client_id)
         if not is_allowed:
-            logger.warning(f"Rate limit exceeded for client: {client_id}")
+            logger.warning("Rate limit exceeded for client: %s", _sanitize_log_value(client_id))
             return JSONResponse(
                 status_code=429,
                 content={"success": False, "error": {"code": 429, "message": "Rate limit exceeded", "retry_after": reset_time}, "timestamp": datetime.now().isoformat()},
@@ -145,19 +150,19 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
         start_time = time.time()
         request_id = str(uuid.uuid4())
-        log_data = {"event": "request_start", "request_id": request_id, "method": request.method, "path": request.url.path, "query": str(request.query_params), "client": request.client.host if request.client else "unknown", "timestamp": datetime.now().isoformat()}
+        status_code = 500
+        error = None
+        log_data = {"event": "request_start", "request_id": request_id, "method": _sanitize_log_value(request.method), "path": _sanitize_log_value(request.url.path), "query": _sanitize_log_value(str(request.query_params)), "client": _sanitize_log_value(request.client.host if request.client else "unknown"), "timestamp": datetime.now().isoformat()}
         logger.info(json.dumps(log_data))
         try:
             response = await call_next(request)
             status_code = response.status_code
-            error = None
-        except Exception as e:
-            status_code = 500
-            error = str(e)
+        except Exception as exc:
+            error = _sanitize_log_value(str(exc))
             raise
         finally:
             process_time = time.time() - start_time
-            log_data = {"event": "request_end", "request_id": request_id, "method": request.method, "path": request.url.path, "status_code": status_code, "process_time_ms": round(process_time * 1000, 2), "error": error, "timestamp": datetime.now().isoformat()}
+            log_data = {"event": "request_end", "request_id": request_id, "method": _sanitize_log_value(request.method), "path": _sanitize_log_value(request.url.path), "status_code": status_code, "process_time_ms": round(process_time * 1000, 2), "error": error, "timestamp": datetime.now().isoformat()}
             (logger.warning if status_code >= 400 else logger.info)(json.dumps(log_data))
         response.headers["X-Request-ID"] = request_id
         return response

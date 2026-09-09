@@ -4,7 +4,7 @@
 Provides validation functions for SQL, dialects, and other inputs.
 """
 import re
-from typing import Tuple, List, Optional
+from typing import Tuple, List
 
 from backend.core.config import SUPPORTED_DIALECTS, settings
 from backend.core.exceptions import (
@@ -221,12 +221,11 @@ def sanitize_column_name(name: str) -> str:
         Sanitized column name
         
     Raises:
-        ValidationError: If name contains invalid characters
+        ValidationError: If name is invalid
     """
     if not name:
         raise ValidationError("Column name is required", field="column_name")
     
-    # Allow only alphanumeric and underscore
     if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', name):
         raise ValidationError(
             "Column name contains invalid characters",

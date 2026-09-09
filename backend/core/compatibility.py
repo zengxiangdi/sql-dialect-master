@@ -10,15 +10,9 @@ _PATCH_MODULES = (
     "production_hardening",
 )
 
-_installed = False
-
 
 def install_compatibility_patches() -> None:
-    """Install remaining legacy compatibility adapters once, in order."""
-    global _installed
-    if _installed:
-        return
-
+    """Install remaining legacy compatibility adapters in order."""
     from .nl2sql import NL2SQLGenerator
     from .nl2sql_components.boolean_conditions import extract_boolean_conditions
 
@@ -36,8 +30,6 @@ def install_compatibility_patches() -> None:
 
     for module_name in _PATCH_MODULES:
         import_module(f".{module_name}", package=__package__)
-
-    _installed = True
 
 
 __all__ = ["install_compatibility_patches"]

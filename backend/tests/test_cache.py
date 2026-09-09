@@ -70,12 +70,14 @@ class TestTTLCache:
     def test_delete_key(self):
         cache = TTLCache()
         cache.set("key1", "value1")
-        assert cache.delete("key1") is True
+        deleted = cache.delete("key1")
+        assert deleted is True
         assert cache.get("key1") is None
 
     def test_delete_nonexistent_key(self):
         cache = TTLCache()
-        assert cache.delete("nonexistent") is False
+        deleted = cache.delete("nonexistent")
+        assert deleted is False
 
     def test_lru_eviction(self):
         cache = TTLCache(max_size=2, ttl=60)
