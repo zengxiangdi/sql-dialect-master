@@ -65,7 +65,7 @@ def test_business_http_400_keeps_client_safe_detail():
     _assert_error_contract(
         response,
         status_code=400,
-        error_code="VALIDATION_FAILED",
+        error_code="BAD_REQUEST",
     )
     assert "Unsupported source dialect" in response.json()["error"]["message"]
     assert "invalid_db" in response.json()["error"]["message"]
