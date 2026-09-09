@@ -11,6 +11,7 @@ _PATCH_MODULES = (
     "audit_hardening",
     "production_hardening",
     "p1_hardening",
+    "p2_data_validation",
 )
 
 _installed = False
