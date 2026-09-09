@@ -1,8 +1,4 @@
-"""P2 runtime data validation adapters.
-
-Reject malformed individual function/type entries before they enter indexes or
-conversion logic. Kept as a compatibility adapter to avoid a larger refactor.
-"""
+"""Reusable validators for packaged runtime JSON data."""
 
 from __future__ import annotations
 
@@ -11,8 +7,6 @@ from typing import Any
 
 from .config import FUNCTION_CATEGORIES, SUPPORTED_DIALECTS
 from .exceptions import ConfigurationError
-from .functions_lookup import FunctionEncyclopedia
-from .type_mapping import TypeMapper
 
 
 def _error(path: Path, message: str) -> ConfigurationError:
@@ -76,30 +70,3 @@ def _validate_type_mapping_entry(data_path: Path, name: Any, entry: Any) -> None
                 raise _error(data_path, f"mappings[{name!r}].notes must be a string")
         elif not isinstance(value, str) or not value.strip():
             raise _error(data_path, f"mappings[{name!r}].{dialect} must be a non-empty string")
-
-
-def _validate_functions_init(self, *args, **kwargs):
-    _ORIGINAL_FUNCTIONS_INIT(self, *args, **kwargs)
-    for index, entry in enumerate(self.functions):
-        _validate_function_entry(self.data_path, index, entry)
-
-
-def _validate_types_init(self, *args, **kwargs):
-    _ORIGINAL_TYPES_INIT(self, *args, **kwargs)
-    for name, entry in self.mappings.items():
-        _validate_type_mapping_entry(self.data_path, name, entry)
-    for name, warning in self.precision_warnings.items():
-        if not isinstance(name, str) or not name.strip() or not isinstance(warning, str):
-            raise _error(self.data_path, "precision_warnings must map non-empty strings to strings")
-
-
-_ORIGINAL_FUNCTIONS_INIT = FunctionEncyclopedia.__init__
-_ORIGINAL_TYPES_INIT = TypeMapper.__init__
-
-if not getattr(FunctionEncyclopedia, "_sdm_p2_schema_patch", False):
-    FunctionEncyclopedia.__init__ = _validate_functions_init
-    FunctionEncyclopedia._sdm_p2_schema_patch = True
-
-if not getattr(TypeMapper, "_sdm_p2_schema_patch", False):
-    TypeMapper.__init__ = _validate_types_init
-    TypeMapper._sdm_p2_schema_patch = True

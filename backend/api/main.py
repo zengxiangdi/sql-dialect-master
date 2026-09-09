@@ -153,6 +153,9 @@ app.add_middleware(
     enabled=settings.rate_limit_enabled,
 )
 
+# Structured request logging must wrap rate limiting so rejected requests also get IDs.
+app.add_middleware(StructuredLoggingMiddleware)
+
 # Initialize services
 transpiler = SQLTranspiler()
 func_encyclopedia = FunctionEncyclopedia()
@@ -634,7 +637,7 @@ async def deep_health_check():
             "test_result": result.success,
             "cache_stats": transpiler.get_stats().get("cache", {})
         }
-    except Exception as e:
+    except Exception:
         checks["transpiler"] = {"status": "❌ error", "code": "probe_failed"}
 
     # Test function encyclopedia
@@ -645,7 +648,7 @@ async def deep_health_check():
             "total_count": len(func_encyclopedia.functions),
             "sample_lookup": "CONCAT" if func else None
         }
-    except Exception as e:
+    except Exception:
         checks["functions"] = {"status": "❌ error", "code": "probe_failed"}
 
     # Test type mapper
@@ -656,7 +659,7 @@ async def deep_health_check():
             "total_count": len(type_mapper.mappings),
             "sample_mapping": type_result.get("target_type")
         }
-    except Exception as e:
+    except Exception:
         checks["types"] = {"status": "❌ error", "code": "probe_failed"}
 
     # Test NL2SQL
@@ -667,7 +670,7 @@ async def deep_health_check():
             "confidence": nl_result.confidence,
             "generated_sql": nl_result.sql[:50] if nl_result.sql else None
         }
-    except Exception as e:
+    except Exception:
         checks["nl2sql"] = {"status": "❌ error", "code": "probe_failed"}
 
     # Overall status
