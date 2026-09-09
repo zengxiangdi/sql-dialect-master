@@ -13,7 +13,7 @@ def generator():
     ("dialect", "expected"),
     [
         ("postgres", "CURRENT_DATE - INTERVAL '7 days'"),
-        ("mysql", "DATE_SUB(CURRENT_DATE, 7)"),
+        ("mysql", "DATE_SUB(CURRENT_DATE, INTERVAL 7 DAY)"),
         ("oracle", "TRUNC(SYSDATE) - 7"),
         ("tsql", "DATEADD(DAY, -7, CAST(GETDATE() AS DATE))"),
         ("duckdb", "CURRENT_DATE - INTERVAL '7 days'"),
@@ -46,9 +46,7 @@ def test_date_add_and_current_timestamp_are_dialect_specific(generator):
 
 
 def test_oracle_adjustment_does_not_delete_parentheses_or_touch_literals(generator):
-    sql = """SELECT COALESCE(amount, 0), 'CURRENT_DATE DATE_SUB(x, 1)'
-FROM orders
-WHERE created_at >= DATE_SUB(CURRENT_DATE, 7)"""
+    sql = """SELECT COALESCE(amount, 0), 'CURRENT_DATE DATE_SUB(x, 1)'\nFROM orders\nWHERE created_at >= DATE_SUB(CURRENT_DATE, 7)"""
 
     adjusted = generator._apply_dialect_adjustments(sql, "oracle")
 
