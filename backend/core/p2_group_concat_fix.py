@@ -134,6 +134,19 @@ def _convert_group_concat(self: PostProcessor, sql: str) -> Tuple[str, List[str]
     return result, ["Converted GROUP_CONCAT to STRING_AGG"] if changed else []
 
 
+_ORIGINAL_PROCESS = PostProcessor.process
+
+
+def _process_with_scanner(self: PostProcessor, sql: str, source: str, target: str):
+    result, notes = _ORIGINAL_PROCESS(self, sql, source, target)
+    if source.lower() == "mysql" and target.lower() == "postgres":
+        result, changed = _replace_group_concat_calls(result)
+        if changed:
+            notes = list(notes) + ["Converted GROUP_CONCAT to STRING_AGG"]
+    return result, notes
+
+
 if not getattr(PostProcessor, "_sdm_group_concat_fix", False):
     PostProcessor._convert_group_concat = _convert_group_concat
+    PostProcessor.process = _process_with_scanner
     PostProcessor._sdm_group_concat_fix = True
