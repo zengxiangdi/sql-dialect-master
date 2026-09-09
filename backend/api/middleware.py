@@ -163,19 +163,26 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
         return str(uuid.uuid4())
 
     @staticmethod
-    def _normalize_error_response(response: Response, request_id: str) -> Response:
-        """Normalize generic 4xx JSON responses without replacing domain-specific codes."""
-        if not isinstance(response, JSONResponse) or response.status_code not in {400, 404, 422}:
+    async def _normalize_error_response(response: Response, request_id: str) -> Response:
+        """Normalize generic 4xx JSON responses, including streamed responses."""
+        if response.status_code not in {400, 404, 422}:
             return response
 
         try:
-            payload = json.loads(response.body.decode("utf-8"))
+            if hasattr(response, "body"):
+                raw_body = response.body
+            else:
+                chunks = []
+                async for chunk in response.body_iterator:
+                    chunks.append(chunk)
+                raw_body = b"".join(chunks)
+            payload = json.loads(raw_body.decode("utf-8"))
         except (AttributeError, UnicodeDecodeError, json.JSONDecodeError):
             return response
 
-        error = payload.get("error")
+        error = payload.get("error") if isinstance(payload, dict) else None
         if not isinstance(error, dict):
-            detail = payload.get("detail")
+            detail = payload.get("detail") if isinstance(payload, dict) else None
             if response.status_code == 422:
                 error = {
                     "code": ErrorCode.VALIDATION_FAILED.value,
@@ -212,6 +219,7 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
         }
         headers = dict(response.headers)
         headers.pop("content-length", None)
+        headers.pop("content-type", None)
         return JSONResponse(status_code=response.status_code, content=payload, headers=headers)
 
     async def dispatch(self, request: Request, call_next) -> Response:
@@ -224,7 +232,7 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
         logger.info(json.dumps(log_data))
         try:
             response = await call_next(request)
-            response = self._normalize_error_response(response, request_id)
+            response = await self._normalize_error_response(response, request_id)
             status_code = response.status_code
         except Exception as exc:
             error = _sanitize_log_value(str(exc))
