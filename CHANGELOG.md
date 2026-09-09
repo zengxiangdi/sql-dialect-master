@@ -11,6 +11,16 @@ All notable changes to SQL Dialect Master are documented here.
 - Added CODEOWNERS, pull request templates, and issue templates.
 - Added tag-driven GitHub Release automation.
 - Added a PyPI publishing workflow using GitHub Actions trusted publishing (OIDC).
+- Refreshed the immutable GitHub Actions SHA lockfile after Dependabot action upgrades.
+- Added a generic SQL parser fallback when target-dialect parsing is unavailable, with an explicit compatibility warning.
+- Added an AST-based semantic diff detector for structural conversion regressions.
+- Added PostgreSQL + DuckDB runtime semantic regression coverage and a dedicated CI gate.
+- Added locked semantic-test dependencies for DuckDB and Psycopg.
+
+### Fixed
+
+- Release automation now rejects Git tags that do not exactly match `pyproject.toml` project version.
+- Dependabot now ignores `websockets>=17`, which conflicts with the currently locked Streamlit dependency.
 
 ## [1.0.1] - 2026-09-08
 

@@ -178,12 +178,14 @@ class SQLTranspiler:
             warnings = security_warnings + self._generate_warnings(sql, source, target)
 
             if validate:
-                validation_warning = self._validate_output(final_sql, target)
+                validation_error, validation_warning = self._validate_output_detailed(final_sql, target)
                 if validation_warning:
-                    logger.error(f"Output SQL validation failed: {source} -> {target}: {validation_warning}")
+                    warnings.append(validation_warning)
+                if validation_error:
+                    logger.error(f"Output SQL validation failed: {source} -> {target}: {validation_error}")
                     return TranspileResult(
                         success=False, source_sql=sql, source_dialect=source, target_dialect=target,
-                        error=validation_warning, error_code=ErrorCode.VALIDATION_FAILED.value,
+                        error=validation_error, error_code=ErrorCode.VALIDATION_FAILED.value,
                         compatibility_notes=compat_notes, transformations=transformations, warnings=warnings
                     )
 
@@ -274,11 +276,31 @@ class SQLTranspiler:
         return warnings
 
     def _validate_output(self, sql: str, dialect: str) -> Optional[str]:
+        """Validate target SQL, preserving the original error-only interface."""
+        error, _ = self._validate_output_detailed(sql, dialect)
+        return error
+
+    def _validate_output_detailed(
+        self, sql: str, dialect: str
+    ) -> tuple[Optional[str], Optional[str]]:
+        """Validate target SQL with a generic-parser compatibility fallback."""
         try:
             sqlglot.parse_one(sql, read=dialect)
-            return None
+            return None, None
         except Exception as target_error:
-            return f"⚠️ Output SQL may have syntax issues: {str(target_error)[:100]}"
+            target_message = str(target_error)[:100]
+            try:
+                sqlglot.parse_one(sql)
+            except Exception:
+                return f"⚠️ Output SQL may have syntax issues: {target_message}", None
+
+            warning = (
+                "⚠️ Target dialect parser rejected the output, but the generic "
+                "SQL parser accepted it; retaining the conversion with a "
+                f"compatibility warning. Target parser error: {target_message}"
+            )
+            logger.warning("Generic parser fallback used for %s output: %s", dialect, target_message)
+            return None, warning
 
     def _validate_security(self, sql: str) -> Dict[str, Any]:
         result = {"blocked": False, "reason": None, "warnings": []}
