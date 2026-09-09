@@ -173,6 +173,6 @@ async def deep_health_response(request: Request) -> JSONResponse:
 
 def _api_version() -> str:
     """Resolve API version without importing the API module back into readiness."""
-    from core.config import settings
+    from backend.core.config import settings
 
     return settings.api_version

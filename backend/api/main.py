@@ -9,10 +9,8 @@ Enterprise-grade multi-database SQL conversion API with:
 - Natural language to SQL generation
 """
 import logging
-import sys
 import time
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -20,15 +18,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from core.config import get_dialect_api_info, settings, setup_logging
-from core.functions_lookup import FunctionEncyclopedia
-from core.nl2sql import NL2SQLGenerator
-from core.parser import SUPPORTED_DIALECTS, SQLParser
-from core.transpiler import SQLTranspiler
-from core.type_mapping import TypeMapper
+from backend.core.config import get_dialect_api_info, settings, setup_logging
+from backend.core.functions_lookup import FunctionEncyclopedia
+from backend.core.nl2sql import NL2SQLGenerator
+from backend.core.parser import SUPPORTED_DIALECTS, SQLParser
+from backend.core.transpiler import SQLTranspiler
+from backend.core.type_mapping import TypeMapper
 
 from backend.api.readiness import health_probe_response
 
@@ -597,7 +592,7 @@ async def health_check():
     return {
         "status": "alive",
         "version": API_VERSION,
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.now().isoformat()
     }
 
 @app.get("/ready", tags=["system"])
