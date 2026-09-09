@@ -9,14 +9,17 @@ from .transpiler import SQLTranspiler
 
 
 def _validate_output(self: SQLTranspiler, sql: str, dialect: str) -> Optional[str]:
-    """Require exactly one parseable output statement."""
+    """Require exactly one parseable output statement with dialect context."""
     try:
         statements = [statement for statement in sqlglot.parse(sql, read=dialect) if statement is not None]
     except Exception as exc:
-        return f"⚠️ Output SQL may have syntax issues: {str(exc)[:100]}"
+        return f"⚠️ {dialect} dialect validation failed: {str(exc)[:100]}"
 
     if len(statements) != 1:
-        return f"⚠️ Output SQL must contain exactly one statement; found {len(statements)}"
+        return (
+            f"⚠️ {dialect} dialect validation failed: output must contain "
+            f"exactly one statement; found {len(statements)}"
+        )
     return None
 
 
