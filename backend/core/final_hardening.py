@@ -1,6 +1,7 @@
 """Compatibility adapters for remaining NL2SQL semantic edge cases."""
 
 import re
+from typing import Callable
 
 from .config import SUPPORTED_DIALECTS
 from .nl2sql import NL2SQLGenerator
@@ -34,35 +35,18 @@ NL2SQLGenerator._extract_conditions_enhanced = _extract_conditions_with_english_
 _original_apply_dialect_adjustments = NL2SQLGenerator._apply_dialect_adjustments
 
 
-def _replace_outside(sql: str, pattern: re.Pattern, replacement: str | callable) -> str:
+def _replace_outside(
+    sql: str,
+    pattern: re.Pattern,
+    replacement: str | Callable[[re.Match[str]], str],
+) -> str:
     """Apply a regex only to executable SQL regions."""
-    parts = []
-    for start, end in executable_segments(sql):
-        cursor = 0
-        segment = sql[start:end]
-        for match in pattern.finditer(segment):
-            parts.append(segment[cursor:match.start()])
-            parts.append(replacement(match) if callable(replacement) else match.expand(replacement))
-            cursor = match.end()
-        parts.append(segment[cursor:])
-    result = []
-    cursor = 0
-    for start, end in executable_segments(sql):
-        result.append(sql[cursor:start])
-        cursor = end
-    if cursor < len(sql):
-        result.append(sql[cursor:])
-
-    # Rebuild from original segments while preserving all non-executable text.
     output = []
     last = 0
-    executable_index = 0
     for start, end in executable_segments(sql):
         output.append(sql[last:start])
-        segment = sql[start:end]
-        output.append(pattern.sub(replacement, segment) if not callable(replacement) else pattern.sub(replacement, segment))
+        output.append(pattern.sub(replacement, sql[start:end]))
         last = end
-        executable_index += 1
     output.append(sql[last:])
     return "".join(output)
 
@@ -96,11 +80,14 @@ def _apply_dialect_adjustments_safe(self, sql: str, dialect: str):
         ]
     elif dialect == "mysql":
         replacements = [
-            (re.compile(r"\bADD_MONTHS\(CURRENT_DATE\s*,\s*([+-]?\d+)\s*\)", re.IGNORECASE), lambda m: (
-                f"DATE_SUB(CURRENT_DATE, INTERVAL {abs(int(m.group(1)))} MONTH)"
-                if int(m.group(1)) < 0
-                else f"DATE_ADD(CURRENT_DATE, INTERVAL {m.group(1)} MONTH)"
-            )),
+            (
+                re.compile(r"\bADD_MONTHS\(CURRENT_DATE\s*,\s*([+-]?\d+)\s*\)", re.IGNORECASE),
+                lambda match: (
+                    f"DATE_SUB(CURRENT_DATE, INTERVAL {abs(int(match.group(1)))} MONTH)"
+                    if int(match.group(1)) < 0
+                    else f"DATE_ADD(CURRENT_DATE, INTERVAL {match.group(1)} MONTH)"
+                ),
+            ),
         ]
     else:
         return _original_apply_dialect_adjustments(self, sql, dialect)
