@@ -33,6 +33,7 @@ NL2SQL_MAX_INPUT_LENGTH = _configured_positive_int(
 
 _original_parser_parse = SQLParser.parse
 _original_nl2sql_generate = NL2SQLGenerator.generate
+_original_transpiler_validate_output = SQLTranspiler._validate_output
 
 
 def _parse_with_length_guard(self: SQLParser, sql: str) -> ParseResult:
@@ -69,23 +70,20 @@ def _generate_with_length_guard(
     return _original_nl2sql_generate(self, text, dialect, table_hint, column_hints)
 
 
-def _validate_output_strict(self: SQLTranspiler, sql: str, dialect: str):
-    """Validate output in the target dialect, with only a known parser limitation exempted."""
-    try:
-        import sqlglot
-        sqlglot.parse_one(sql, read=dialect)
-        return None
-    except Exception as exc:
-        message = str(exc)
-        if (
-            "Required keyword: 'unit' missing" in message
-            and "TimestampTrunc" in message
-            and dialect == "hive"
-        ):
-            return None
-        return f"⚠️ Output SQL may have syntax issues: {dialect} dialect validation failed: {message[:160]}"
+def _validate_output_with_legacy_hive_exception(self: SQLTranspiler, sql: str, dialect: str):
+    """Preserve the legacy Hive exception without bypassing generic parser fallback validation."""
+    error = _original_transpiler_validate_output(self, sql, dialect)
+    if error and dialect == "hive":
+        try:
+            import sqlglot
+            sqlglot.parse_one(sql, read=dialect)
+        except Exception as exc:
+            message = str(exc)
+            if "Required keyword: 'unit' missing" in message and "TimestampTrunc" in message:
+                return None
+    return error
 
 
 SQLParser.parse = _parse_with_length_guard
 NL2SQLGenerator.generate = _generate_with_length_guard
-SQLTranspiler._validate_output = _validate_output_strict
+SQLTranspiler._validate_output = _validate_output_with_legacy_hive_exception
