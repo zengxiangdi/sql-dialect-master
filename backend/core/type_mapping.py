@@ -118,16 +118,8 @@ class TypeMapper:
                 "target_dialect": target,
             }
         
-        # Find the type in mappings
+        # Find the type in mappings.
         type_info = self.mappings.get(type_name)
-        
-        if not type_info:
-            # Try to find by partial match
-            for key, value in self.mappings.items():
-                if type_name in key.upper() or key.upper() in type_name:
-                    type_info = value
-                    type_name = key
-                    break
         
         if not type_info:
             return {
@@ -266,7 +258,7 @@ class TypeMapper:
         
         Args:
             dialect: Dialect name
-            
+        
         Returns:
             Dictionary of type_name -> dialect_syntax
         """
@@ -282,7 +274,7 @@ class TypeMapper:
         
         Args:
             type_name: Type name to compare
-            
+        
         Returns:
             Comparison dictionary
         """
@@ -329,7 +321,7 @@ class TypeMapper:
             source_type: Source data type
             source: Source dialect
             target: Target dialect
-            
+        
         Returns:
             Dictionary with suggestion and recommendations
         """
@@ -380,7 +372,7 @@ class TypeMapper:
         
         Args:
             type_name: Type name
-            
+        
         Returns:
             Category name or None
         """
@@ -395,7 +387,7 @@ class TypeMapper:
         
         Args:
             category: Category name
-            
+        
         Returns:
             List of types in a category
         """
@@ -433,7 +425,7 @@ class TypeMapper:
         Args:
             type_name: Source type name
             target: Target dialect
-            
+        
         Returns:
             List of alternative types
         """
@@ -472,7 +464,7 @@ class TypeMapper:
             source_type: Source type name
             source: Source dialect
             target: Target dialect
-            
+        
         Returns:
             Detailed conversion information
         """
@@ -498,7 +490,7 @@ class TypeMapper:
         Args:
             target_syntax: Target type syntax to search for
             target_dialect: Target dialect
-            
+        
         Returns:
             List of matching source types with details
         """
@@ -529,7 +521,7 @@ class TypeMapper:
         
         Args:
             type_name: Type name to check
-            
+        
         Returns:
             Matrix of dialect -> dialect compatibility
         """
@@ -570,7 +562,7 @@ class TypeMapper:
             type_name: Type name
             source_syntax: Source dialect syntax
             target_syntax: Target dialect syntax
-            
+        
         Returns:
             True if conversion is safe
         """
