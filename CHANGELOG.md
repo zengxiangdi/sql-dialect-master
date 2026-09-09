@@ -2,6 +2,16 @@
 
 All notable changes to SQL Dialect Master are documented here.
 
+## [Unreleased]
+
+### Engineering
+
+- Added repository-level Dependabot configuration for Python and GitHub Actions dependencies.
+- Added CodeQL security analysis for Python on pushes, pull requests, and a weekly schedule.
+- Added CODEOWNERS, pull request templates, and issue templates.
+- Added tag-driven GitHub Release automation.
+- Added a PyPI publishing workflow using GitHub Actions trusted publishing (OIDC).
+
 ## [1.0.1] - 2026-09-08
 
 ### Added
