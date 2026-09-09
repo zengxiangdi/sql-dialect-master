@@ -14,6 +14,8 @@ Enterprise-grade multi-database SQL conversion engine supporting 12 database dia
 | 🔄 **SQL Conversion** | Convert SQL between 12 database dialects with a complete 12 × 12 conversion matrix |
 | ✅ **Output Validation** | Validate converted SQL with target-dialect parsing plus safe generic-parser fallback |
 | 🧠 **Semantic Regression Coverage** | Preserve predicates, joins, grouping, ordering, limits, windows, and round-trip validity |
+| 🔍 **AST Semantic Diff** | Compare dialect-aware SQL ASTs to detect structural changes introduced by conversion |
+| 🗄️ **Runtime Semantic Tests** | Execute representative conversions against PostgreSQL and DuckDB and compare result sets |
 | 📚 **Function Encyclopedia** | 298 SQL functions with cross-database comparison |
 | 🗂️ **Type Mapping** | 36 data types × 12 databases matrix |
 | 💬 **NL2SQL** | Natural language to SQL (Chinese/English) |
@@ -48,6 +50,12 @@ For development and testing, install the optional development dependencies:
 
 ```bash
 python -m pip install -e ".[dev]"
+```
+
+For database-backed semantic tests:
+
+```bash
+python -m pip install -e ".[dev,semantic]"
 ```
 
 ### Run Streamlit UI (Recommended)
@@ -126,6 +134,7 @@ sql-dialect-master/
 │   │   ├── config.py            # Configuration management
 │   │   ├── transpiler.py        # SQL conversion engine
 │   │   ├── parser.py            # SQL parser
+│   │   ├── semantic_diff.py     # AST-based semantic difference detector
 │   │   ├── rules.py             # Transformation rules
 │   │   ├── post_processor.py    # Post-processing
 │   │   ├── nl2sql.py            # Natural language to SQL
@@ -183,6 +192,10 @@ The project maintains a 12 × 12 source-to-target dialect regression matrix, sem
 
 Converted SQL is validated after post-processing. Target-dialect parsing is preferred; when a target parser limitation prevents validation but the generic parser accepts the SQL, the result is retained with a compatibility warning. Only when both validations fail is the conversion reported as unsuccessful.
 
+The AST semantic diff utility canonicalizes source and target SQL through SQLGlot and reports structural changes such as different predicates or AST node shapes. It is a regression detector rather than a proof of runtime equivalence.
+
+The semantic CI gate executes representative conversions against PostgreSQL and DuckDB and compares the source and converted result sets. This provides runtime evidence for supported SQL subsets without claiming universal cross-database semantic equivalence.
+
 Security validation structurally detects stacked SQL statements using the parser when available, with configurable policy controlling whether dangerous input is blocked or only warned about.
 
 The async batch API bounds concurrent work and preserves input order. A reproducible transpiler benchmark is available under `backend/benchmarks/` and is intentionally kept outside CI performance assertions.
@@ -222,11 +235,15 @@ pytest
 # Run with coverage
 pytest --cov=backend
 
+# Run database-backed semantic tests
+python -m pip install -e ".[dev,semantic]"
+pytest backend/tests/test_runtime_semantics.py -q
+
 # Run the reproducible benchmark
 python backend/benchmarks/transpiler_benchmark.py
 ```
 
-CI runs the complete pytest suite and Python compilation checks on Python 3.11 and 3.12.
+CI runs the complete pytest suite and Python compilation checks on Python 3.11 and 3.12, plus a PostgreSQL + DuckDB runtime semantic gate on Python 3.12.
 
 ## 📄 License
 
