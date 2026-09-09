@@ -3,6 +3,8 @@ name: One-time CodeQL cleanup
 on:
   push:
     branches: [fix/codeql-post-merge-cleanup]
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: write
