@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import List, Tuple
 
+from .p1_sql_scanner import executable_segments
+
 # Configure module logger
 logger = logging.getLogger(__name__)
 
@@ -61,7 +63,7 @@ class TransformRule:
         return source_match and target_match
     
     def apply(self, sql: str) -> Tuple[str, bool]:
-        """Apply this rule to SQL.
+        """Apply this rule only to executable SQL segments.
         
         Returns:
             Tuple of (transformed_sql, was_applied)
@@ -73,8 +75,20 @@ class TransformRule:
         if pattern is None:
             pattern = re.compile(self.pattern, re.IGNORECASE)
             self._compiled_pattern = pattern
-        new_sql, count = pattern.subn(self.replacement, sql)
-        return new_sql, count > 0
+
+        parts = []
+        cursor = 0
+        applied = False
+        for start, end in executable_segments(sql):
+            parts.append(sql[cursor:start])
+            segment = sql[start:end]
+            transformed, count = pattern.subn(self.replacement, segment)
+            parts.append(transformed)
+            applied = applied or count > 0
+            cursor = end
+
+        parts.append(sql[cursor:])
+        return "".join(parts), applied
 
 
 # =============================================================================
@@ -478,7 +492,7 @@ class RuleEngine:
         
         Args:
             name: Rule name to disable
-            
+        
         Returns:
             True if rule was found and disabled
         """
@@ -493,7 +507,7 @@ class RuleEngine:
         
         Args:
             name: Rule name to enable
-            
+        
         Returns:
             True if rule was found and enabled
         """
