@@ -77,20 +77,8 @@ def _transpile_single_statement(
     source_normalized = source.strip().lower()
     target_normalized = target.strip().lower()
 
-    # Keep security validation precedence over stacked-query rejection.
-    if self._security_enabled and not skip_security and isinstance(sql, str):
-        security_result = self._validate_security(sql)
-        if security_result["blocked"]:
-            return _ORIGINAL_TRANSPILER(
-                self,
-                sql,
-                source,
-                target,
-                pretty,
-                validate,
-                skip_security,
-            )
-
+    # The single-statement boundary owns the stable VALIDATION_FAILED contract.
+    # Security scanning still runs for each accepted single statement below.
     rejection = _reject_stacked_statements(
         self,
         sql,
