@@ -584,35 +584,11 @@ async def generate_sql(request: NL2SQLRequest):
 
 @app.get("/health", tags=["system"])
 async def health_check():
-    """
-    ❤️ Health Check Endpoint
-
-    Returns comprehensive service status including:
-    - Overall health status
-    - Individual service status
-    - Resource statistics
-    """
-    services = {
-        "transpiler": {"status": "✅ healthy", "rules": 40, "description": "SQL conversion engine"},
-        "functions": {"status": "✅ healthy", "count": len(func_encyclopedia.functions), "description": "Function encyclopedia"},
-        "types": {"status": "✅ healthy", "count": len(type_mapper.mappings), "description": "Type mapping service"},
-        "nl2sql": {"status": "✅ healthy", "description": "Natural language processor"}
-    }
-
-    all_healthy = all("healthy" in s["status"] for s in services.values())
-
+    """Return process liveness without probing business dependencies."""
     return {
-        "status": "✅ healthy" if all_healthy else "⚠️ degraded",
+        "status": "alive",
         "version": API_VERSION,
-        "uptime": "Available",
         "timestamp": datetime.now().isoformat(),
-        "services": services,
-        "stats": {
-            "dialects": len(SUPPORTED_DIALECTS),
-            "functions": len(func_encyclopedia.functions),
-            "types": len(type_mapper.mappings),
-            "rules": 40
-        }
     }
 
 
