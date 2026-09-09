@@ -21,7 +21,11 @@ def test_deep_health_sanitizes_internal_error_and_returns_503(monkeypatch):
     assert response.status_code == 503
     payload = response.json()
     assert payload["status"] == "❌ unhealthy"
-    assert payload["checks"]["transpiler"]["message"] if "message" in payload["checks"]["transpiler"] else payload["checks"]["transpiler"]["code"] == "probe_failed"
+    transpiler_check = payload["checks"]["transpiler"]
+    assert (
+        transpiler_check.get("message") == "internal health check failure"
+        or transpiler_check.get("code") == "probe_failed"
+    )
     assert "SECRET_DATABASE_PASSWORD" not in response.text
 
 
