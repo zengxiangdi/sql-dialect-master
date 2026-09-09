@@ -15,6 +15,8 @@ _PATCH_MODULES = (
     "p2_health_semantics",
     "p2_health_semantics_fix",
     "p2_api_runtime",
+    "p2_group_concat_fix",
+    "p2_output_validation_fix",
 )
 
 _installed = False
