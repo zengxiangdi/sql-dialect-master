@@ -21,6 +21,9 @@ from .exceptions import ErrorCode, ValidationError
 from .p1_sql_scanner import mask_non_executable
 
 logger = logging.getLogger(__name__)
+_DANGEROUS_OPERATION_PATTERN = re.compile(
+    r"\b(DROP|TRUNCATE|ALTER|CREATE|GRANT|REVOKE)\b", re.IGNORECASE
+)
 
 
 @dataclass
@@ -70,13 +73,31 @@ class SQLTranspiler:
         validate: bool = True,
         skip_security: bool = False
     ) -> TranspileResult:
-        if not isinstance(sql, str) or not isinstance(source, str) or not isinstance(target, str):
+        if not isinstance(sql, str):
             return TranspileResult(
                 success=False,
-                source_sql=sql if isinstance(sql, str) else str(sql),
+                source_sql=str(sql),
                 source_dialect=source if isinstance(source, str) else str(source),
                 target_dialect=target if isinstance(target, str) else str(target),
-                error="sql, source, and target must be strings",
+                error="sql must be a string",
+                error_code=ErrorCode.VALIDATION_FAILED.value,
+            )
+        if not isinstance(source, str):
+            return TranspileResult(
+                success=False,
+                source_sql=sql,
+                source_dialect=str(source),
+                target_dialect=target if isinstance(target, str) else str(target),
+                error="source must be a string",
+                error_code=ErrorCode.VALIDATION_FAILED.value,
+            )
+        if not isinstance(target, str):
+            return TranspileResult(
+                success=False,
+                source_sql=sql,
+                source_dialect=source,
+                target_dialect=str(target),
+                error="target must be a string",
                 error_code=ErrorCode.VALIDATION_FAILED.value,
             )
 
@@ -263,6 +284,14 @@ class SQLTranspiler:
     def _validate_security(self, sql: str) -> Dict[str, Any]:
         result = {"blocked": False, "reason": None, "warnings": []}
         executable_sql = mask_non_executable(sql)
+        dangerous_operation = _DANGEROUS_OPERATION_PATTERN.search(executable_sql)
+        if dangerous_operation:
+            message = f"Dangerous SQL operation detected: {dangerous_operation.group(1).upper()}"
+            if settings.security_block_dangerous:
+                result["blocked"] = True
+                result["reason"] = message
+                return result
+            result["warnings"].append(f"🔒 Security: {message}")
         try:
             parsed_statements = sqlglot.parse(sql)
             if len(parsed_statements) > 1:
