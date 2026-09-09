@@ -39,7 +39,7 @@ def test_unhandled_exception_returns_generic_internal_error(monkeypatch):
 
 
 def test_sdm_exception_returns_stable_error_code(monkeypatch):
-    """Known domain exceptions must retain their stable machine-readable code."""
+    """Known domain exceptions must retain stable machine-readable codes."""
 
     def fail(*args, **kwargs):
         raise TranspileError("transpiler rejected statement")
@@ -53,11 +53,13 @@ def test_sdm_exception_returns_stable_error_code(monkeypatch):
             "source_dialect": "mysql",
             "target_dialect": "postgres",
         },
+        headers={"X-Request-ID": "12345678-1234-4123-8123-123456789abc"},
     )
 
     assert response.status_code == 400
     data = response.json()
     assert data["success"] is False
     assert data["error"]["code"] == "TRANSPILE_FAILED"
+    assert data["error"]["error_code"] == "TRANSPILE_FAILED"
     assert data["error"]["message"] == "transpiler rejected statement"
-    assert data["request_id"] == response.headers["X-Request-ID"]
+    assert response.headers["X-Request-ID"] == "12345678-1234-4123-8123-123456789abc"
