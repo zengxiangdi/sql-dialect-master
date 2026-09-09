@@ -45,7 +45,7 @@ typing-extensions==4.16.0
 typing-inspection==0.4.4
 urllib3==2.7.0
 watchdog==6.0.0
-websockets==16.1.1
+websockets==17.1
 # QA toolchain
 ruff==0.16.6
 bandit==1.9.4
