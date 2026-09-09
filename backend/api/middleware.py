@@ -19,7 +19,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from .rate_limit_store import RateLimitStore, create_rate_limit_store
 from .readiness import readiness_response
-from backend.core.column_hint_validation import validate_column_hints
 
 logger = logging.getLogger(__name__)
 DEFAULT_MAX_REQUEST_BODY_BYTES = 512 * 1024
@@ -134,6 +133,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             except (UnicodeDecodeError, json.JSONDecodeError):
                 payload = None
             if isinstance(payload, dict):
+                from backend.core.column_hint_validation import validate_column_hints
                 error = validate_column_hints(payload.get("column_hints"))
                 if error:
                     return JSONResponse(
