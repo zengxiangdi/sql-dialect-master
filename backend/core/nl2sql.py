@@ -8,6 +8,13 @@ from .nl2sql_legacy import NL2SQLResult
 class NL2SQLGenerator(_NL2SQLGenerator):
     """Keep the public generator API while fixing count/group semantics."""
 
+    def _match_templates(self, text: str):
+        """Route count-by-group requests through enhanced semantic extraction."""
+        template, match_groups = super()._match_templates(text)
+        if template and template.name == "count_by_group":
+            return None, None
+        return template, match_groups
+
     def _extract_group_by(self, text: str) -> list:
         """Extract explicit per-group intent such as '每个部门' when needed."""
         group_cols = super()._extract_group_by(text)
