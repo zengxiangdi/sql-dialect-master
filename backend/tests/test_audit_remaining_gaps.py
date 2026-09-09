@@ -228,6 +228,53 @@ def test_nl2sql_api_rejects_non_identifier_column_hints():
     assert response.status_code == 422
 
 
+def test_nl2sql_openapi_exposes_column_hints():
+    from backend.api.main import app
+
+    schema = TestClient(app).get("/openapi.json").json()
+    request_schema = schema["components"]["schemas"]["NL2SQLRequest"]
+    assert "column_hints" in request_schema["properties"]
+    assert request_schema["properties"]["column_hints"]["type"] == "array"
+
+
+def test_nl2sql_api_passes_valid_column_hints_to_generator(monkeypatch):
+    from backend.api.main import app
+
+    captured = {}
+
+    def fake_generate(text, dialect, table_hint=None, column_hints=None):
+        captured.update(
+            text=text,
+            dialect=dialect,
+            table_hint=table_hint,
+            column_hints=column_hints,
+        )
+        from backend.core.nl2sql import NL2SQLResult
+        return NL2SQLResult(
+            success=True,
+            input_text=text,
+            sql="SELECT users.id, users.name FROM users",
+            dialect=dialect,
+            explanation="test",
+            confidence=0.9,
+        )
+
+    monkeypatch.setattr(app, "nl2sql_generator", type("Generator", (), {"generate": staticmethod(fake_generate)})())
+    response = TestClient(app).post(
+        "/api/nl2sql",
+        json={
+            "text": "查询所有用户",
+            "dialect": "mysql",
+            "table_hint": "users",
+            "column_hints": ["users.id", "users.name"],
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["column_hints"] == ["users.id", "users.name"]
+    assert response.json()["sql"] == "SELECT users.id, users.name FROM users"
+
+
 def test_structured_logging_is_registered_on_main_app():
     from backend.api.main import app
 
