@@ -11,6 +11,7 @@ from .config import (
 )
 from .parser import SQLParser, ParseResult
 from .transpiler import SQLTranspiler, TranspileResult
+from .semantic_diff import SQLSemanticDiffer, SemanticDiff, diff_sql_ast
 from .post_processor import PostProcessor
 from .functions_lookup import FunctionEncyclopedia
 from .type_mapping import TypeMapper
@@ -42,6 +43,9 @@ __all__ = [
     "ParseResult",
     "SQLTranspiler",
     "TranspileResult",
+    "SQLSemanticDiffer",
+    "SemanticDiff",
+    "diff_sql_ast",
     "TTLCache",
     "PostProcessor",
     "FunctionEncyclopedia",
