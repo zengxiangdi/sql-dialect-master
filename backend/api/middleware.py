@@ -226,8 +226,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                             "code": 422,
                             "message": "column_hints entries must be simple identifiers or dotted identifiers",
                         },
-                        "timestamp": datetime.now().isoformat(),
                     },
+                    "timestamp": datetime.now().isoformat(),
                 )
         return None
 
@@ -296,7 +296,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
         return await self._structured_logging.dispatch(
             request,
-            lambda req, _call_next: self._dispatch_inner(req, call_next),
+            self._dispatch_inner,
         )
 
     def _get_client_id(self, request: Request) -> str:
