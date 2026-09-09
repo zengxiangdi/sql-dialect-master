@@ -20,8 +20,6 @@ _READINESS_CACHE_TTL_SECONDS = 5.0
 _READINESS_TIMEOUT_SECONDS = 3.0
 _READINESS_LOCKS: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = weakref.WeakKeyDictionary()
 _READINESS_LOCKS_GUARD = __import__("threading").Lock()
-_cached_checks: dict[str, dict[str, Any]] | None = None
-_cached_at = 0.0
 _HEALTH_PROBE_PATHS = {"/ready", "/health/deep"}
 
 
@@ -101,14 +99,17 @@ def _run_checks() -> dict[str, dict[str, Any]]:
 
 async def _get_checks() -> dict[str, dict[str, Any]]:
     """Run at most one expensive probe at a time per event loop and reuse it briefly."""
-    global _cached_checks, _cached_at
     now = time.monotonic()
-    if _cached_checks is not None and now - _cached_at < _READINESS_CACHE_TTL_SECONDS:
-        return _cached_checks
+    cached_checks = getattr(_get_checks, "_cached_checks", None)
+    cached_at = getattr(_get_checks, "_cached_at", 0.0)
+    if cached_checks is not None and now - cached_at < _READINESS_CACHE_TTL_SECONDS:
+        return cached_checks
     async with _get_readiness_lock():
         now = time.monotonic()
-        if _cached_checks is not None and now - _cached_at < _READINESS_CACHE_TTL_SECONDS:
-            return _cached_checks
+        cached_checks = getattr(_get_checks, "_cached_checks", None)
+        cached_at = getattr(_get_checks, "_cached_at", 0.0)
+        if cached_checks is not None and now - cached_at < _READINESS_CACHE_TTL_SECONDS:
+            return cached_checks
         try:
             checks = await asyncio.wait_for(asyncio.to_thread(_run_checks), timeout=_READINESS_TIMEOUT_SECONDS)
         except asyncio.TimeoutError:
@@ -117,8 +118,8 @@ async def _get_checks() -> dict[str, dict[str, Any]]:
         except Exception:
             logger.exception("Readiness probe failed unexpectedly")
             checks = {"probe": {"status": "error", "code": "probe_failed"}}
-        _cached_checks = checks
-        _cached_at = time.monotonic()
+        _get_checks._cached_checks = checks
+        _get_checks._cached_at = time.monotonic()
         return checks
 
 
@@ -160,6 +161,7 @@ async def deep_health_response(request: Request) -> JSONResponse:
 
 
 def _api_version() -> str:
-    """Resolve API version lazily so probe imports do not create startup cycles."""
-    from backend.api import main
-    return main.API_VERSION
+    """Resolve API version without importing the API module back into readiness."""
+    from core.config import settings
+
+    return settings.api_version
