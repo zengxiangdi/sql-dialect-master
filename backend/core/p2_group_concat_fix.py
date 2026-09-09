@@ -138,12 +138,14 @@ _ORIGINAL_PROCESS = PostProcessor.process
 
 
 def _process_with_scanner(self: PostProcessor, sql: str, source: str, target: str):
-    result, notes = _ORIGINAL_PROCESS(self, sql, source, target)
+    working = sql
+    notes: list[str] = []
     if source.lower() == "mysql" and target.lower() == "postgres":
-        result, changed = _replace_group_concat_calls(result)
+        working, changed = _replace_group_concat_calls(working)
         if changed:
-            notes = list(notes) + ["Converted GROUP_CONCAT to STRING_AGG"]
-    return result, notes
+            notes.append("Converted GROUP_CONCAT to STRING_AGG")
+    result, legacy_notes = _ORIGINAL_PROCESS(self, working, source, target)
+    return result, notes + list(legacy_notes)
 
 
 if not getattr(PostProcessor, "_sdm_group_concat_fix", False):
