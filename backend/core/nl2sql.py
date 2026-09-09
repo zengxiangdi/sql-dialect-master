@@ -185,16 +185,16 @@ class NL2SQLGenerator:
                 value = numbers[0] if numbers else "0"
                 op = "="
                 for token in analysis["tokens"]:
-                    if token in ["大于", "超过", "greater", ">"]:
+                    if token in ["大于等于", ">=", "greater than or equal", "greater than or equal to", "at least"]:
+                        op = ">="
+                    elif token in ["小于等于", "<=", "less than or equal", "less than or equal to", "at most"]:
+                        op = "<="
+                    elif token in ["大于", "超过", "greater", ">"]:
                         op = ">"
                     elif token in ["小于", "低于", "less", "<"]:
                         op = "<"
                     elif token in ["不等于", "!="]:
                         op = "!="
-                    elif token in ["大于等于", ">="]:
-                        op = ">="
-                    elif token in ["小于等于", "<="]:
-                        op = "<="
                 sql = f"SELECT *\nFROM {table}\nWHERE {col} {op} {value}"
                 explanation_parts.append(f"条件: {col} {op} {value}")
                 confidence += 0.1
@@ -454,12 +454,12 @@ class NL2SQLGenerator:
                 break
 
         comparisons = [
+            (["大于等于", "不小于", "至少", ">=", "greater than or equal", "greater than or equal to", "at least"], ">="),
+            (["小于等于", "不大于", "最多", "<=", "less than or equal", "less than or equal to", "at most"], "<="),
             (["大于", "超过", "高于", "多于", "greater", "more than", "above", "over", ">"], ">"),
             (["小于", "低于", "少于", "不足", "less", "less than", "below", "under", "<"], "<"),
+            (["不等于", "不是", "不为", "not equal", "!=", "not equal to"], "!="),
             (["等于", "是", "为", "equals", "equal", "="], "="),
-            (["不等于", "不是", "不为", "not equal", "!="], "!="),
-            (["大于等于", "不小于", "至少", ">=", "at least"], ">="),
-            (["小于等于", "不大于", "最多", "<=", "at most"], "<="),
         ]
         for keywords, op in comparisons:
             if any(keyword in text for keyword in keywords) and numbers:
