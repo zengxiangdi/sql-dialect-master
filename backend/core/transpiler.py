@@ -303,7 +303,7 @@ class SQLTranspiler:
             warning = (
                 "⚠️ Target dialect parser rejected the output, but the generic "
                 "SQL parser accepted it; retaining the conversion with a "
-                "compatibility warning. Target parser error: {target_message}"
+                f"compatibility warning. Target parser error: {target_message}"
             )
             logger.warning("Generic parser fallback used for %s output: %s", dialect, target_message)
             return None, warning
