@@ -64,9 +64,9 @@ _CN_NULL_PATTERN = re.compile(
     r"(为空|为\s*空|是空|不为空|不为\s*空|非空)"
 )
 
-_SET_PATTERN = re.compile(
+_SET_PREFIX_PATTERN = re.compile(
     r"(?<![A-Za-z0-9_])(category|type|department|region|status)\s+"
-    r"(?:(not)\s+)?in\s*\(([^)]*)\)",
+    r"(?:(not)\s+)?in\s*\(",
     re.IGNORECASE,
 )
 
@@ -200,12 +200,16 @@ def _comparison_matches(text: str) -> List[Tuple[int, int, str]]:
             is_not_null = normalized.startswith(("isnotnull", "不为空", "非空", "不为"))
             matches.append((match.start(), match.end(), f"{column} IS {'NOT ' if is_not_null else ''}NULL"))
 
-    for match in _SET_PATTERN.finditer(text):
-        column, negation, raw_values = match.groups()
+    for match in _SET_PREFIX_PATTERN.finditer(text):
+        close_paren = text.find(")", match.end())
+        if close_paren == -1:
+            continue
+        column, negation = match.groups()
+        raw_values = text[match.end() : close_paren]
         values = _format_set_values(raw_values)
         if values:
             operator = "NOT IN" if negation else "IN"
-            matches.append((match.start(), match.end(), f"{column.lower()} {operator} ({values})"))
+            matches.append((match.start(), close_paren + 1, f"{column.lower()} {operator} ({values})"))
 
     for match in _CN_SET_PREFIX_PATTERN.finditer(text):
         column, operator_text = match.groups()
