@@ -112,7 +112,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                     status_code=403,
                     content={"success": False, "error": {"code": 403, "message": "health probe access denied"}},
                 )
-            return await call_next(request)
+            if request.url.path == "/ready":
+                return await readiness_response(request)
+            return await deep_health_response(request)
 
         if request.url.path == "/api/nl2sql" and request.method == "POST":
             try:
