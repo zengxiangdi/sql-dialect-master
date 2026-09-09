@@ -3,12 +3,7 @@
 
 Provides helper functions to render common UI elements consistently.
 """
-import sys
-from pathlib import Path
 from typing import Dict
-
-# Add parent to path for backend imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from backend.core.config import DIALECT_METADATA
 
