@@ -33,7 +33,7 @@ def test_recent_days_date_semantics(generator, dialect, expected):
 def test_date_add_and_current_timestamp_are_dialect_specific(generator):
     source = "SELECT DATE_ADD(CURRENT_DATE, 7), ADD_MONTHS(CURRENT_DATE, 1), CURRENT_TIMESTAMP FROM orders"
     expected = {
-        "mysql": ("DATE_ADD", "ADD_MONTHS", "CURRENT_TIMESTAMP"),
+        "mysql": ("DATE_ADD", "DATE_ADD(CURRENT_DATE, INTERVAL 1 MONTH)", "CURRENT_TIMESTAMP"),
         "postgres": ("CURRENT_DATE + INTERVAL '7 days'", "CURRENT_DATE + INTERVAL '1 month'", "CURRENT_TIMESTAMP"),
         "oracle": ("TRUNC(SYSDATE) + 7", "ADD_MONTHS(TRUNC(SYSDATE), 1)", "SYSTIMESTAMP"),
         "tsql": ("DATEADD(DAY, 7, CAST(GETDATE() AS DATE))", "DATEADD(MONTH, 1, CAST(GETDATE() AS DATE))", "SYSDATETIME()"),
