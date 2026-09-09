@@ -19,10 +19,7 @@ from .post_processor import PostProcessor
 from .cache import TTLCache
 from .exceptions import (
     ErrorCode,
-    TranspileError,
-    UnsupportedDialectError,
-    SecurityViolationError,
-    ValidationError
+    ValidationError,
 )
 
 logger = logging.getLogger(__name__)
@@ -94,6 +91,16 @@ class SQLTranspiler:
                     error_code=ErrorCode.SECURITY_VIOLATION.value,
                     warnings=security_result["warnings"]
                 )
+
+        if self._has_multiple_statements(sql):
+            return TranspileResult(
+                success=False,
+                source_sql=sql,
+                source_dialect=source,
+                target_dialect=target,
+                error="Multiple SQL statements are not supported; submit one statement per request",
+                error_code=ErrorCode.VALIDATION_FAILED.value,
+            )
 
         if self._cache_enabled:
             cache_key = self._cache_key(sql, source, target, pretty, validate, skip_security)
@@ -180,6 +187,16 @@ class SQLTranspiler:
                 success=False, source_sql=sql, source_dialect=source, target_dialect=target,
                 error=str(e), error_code=ErrorCode.TRANSPILE_FAILED.value
             )
+
+    @staticmethod
+    def _has_multiple_statements(sql: str) -> bool:
+        """Return true when SQL contains more than one parsed statement."""
+        if not isinstance(sql, str) or not sql.strip():
+            return False
+        try:
+            return len(sqlglot.parse(sql)) > 1
+        except Exception:
+            return False
 
     def _cache_key(
         self, sql: str, source: str, target: str, pretty: bool, validate: bool = True,
@@ -278,14 +295,22 @@ class SQLTranspiler:
 
     def batch_transpile(self, statements: List[str], source: str, target: str, pretty: bool = True) -> List[TranspileResult]:
         if len(statements) > settings.max_batch_size:
-            statements = statements[:settings.max_batch_size]
+            raise ValidationError(
+                f"Batch contains {len(statements)} statements; maximum is {settings.max_batch_size}",
+                field="statements",
+                value=str(len(statements)),
+            )
         return [self.transpile(sql, source, target, pretty) for sql in statements]
 
     async def batch_transpile_async(
         self, statements: List[str], source: str, target: str, pretty: bool = True, max_concurrent: int = 10
     ) -> List[TranspileResult]:
         if len(statements) > settings.max_batch_size:
-            statements = statements[:settings.max_batch_size]
+            raise ValidationError(
+                f"Batch contains {len(statements)} statements; maximum is {settings.max_batch_size}",
+                field="statements",
+                value=str(len(statements)),
+            )
         if max_concurrent <= 0:
             raise ValidationError("max_concurrent must be positive", field="max_concurrent", value=str(max_concurrent))
         semaphore = asyncio.Semaphore(max_concurrent)
