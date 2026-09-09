@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
 """Basic usage examples for SQL Dialect Master."""
-import sys
-sys.path.insert(0, '..')
 
 from backend.core import SQLTranspiler, NL2SQLGenerator, FunctionEncyclopedia, TypeMapper
 
