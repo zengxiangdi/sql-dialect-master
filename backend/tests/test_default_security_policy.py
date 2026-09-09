@@ -54,9 +54,10 @@ def test_explicit_security_override_is_respected():
 
 def test_security_bypass_parameter_is_not_supported():
     with pytest.raises(TypeError):
+        kwargs = {"skip_security": True}
         SQLTranspiler().transpile(
             "DROP TABLE users",
             "mysql",
             "postgres",
-            skip_security=True,
+            **kwargs,
         )
