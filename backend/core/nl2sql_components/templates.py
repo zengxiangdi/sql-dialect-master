@@ -28,6 +28,12 @@ _TEMPLATE_BLOCKERS = {
     "simple_select": _COMPOSITION_MARKERS,
 }
 
+# Keep template captures bounded. These patterns run against natural-language
+# query text, so unbounded adjacent wildcards can cause excessive backtracking
+# on adversarial input. 512 characters is ample for each individual template
+# field while making the regex work bounded by construction.
+_TEMPLATE_CAPTURE_LIMIT = 512
+
 
 @dataclass
 class QueryTemplate:
@@ -75,13 +81,13 @@ class QueryTemplate:
 DEFAULT_QUERY_TEMPLATES = [
     QueryTemplate(
         name="top_n_query",
-        pattern=r"(?:查询|获取|get|show|find)?\s*(?:前|top|bottom|最低|最少|lowest|smallest)\s*(\d+)\s*(?:个|条|名)?\s*(.+?)(?:按|by)?\s*(.+?)?\s*(?:排序|排列|order)?",
+        pattern=rf"(?:查询|获取|get|show|find)?\s*(?:前|top|bottom|最低|最少|lowest|smallest)\s*(\d+)\s*(?:个|条|名)?\s*(.{{1,{_TEMPLATE_CAPTURE_LIMIT}}}?)(?:按|by)?\s*(.{{1,{_TEMPLATE_CAPTURE_LIMIT}}})?\s*(?:排序|排列|order)?",
         sql_template="SELECT * FROM {table} ORDER BY {order_col} DESC LIMIT {n}",
         priority=90,
     ),
     QueryTemplate(
         name="count_by_group",
-        pattern=r"(?:统计|计算|count)\s*(?:每个|各个|each)?\s*(.+?)\s*(?:的|的数量|数量|有多少)",
+        pattern=rf"(?:统计|计算|count)\s*(?:每个|各个|each)?\s*(.{{1,{_TEMPLATE_CAPTURE_LIMIT}}}?)\s*(?:的|的数量|数量|有多少)",
         sql_template="SELECT {group_col}, COUNT(*) AS count FROM {table} GROUP BY {group_col}",
         priority=85,
     ),
@@ -93,25 +99,25 @@ DEFAULT_QUERY_TEMPLATES = [
     ),
     QueryTemplate(
         name="aggregate_query",
-        pattern=r"(?:计算|求|get)?\s*(.+?)\s*(?:的)?\s*(平均|总和|最大|最小|average|sum|max|min)\s*(.+)",
+        pattern=rf"(?:计算|求|get)?\s*(.{{1,{_TEMPLATE_CAPTURE_LIMIT}}}?)\s*(?:的)?\s*(平均|总和|最大|最小|average|sum|max|min)\s*(.{{1,{_TEMPLATE_CAPTURE_LIMIT}}})",
         sql_template="SELECT {agg_func}({col}) FROM {table}",
         priority=80,
     ),
     QueryTemplate(
         name="condition_query",
-        pattern=r"(?:查询|获取|find|get)?\s*(.+?)\s*(大于|小于|等于|超过|不等于|greater(?:\s+than)?|less(?:\s+than)?|equal(?:\s+to)?|>|<|=)\s*(\d+\.?\d*)\s*(?:的)?\s*(.+)?",
+        pattern=rf"(?:查询|获取|find|get)?\s*(.{{1,{_TEMPLATE_CAPTURE_LIMIT}}}?)\s*(大于|小于|等于|超过|不等于|greater(?:\s+than)?|less(?:\s+than)?|equal(?:\s+to)?|>|<|=)\s*(\d+\.?\d*)\s*(?:的)?\s*(.{{1,{_TEMPLATE_CAPTURE_LIMIT}}})?",
         sql_template="SELECT * FROM {table} WHERE {col} {op} {value}",
         priority=75,
     ),
     QueryTemplate(
         name="join_query",
-        pattern=r"(?:查询|获取)?\s*(.+?)\s*(?:和|与|关联|连接|join)\s*(.+?)(?:的|数据)?",
+        pattern=rf"(?:查询|获取)?\s*(.{{1,{_TEMPLATE_CAPTURE_LIMIT}}}?)\s*(?:和|与|关联|连接|join)\s*(.{{1,{_TEMPLATE_CAPTURE_LIMIT}}}?)(?:的|数据)?",
         sql_template="SELECT * FROM {table1} JOIN {table2} ON {join_condition}",
         priority=70,
     ),
     QueryTemplate(
         name="select_with_columns",
-        pattern=r"(?:查询|获取|显示|select|get|show)\s*(.+?)\s*(?:的|from)?\s*(.+?)(?:表|table)?$",
+        pattern=rf"(?:查询|获取|显示|select|get|show)\s*(.{{1,{_TEMPLATE_CAPTURE_LIMIT}}}?)\s*(?:的|from)?\s*(.{{1,{_TEMPLATE_CAPTURE_LIMIT}}}?)(?:表|table)?$",
         sql_template="SELECT {columns} FROM {table}",
         priority=60,
     ),

@@ -70,9 +70,8 @@ _SET_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-_CN_SET_PATTERN = re.compile(
-    r"(类别|类型|部门|地区|状态)\s*(不在|在)\s*([^且并或和()，,]+?(?:[，,]\s*[^且并或和()，,]+?)*)"
-    r"\s*(?:之中|其中|中)?(?=且|并且|或者|或|和|$)"
+_CN_SET_PREFIX_PATTERN = re.compile(
+    r"(类别|类型|部门|地区|状态)\s*(不在|在)\s*"
 )
 
 _STATUS_PATTERN = re.compile(
@@ -208,12 +207,23 @@ def _comparison_matches(text: str) -> List[Tuple[int, int, str]]:
             operator = "NOT IN" if negation else "IN"
             matches.append((match.start(), match.end(), f"{column.lower()} {operator} ({values})"))
 
-    for match in _CN_SET_PATTERN.finditer(text):
-        column, operator_text, raw_values = match.groups()
+    for match in _CN_SET_PREFIX_PATTERN.finditer(text):
+        column, operator_text = match.groups()
+        value_end = len(text)
+        connector = _CONNECTOR_PATTERN.search(text, match.end())
+        if connector is not None:
+            value_end = connector.start()
+        raw_values = text[match.end() : value_end].strip()
+        for suffix in ("之中", "其中", "中"):
+            if raw_values.endswith(suffix):
+                raw_values = raw_values[: -len(suffix)].rstrip()
+                break
+        if not raw_values or any(char in raw_values for char in "()"):
+            continue
         values = _format_set_values(raw_values)
         if values:
             operator = "NOT IN" if operator_text == "不在" else "IN"
-            matches.append((match.start(), match.end(), f"{_CN_SET_COLUMNS[column]} {operator} ({values})"))
+            matches.append((match.start(), value_end, f"{_CN_SET_COLUMNS[column]} {operator} ({values})"))
 
     for match in _STATUS_PATTERN.finditer(text):
         status = match.group(1).lower()
