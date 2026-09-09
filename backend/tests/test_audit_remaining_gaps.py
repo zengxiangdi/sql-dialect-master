@@ -233,12 +233,15 @@ def test_nl2sql_openapi_exposes_column_hints():
 
     schema = TestClient(app).get("/openapi.json").json()
     request_schema = schema["components"]["schemas"]["NL2SQLRequest"]
+    column_schema = request_schema["properties"]["column_hints"]
     assert "column_hints" in request_schema["properties"]
-    assert request_schema["properties"]["column_hints"]["type"] == "array"
+    assert column_schema.get("type") == "array" or any(
+        branch.get("type") == "array" for branch in column_schema.get("anyOf", [])
+    )
 
 
 def test_nl2sql_api_passes_valid_column_hints_to_generator(monkeypatch):
-    from backend.api.main import app
+    import backend.api.main as main_module
 
     captured = {}
 
@@ -259,8 +262,12 @@ def test_nl2sql_api_passes_valid_column_hints_to_generator(monkeypatch):
             confidence=0.9,
         )
 
-    monkeypatch.setattr(app, "nl2sql_generator", type("Generator", (), {"generate": staticmethod(fake_generate)})())
-    response = TestClient(app).post(
+    monkeypatch.setattr(
+        main_module,
+        "nl2sql_generator",
+        type("Generator", (), {"generate": staticmethod(fake_generate)})(),
+    )
+    response = TestClient(main_module.app).post(
         "/api/nl2sql",
         json={
             "text": "查询所有用户",
