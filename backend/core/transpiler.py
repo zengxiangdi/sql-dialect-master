@@ -96,8 +96,12 @@ class SQLTranspiler:
         logger.info(f"Transpiling SQL: {source} -> {target}, length={len(sql)}")
         logger.debug(f"Input SQL: {sql[:200]}{'...' if len(sql) > 200 else ''}")
 
-        if self._security_enabled and not skip_security:
+        security_warnings: List[str] = []
+        security_enabled = settings.security_check_enabled
+        self._security_enabled = security_enabled
+        if security_enabled and not skip_security:
             security_result = self._validate_security(sql)
+            security_warnings = list(security_result["warnings"])
             if security_result["blocked"]:
                 logger.warning(f"SQL blocked by security check: {security_result['reason']}")
                 return TranspileResult(
@@ -107,7 +111,7 @@ class SQLTranspiler:
                     target_dialect=target,
                     error=f"Security check failed: {security_result['reason']}",
                     error_code=ErrorCode.SECURITY_VIOLATION.value,
-                    warnings=security_result["warnings"]
+                    warnings=security_warnings
                 )
 
         if self._has_multiple_statements(sql):
@@ -151,7 +155,7 @@ class SQLTranspiler:
             transpiled = sqlglot.transpile(sql, read=source, write=target, pretty=pretty)[0]
             final_sql, transformations = self.post_processor.process(transpiled, source, target)
             compat_notes = self._get_compatibility_notes(source, target, sql)
-            warnings = self._generate_warnings(sql, source, target)
+            warnings = security_warnings + self._generate_warnings(sql, source, target)
 
             if validate:
                 validation_warning = self._validate_output(final_sql, target)
@@ -204,7 +208,7 @@ class SQLTranspiler:
             for rule in self.post_processor.engine.rules
         )
         rule_version = hashlib.sha256(rule_payload.encode("utf-8")).hexdigest()[:16]
-        security_version = f"{self._security_enabled}|{settings.security_block_dangerous}"
+        security_version = f"{settings.security_check_enabled}|{settings.security_block_dangerous}"
         return f"v4|{rule_version}|{security_version}|{skip_security}|{sql}|{source}|{target}|{pretty}|{validate}"
 
     def _get_compatibility_notes(self, source: str, target: str, sql: str = "") -> List[str]:

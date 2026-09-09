@@ -8,21 +8,21 @@ from backend.core.post_processor import PostProcessor
     [
         (
             "_convert_decode_to_case",
-            "SELECT DECODE(status, 1, 'ok', 0, 'no') FROM t",
+            "SELECT DECODE(status, 1, 'ok', 0, 'no'), 'DECODE(fake, 1, 2)' FROM t",
             "CASE WHEN status = 1 THEN 'ok' WHEN status = 0 THEN 'no' ELSE NULL END",
             "'DECODE(fake, 1, 2)'",
         ),
         (
             "_convert_mysql_date_format",
-            "SELECT DATE_FORMAT(created_at, '%Y-%m-%d') FROM t",
+            "SELECT DATE_FORMAT(created_at, '%Y-%m-%d') FROM t /* DATE_FORMAT(fake, '%Y') */",
             "TO_CHAR(created_at, 'YYYY-MM-DD')",
-            "'DATE_FORMAT(fake, \'%Y\')'",
+            "DATE_FORMAT(fake, '%Y')",
         ),
         (
             "_convert_postgres_to_char",
-            "SELECT TO_CHAR(created_at, 'YYYY-MM-DD') FROM t",
+            "SELECT TO_CHAR(created_at, 'YYYY-MM-DD') FROM t /* TO_CHAR(fake, 'YYYY') */",
             "DATE_FORMAT(created_at, '%Y-%m-%d')",
-            "'TO_CHAR(fake, \'YYYY\')'",
+            "TO_CHAR(fake, 'YYYY')",
         ),
         (
             "_convert_top_to_limit",

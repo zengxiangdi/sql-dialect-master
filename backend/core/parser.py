@@ -51,10 +51,11 @@ class SQLParser:
         """Parse SQL string into AST."""
         if not isinstance(sql, str):
             return ParseResult(success=False, error="SQL statement must be a string", dialect=self.dialect)
-        if len(sql) > settings.parser_max_sql_length:
+        max_sql_length = getattr(settings, "parser_max_sql_length", settings.transpiler_max_sql_length)
+        if len(sql) > max_sql_length:
             return ParseResult(
                 success=False,
-                error=f"SQL exceeds maximum length of {settings.parser_max_sql_length} characters",
+                error=f"SQL exceeds maximum length of {max_sql_length} characters",
                 dialect=self.dialect,
             )
         if not sql or not sql.strip():
@@ -88,8 +89,9 @@ class SQLParser:
         """Validate SQL syntax."""
         if not isinstance(sql, str):
             return False, "SQL statement must be a string"
-        if len(sql) > settings.parser_max_sql_length:
-            return False, f"SQL exceeds maximum length of {settings.parser_max_sql_length} characters"
+        max_sql_length = getattr(settings, "parser_max_sql_length", settings.transpiler_max_sql_length)
+        if len(sql) > max_sql_length:
+            return False, f"SQL exceeds maximum length of {max_sql_length} characters"
         if not sql or not sql.strip():
             return False, "Empty SQL statement"
 

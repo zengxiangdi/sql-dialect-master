@@ -177,7 +177,14 @@ class PostProcessor:
         start, end = match.span()
         result = sql[:start] + "SELECT" + sql[end:]
         if "LIMIT" not in mask_non_executable(result).upper():
-            result = result.rstrip(';').rstrip() + f" LIMIT {n}"
+            if result.endswith("\n"):
+                result += f" LIMIT {n}"
+            else:
+                line_comment = re.search(r"--[^\n]*$", result)
+                if line_comment:
+                    result = result[:line_comment.start()].rstrip() + f" LIMIT {n} " + result[line_comment.start():]
+                else:
+                    result = result.rstrip(';').rstrip() + f" LIMIT {n}"
         return result, [f"Converted TOP {n} to LIMIT {n}"]
 
     def _convert_rownum_to_limit(self, sql: str) -> Tuple[str, List[str]]:

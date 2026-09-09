@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from .rate_limit_store import RateLimitStore, create_rate_limit_store
+from .readiness import health_probe_response
 
 logger = logging.getLogger(__name__)
 DEFAULT_MAX_REQUEST_BODY_BYTES = 512 * 1024
@@ -110,7 +111,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         if not self.enabled:
             return await call_next(request)
-        if request.url.path in ["/health", "/"] and request.method in {"GET", "HEAD"}:
+        if request.url.path in {"/health", "/", "/ready", "/health/deep"} and request.method in {"GET", "HEAD"}:
+            if request.url.path in {"/ready", "/health/deep"}:
+                return await health_probe_response(request)
             return await call_next(request)
 
         client_id = self._get_client_id(request)
