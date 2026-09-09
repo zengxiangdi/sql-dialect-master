@@ -97,20 +97,61 @@ def _context_sensitive_functions(tree: exp.Expression) -> List[str]:
     return sorted(names)
 
 
+def _fragment_sql(node: Optional[exp.Expression]) -> str:
+    if node is None:
+        return ""
+    return node.sql(dialect="", pretty=False).strip()
+
+
+def _list_fragment_sql(nodes) -> str:
+    return "\n".join(_fragment_sql(node) for node in nodes)
+
+
 def _difference_categories(
     source_tree: exp.Expression,
     target_tree: exp.Expression,
     functions_differ: bool = False,
 ) -> List[str]:
+    """Return categories whose semantic regions actually changed."""
     categories = set()
-    node_names = {type(node).__name__ for node in source_tree.walk()} | {
-        type(node).__name__ for node in target_tree.walk()
-    }
-    for category, candidates in _CATEGORY_NODE_NAMES.items():
-        if node_names & candidates:
-            categories.add(category)
+    source_select = source_tree if isinstance(source_tree, exp.Select) else source_tree.find(exp.Select)
+    target_select = target_tree if isinstance(target_tree, exp.Select) else target_tree.find(exp.Select)
+
+    if source_select is not None and target_select is not None:
+        if _list_fragment_sql(source_select.expressions) != _list_fragment_sql(target_select.expressions):
+            categories.add("projection")
+        if _fragment_sql(source_select.args.get("where")) != _fragment_sql(target_select.args.get("where")):
+            categories.add("predicate")
+        if _fragment_sql(source_select.args.get("having")) != _fragment_sql(target_select.args.get("having")):
+            categories.add("predicate")
+            categories.add("grouping")
+        if _fragment_sql(source_select.args.get("group")) != _fragment_sql(target_select.args.get("group")):
+            categories.add("grouping")
+        if _fragment_sql(source_select.args.get("order")) != _fragment_sql(target_select.args.get("order")):
+            categories.add("ordering")
+        if _fragment_sql(source_select.args.get("limit")) != _fragment_sql(target_select.args.get("limit")):
+            categories.add("row_limit")
+        if _fragment_sql(source_select.args.get("offset")) != _fragment_sql(target_select.args.get("offset")):
+            categories.add("row_limit")
+
+    source_joins = list(source_tree.find_all(exp.Join))
+    target_joins = list(target_tree.find_all(exp.Join))
+    if _list_fragment_sql(source_joins) != _list_fragment_sql(target_joins):
+        categories.add("join")
+
+    source_aggregates = list(source_tree.find_all(exp.AggFunc))
+    target_aggregates = list(target_tree.find_all(exp.AggFunc))
+    if _list_fragment_sql(source_aggregates) != _list_fragment_sql(target_aggregates):
+        categories.add("aggregate")
+
+    source_literals = [node for node in source_tree.walk() if type(node).__name__ in _CATEGORY_NODE_NAMES["literal_or_type"]]
+    target_literals = [node for node in target_tree.walk() if type(node).__name__ in _CATEGORY_NODE_NAMES["literal_or_type"]]
+    if _list_fragment_sql(source_literals) != _list_fragment_sql(target_literals):
+        categories.add("literal_or_type")
+
     if functions_differ:
         categories.add("function")
+
     return sorted(categories) or ["structure"]
 
 
