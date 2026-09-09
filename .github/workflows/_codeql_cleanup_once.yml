@@ -1,0 +1,104 @@
+name: One-time CodeQL cleanup
+
+on:
+  push:
+    branches: [fix/codeql-post-merge-cleanup]
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Fix static-analysis findings
+        run: |
+          python -m pip install ruff
+          ruff check backend/core/nl2sql.py backend/core/transpiler.py backend/api/main.py backend/core/config.py backend/core/parser.py backend/core/rules.py backend/tests/test_properties.py backend/tests/test_audit_remaining_gaps.py backend/tests/test_api.py frontend/components.py frontend/themes.py frontend/tabs/lineage.py sdm_local.py --select F401,F841,I001 --fix
+          python - <<'PY'
+          from pathlib import Path
+
+          nl2sql = Path("backend/core/nl2sql.py")
+          text = nl2sql.read_text()
+          text = text.replace(
+              '        logger.info("NL2SQL: Processing \'%s...\' for dialect %s", text[:50], dialect)\n',
+              '        log_text = text[:50].replace("\\r", "\\\\r").replace("\\n", "\\\\n")\n'
+              '        logger.info("NL2SQL: Processing \'%s...\' for dialect %s", log_text, dialect)\n',
+          )
+          text = text.replace(
+              '        if any(k in text for k in ["排序", "排列", "sort", "order", "sorted"]):\n'
+              '            direction = (\n'
+              '                "DESC"\n'
+              '                if any(k in text for k in ["降序", "从大到小", "递减", "desc", "descending", "decreasing"])\n'
+              '                else "ASC"\n'
+              '            )\n'
+              '            return (order_col or "id", direction)\n',
+              '        if any(k in text for k in ["排序", "排列", "sort", "order", "sorted"]):\n'
+              '            return (\n'
+              '                order_col or "id",\n'
+              '                "DESC"\n'
+              '                if any(k in text for k in ["降序", "从大到小", "递减", "desc", "descending", "decreasing"])\n'
+              '                else "ASC",\n'
+              '            )\n',
+          )
+          nl2sql.write_text(text)
+
+          transpiler = Path("backend/core/transpiler.py")
+          text = transpiler.read_text()
+          text = text.replace(
+              '                result["warnings"].append(f"🔒 Security: {message}")\n'
+              '        except Exception:\n'
+              '            pass\n',
+              '                result["warnings"].append(f"🔒 Security: {message}")\n'
+              '        except Exception as exc:\n'
+              '            logger.debug("SQL statement parsing failed during security validation: %s", exc)\n',
+          )
+          transpiler.write_text(text)
+
+          lineage = Path("frontend/tabs/lineage.py")
+          text = lineage.read_text().replace(
+              'from frontend.app_context import DIALECTS, DIALECT_INFO, get_dialect_label\n',
+              'from frontend.app_context import DIALECTS, get_dialect_label\n',
+          )
+          lineage.write_text(text)
+
+          themes = Path("frontend/themes.py")
+          themes.write_text(themes.read_text().replace('from typing import Dict, Any\n', 'from typing import Dict\n'))
+
+          sdm_local = Path("sdm_local.py")
+          sdm_local.write_text(sdm_local.read_text().replace('    DIALECT_INFO,\n', ''))
+
+          audit = Path("backend/tests/test_audit_remaining_gaps.py")
+          text = audit.read_text().replace('    import backend.api.main as main_module\n', '    from backend.api import main as main_module\n')
+          audit.write_text(text)
+
+          api_test = Path("backend/tests/test_api.py")
+          text = api_test.read_text().replace('        data = response.json()\n    \n    def test_timing_attack_sleep', '    \n    def test_timing_attack_sleep')
+          api_test.write_text(text)
+          PY
+
+      - name: Validate targeted files
+        run: |
+          python -m compileall -q backend frontend sdm_local.py
+          ruff check backend/core/nl2sql.py backend/core/transpiler.py backend/api/main.py backend/core/config.py backend/core/parser.py backend/core/rules.py backend/tests/test_properties.py backend/tests/test_audit_remaining_gaps.py backend/tests/test_api.py frontend/components.py frontend/themes.py frontend/tabs/lineage.py sdm_local.py --select F401,F841,I001
+
+      - name: Commit cleanup and remove temporary workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -f .github/workflows/_codeql_cleanup_once.yml
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git commit -m "fix: clear remaining CodeQL findings"
+          git push origin HEAD:fix/codeql-post-merge-cleanup
