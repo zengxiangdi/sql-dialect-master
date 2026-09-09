@@ -3,6 +3,8 @@
 from importlib import import_module
 import re
 
+from .config import settings
+
 _PATCH_MODULES = (
     "batch_validation",
     "input_validation",
