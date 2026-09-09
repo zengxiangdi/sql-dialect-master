@@ -42,16 +42,20 @@ async def _harden_health_response(self, request, call_next):
         return response
 
     try:
-        raw_body = b"".join([chunk async for chunk in response.body_iterator])
-        payload = _redact_health_payload(json.loads(raw_body.decode("utf-8")))
+        body = getattr(response, "body", None)
+        if body is None:
+            body = b"".join([chunk async for chunk in response.body_iterator])
+        payload = _redact_health_payload(json.loads(body.decode("utf-8")))
+        if not isinstance(payload, dict):
+            return response
         status = 503 if payload.get("status") == "❌ unhealthy" else response.status_code
         return JSONResponse(
             status_code=status,
             content=payload,
             headers={key: value for key, value in response.headers.items() if key.lower() != "content-length"},
         )
-    except (AttributeError, UnicodeDecodeError, json.JSONDecodeError, TypeError):
-        logger.warning("Unable to sanitize deep health response")
+    except Exception:
+        logger.warning("Unable to sanitize deep health response", exc_info=True)
         return response
 
 
