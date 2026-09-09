@@ -46,11 +46,10 @@ jobs:
           transpiler = Path("backend/core/transpiler.py")
           text = transpiler.read_text(encoding="utf-8")
           before = text
-          text = re.sub(r",\s*skip_security:\s*bool\s*=\s*False", "", text, count=1)
-          text = re.sub(r"\s+skip_security:\s*bool\s*=\s*False", "", text, count=1)
+          text = re.sub(r"\s+skip_security:\s*bool\s*=\s*False", "", text, count=2)
           text = text.replace(" and not skip_security", "")
           text = text.replace(", skip_security)", ")")
-          text = re.sub(r"\|\{skip_security\}", "", text)
+          text = text.replace("|{skip_security}|", "|")
           assert text != before, "transpiler security-bypass patch made no changes"
           assert "skip_security" not in text, "public security bypass remains"
           transpiler.write_text(text, encoding="utf-8")
@@ -73,7 +72,6 @@ jobs:
           readme.write_text(readme_text.replace(marker, limitation + marker, 1), encoding="utf-8")
           PY
 
-          # Show and validate all intended changes before installing dependencies.
           grep -n 'security_block_dangerous' backend/core/config.py
           grep -n 'SDM_SECURITY_BLOCK_DANGEROUS' .env.example
           grep -n 'conversion_rules\|"rules"' backend/api/main.py
