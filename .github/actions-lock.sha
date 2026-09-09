@@ -1,4 +1,4 @@
 actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
-github/codeql-action@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd
+github/codeql-action@cdf488f595d80d6e07e03d4674febd5ab45fa938
 pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33
