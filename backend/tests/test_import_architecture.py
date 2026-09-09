@@ -2,12 +2,12 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-PYTHON_ROOTS = (REPO_ROOT / "backend", REPO_ROOT / "examples", REPO_ROOT / "scripts", REPO_ROOT)
+RUNTIME_ROOTS = (REPO_ROOT / "backend" / "api", REPO_ROOT / "backend" / "core", REPO_ROOT / "examples", REPO_ROOT / "scripts", REPO_ROOT / "frontend")
 
 
 def _python_files():
     seen = set()
-    for root in PYTHON_ROOTS:
+    for root in RUNTIME_ROOTS:
         if root.is_file() and root.suffix == ".py":
             candidates = [root]
         else:
