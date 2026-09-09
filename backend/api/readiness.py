@@ -19,17 +19,17 @@ logger = logging.getLogger(__name__)
 _PROBE_CACHE_TTL_SECONDS = 5.0
 _PROBE_TIMEOUT_SECONDS = 3.0
 _PROBE_LOCK = asyncio.Lock()
-_PROBE_TOKEN_HEADER = "x-probe-token"
-_PROBE_TOKEN_ENV = "SDM_PROBE_TOKEN"
+_PROBE_AUTH_HEADER = "x-probe-token"
+_PROBE_AUTH_ENV = "SDM_PROBE_TOKEN"
 _cached_checks: dict[str, dict[str, Any]] | None = None
 _cached_at = 0.0
 
 
 def _probe_allowed(request: Request) -> bool:
-    configured = os.getenv(_PROBE_TOKEN_ENV, "").strip()
+    configured = os.getenv(_PROBE_AUTH_ENV, "").strip()
     if configured:
         return hmac.compare_digest(
-            request.headers.get(_PROBE_TOKEN_HEADER, ""), configured
+            request.headers.get(_PROBE_AUTH_HEADER, ""), configured
         )
     host = request.client.host if request.client else ""
     if host in {"testclient", "localhost"}:
