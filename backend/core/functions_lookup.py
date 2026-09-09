@@ -22,6 +22,7 @@ from .config import (
     settings
 )
 from .exceptions import ConfigurationError
+from .function_semantics import FunctionSemanticRegistry
 from .p2_data_validation import _validate_function_entry
 
 # Configure module logger
@@ -37,20 +38,23 @@ class FunctionEncyclopedia:
     - 12 database dialects support
     - Fuzzy search with relevance scoring
     - Function examples and parameter documentation
+    - Strict semantic equivalence classification for reviewed function pairs
     """
     
     CATEGORIES = FUNCTION_CATEGORIES
     CATEGORY_DESCRIPTIONS = CATEGORY_DESCRIPTIONS
     
-    def __init__(self, data_path: Optional[Path] = None):
+    def __init__(self, data_path: Optional[Path] = None, semantic_registry: Optional[FunctionSemanticRegistry] = None):
         """Initialize encyclopedia with function data.
         
         Args:
             data_path: Path to functions_db.json. Uses default if None.
+            semantic_registry: Optional reviewed semantic registry. Defaults to the shared registry.
         """
         if data_path is None:
             data_path = Path(__file__).parent / "functions_db.json"
         self.data_path = data_path
+        self.semantic_registry = semantic_registry or FunctionSemanticRegistry()
         self.functions: List[FunctionInfo] = self._load_data()
         self._build_index()
     
@@ -151,6 +155,10 @@ class FunctionEncyclopedia:
         if func:
             return func.get("dialects", {}).get(dialect.lower())
         return None
+
+    def resolve_function_semantics(self, func_name: str, source_dialect: str, target_dialect: str) -> Dict[str, Any]:
+        """Resolve reviewed semantic equivalence without inferring from syntax presence."""
+        return self.semantic_registry.resolve(func_name, source_dialect, target_dialect)
     
     def compare_dialects(self, func_name: str, dialects: List[str] = None) -> Dict[str, Any]:
         """Compare function syntax across multiple dialects."""
@@ -225,19 +233,23 @@ class FunctionEncyclopedia:
                 key=lambda x: x[1], reverse=True
             )[:5]
         }
-    
+
     def find_equivalent(self, func_name: str, source_dialect: str, target_dialect: str) -> Optional[Dict[str, Any]]:
-        """Find equivalent function syntax in target dialect."""
+        """Find target syntax while exposing strict semantic classification."""
         func = self.get_function(func_name)
         if not func:
             return None
         
         dialects = func.get("dialects", {})
-        source_syntax = dialects.get(source_dialect.lower())
-        target_syntax = dialects.get(target_dialect.lower())
+        source_dialect = source_dialect.lower()
+        target_dialect = target_dialect.lower()
+        source_syntax = dialects.get(source_dialect)
+        target_syntax = dialects.get(target_dialect)
         
         if not source_syntax or source_syntax == "N/A":
             return None
+
+        semantic = self.resolve_function_semantics(func_name, source_dialect, target_dialect)
         
         return {
             "function": func_name,
@@ -246,6 +258,12 @@ class FunctionEncyclopedia:
             "source_syntax": source_syntax,
             "target_syntax": target_syntax if target_syntax and target_syntax != "N/A" else None,
             "supported_in_target": target_syntax is not None and target_syntax != "N/A",
+            "semantic_status": semantic["status"],
+            "semantic_equivalent": semantic["equivalent"],
+            "semantic_argument_semantics": semantic.get("argument_semantics", ""),
+            "semantic_return_shape": semantic.get("return_shape", ""),
+            "semantic_null_behavior": semantic.get("null_behavior", ""),
+            "semantic_notes": semantic.get("notes", ""),
             "notes": func.get("notes", "")
         }
     
