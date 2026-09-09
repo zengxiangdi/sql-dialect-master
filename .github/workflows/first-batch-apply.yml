@@ -45,19 +45,17 @@ jobs:
 
           transpiler = Path("backend/core/transpiler.py")
           text = transpiler.read_text(encoding="utf-8")
-          before = text
           text, n = re.subn(r"\s+skip_security\s*:\s*bool\s*=\s*False", "", text)
           assert n == 2, f"expected 2 skip_security signatures, found {n}"
           text = text.replace(" and not skip_security", "")
           text = text.replace(", skip_security)", ")")
           text = text.replace("|{skip_security}|", "|")
           assert "skip_security" not in text, "public security bypass remains"
-          assert text != before, "transpiler security-bypass patch made no changes"
           transpiler.write_text(text, encoding="utf-8")
 
           main = Path("backend/api/main.py")
           main_text = main.read_text(encoding="utf-8")
-          main_text, n = re.subn(r'("rules":\s*\{"count":\s*)40(,\s*"label":\s*"🔧 Conversion Rules"\})', r'\1len(transpiler.post_processor.engine.rules)\2', main_text, count=1)
+          main_text, n = re.subn(r'("rules":\s*\{\s*"count":\s*)40', r'\1len(transpiler.post_processor.engine.rules)', main_text, count=1)
           assert n == 1, f"expected root rule count replacement, found {n}"
           main_text, n = re.subn(r'("conversion_rules":\s*)40', r'\1len(transpiler.post_processor.engine.rules)', main_text, count=1)
           assert n == 1, f"expected stats rule count replacement, found {n}"
