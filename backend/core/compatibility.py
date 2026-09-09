@@ -12,8 +12,6 @@ _PATCH_MODULES = (
     "production_hardening",
     "p1_hardening",
     "p2_data_validation",
-    "p2_health_semantics",
-    "p2_health_semantics_fix",
     "operational_hardening",
 )
 
