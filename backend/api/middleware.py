@@ -294,10 +294,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         return response
 
     async def dispatch(self, request: Request, call_next) -> Response:
-        return await self._structured_logging.dispatch(
-            request,
-            self._dispatch_inner,
-        )
+        async def wrapped_dispatch_inner(request: Request) -> Response:
+            return await self._dispatch_inner(request, call_next)
+
+        return await self._structured_logging.dispatch(request, wrapped_dispatch_inner)
 
     def _get_client_id(self, request: Request) -> str:
         return request.client.host if request.client else "unknown"
