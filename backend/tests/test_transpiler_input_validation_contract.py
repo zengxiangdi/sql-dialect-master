@@ -33,11 +33,9 @@ def test_transpile_rejects_empty_sql_before_dialect_work(transpiler):
     assert result.error == "Empty SQL statement"
 
 
-def test_transpile_rejects_multiple_statements_with_stable_validation_code(transpiler):
+def test_transpile_rejects_multiple_statements_with_security_code(transpiler):
     result = transpiler.transpile("SELECT 1; SELECT 2", "mysql", "postgres")
 
     assert result.success is False
-    assert result.error_code == ErrorCode.VALIDATION_FAILED.value
-    assert result.error == (
-        "Multiple SQL statements are not supported; submit one statement per request"
-    )
+    assert result.error_code == ErrorCode.SECURITY_VIOLATION.value
+    assert result.error == "Security check failed: Multiple SQL statements detected"
