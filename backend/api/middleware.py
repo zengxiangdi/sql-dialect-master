@@ -181,7 +181,7 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
         return response
 
 
-class SecurityHeadersMiddleware:
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     """Add security headers to responses."""
 
     async def dispatch(self, request: Request, call_next) -> Response:
