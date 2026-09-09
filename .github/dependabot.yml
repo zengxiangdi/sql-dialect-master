@@ -8,6 +8,10 @@ updates:
     labels:
       - dependencies
       - python
+    ignore:
+      - dependency-name: "websockets"
+        versions:
+          - ">=17"
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
