@@ -67,6 +67,21 @@ def _node_counts(tree: exp.Expression) -> Counter[str]:
     return Counter(type(node).__name__ for node in tree.walk())
 
 
+def _function_names(tree: exp.Expression) -> List[str]:
+    names = []
+    for node in tree.walk():
+        sql_name = getattr(node, "sql_name", None)
+        if not callable(sql_name):
+            continue
+        try:
+            name = str(sql_name()).upper()
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if name and name not in {"SELECT", "COLUMN", "TABLE", "LITERAL"}:
+            names.append(name)
+    return sorted(names)
+
+
 def _context_sensitive_functions(tree: exp.Expression) -> List[str]:
     names = set()
     for node in tree.walk():
@@ -82,7 +97,11 @@ def _context_sensitive_functions(tree: exp.Expression) -> List[str]:
     return sorted(names)
 
 
-def _difference_categories(source_tree: exp.Expression, target_tree: exp.Expression) -> List[str]:
+def _difference_categories(
+    source_tree: exp.Expression,
+    target_tree: exp.Expression,
+    functions_differ: bool = False,
+) -> List[str]:
     categories = set()
     node_names = {type(node).__name__ for node in source_tree.walk()} | {
         type(node).__name__ for node in target_tree.walk()
@@ -90,6 +109,8 @@ def _difference_categories(source_tree: exp.Expression, target_tree: exp.Express
     for category, candidates in _CATEGORY_NODE_NAMES.items():
         if node_names & candidates:
             categories.add(category)
+    if functions_differ:
+        categories.add("function")
     return sorted(categories) or ["structure"]
 
 
@@ -123,6 +144,9 @@ def diff_sql_ast(
     target_normalized = _canonical_sql(target_tree)
     source_counts = _node_counts(source_tree)
     target_counts = _node_counts(target_tree)
+    source_functions = _function_names(source_tree)
+    target_functions = _function_names(target_tree)
+    functions_differ = source_functions != target_functions
 
     differences: List[str] = []
     categories: List[str] = []
@@ -138,7 +162,10 @@ def diff_sql_ast(
         )
         differences.append("Canonical AST SQL differs")
         differences.extend(diff_lines[:20])
-        categories = _difference_categories(source_tree, target_tree)
+        categories = _difference_categories(source_tree, target_tree, functions_differ)
+    elif functions_differ:
+        differences.append("Function expression set differs")
+        categories = ["function"]
 
     changed_nodes = sorted(set(source_counts) | set(target_counts))
     for node_name in changed_nodes:
