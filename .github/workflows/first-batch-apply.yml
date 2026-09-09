@@ -1,0 +1,142 @@
+name: Apply first batch hardening
+
+on:
+  push:
+    branches: [fix/first-batch-hardening]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.head_commit.message != 'chore: apply first batch hardening'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+
+      - name: Apply first-batch changes
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_exact(path: str, old: str, new: str, expected: int = 1) -> None:
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              count = text.count(old)
+              assert count == expected, f"{path}: expected {expected} matches, found {count}: {old!r}"
+              p.write_text(text.replace(old, new), encoding="utf-8")
+
+          # 1) Make the security policy explicit and eliminate the split-brain override.
+          replace_exact(
+              "backend/core/config.py",
+              '    security_block_dangerous: bool = False\n',
+              '    security_block_dangerous: bool = True\n',
+          )
+          init = Path("backend/core/__init__.py")
+          init_text = init.read_text(encoding="utf-8")
+          old_init = '''import os\n\n'''
+          assert init_text.count(old_init) == 1, "unexpected __init__.py os import shape"
+          init_text = init_text.replace(old_init, "", 1)
+          old_override = '''# Dangerous SQL is blocked by default at package runtime. Operators that need\n# the previous compatibility behavior must opt out explicitly via environment.\nif "SDM_SECURITY_BLOCK_DANGEROUS" not in os.environ:\n    settings.security_block_dangerous = True\n\n'''
+          assert init_text.count(old_override) == 1, "unexpected security override block"
+          init_text = init_text.replace(old_override, "", 1)
+          init.write_text(init_text, encoding="utf-8")
+          replace_exact(
+              ".env.example",
+              'SDM_SECURITY_BLOCK_DANGEROUS=false\n',
+              'SDM_SECURITY_BLOCK_DANGEROUS=true\n',
+          )
+
+          # 2) Remove the public security-bypass escape hatch.
+          transpiler = Path("backend/core/transpiler.py")
+          text = transpiler.read_text(encoding="utf-8")
+          replace_exact(
+              "backend/core/transpiler.py",
+              '        skip_security: bool = False\n',
+              '',
+          )
+          replace_exact(
+              "backend/core/transpiler.py",
+              '            if self._cache_enabled:\n                cache_key = self._cache_key(sql, source, target, pretty, validate, skip_security)\n',
+              '            if self._cache_enabled:\n                cache_key = self._cache_key(sql, source, target, pretty, validate)\n',
+          )
+          replace_exact(
+              "backend/core/transpiler.py",
+              '        if security_enabled and not skip_security:\n',
+              '        if security_enabled:\n',
+          )
+          replace_exact(
+              "backend/core/transpiler.py",
+              '    def _cache_key(self, sql: str, source: str, target: str, pretty: bool, validate: bool = True, skip_security: bool = False) -> str:\n',
+              '    def _cache_key(self, sql: str, source: str, target: str, pretty: bool, validate: bool = True) -> str:\n',
+          )
+          replace_exact(
+              "backend/core/transpiler.py",
+              '        return f"v4|{rule_version}|{security_version}|{skip_security}|{sql}|{source}|{target}|{pretty}|{validate}"\n',
+              '        return f"v4|{rule_version}|{security_version}|{sql}|{source}|{target}|{pretty}|{validate}"\n',
+          )
+          text = transpiler.read_text(encoding="utf-8")
+          assert "skip_security" not in text, "public security bypass remains in transpiler.py"
+
+          # 3) Make rule counts derive from the loaded rule engine.
+          replace_exact(
+              "backend/api/main.py",
+              '            "rules": {"count": 40, "label": "🔧 Conversion Rules"},\n',
+              '            "rules": {"count": len(transpiler.post_processor.engine.rules), "label": "🔧 Conversion Rules"},\n',
+          )
+          replace_exact(
+              "backend/api/main.py",
+              '                "conversion_rules": 40\n',
+              '                "conversion_rules": len(transpiler.post_processor.engine.rules)\n',
+          )
+
+          # 4) Add an executable regression for the removed bypass parameter.
+          test_file = Path("backend/tests/test_default_security_policy.py")
+          test_text = test_file.read_text(encoding="utf-8")
+          replace = 'import subprocess\nimport sys\n'
+          assert test_text.count(replace) == 1, "unexpected test import block"
+          test_text = test_text.replace('import subprocess\nimport sys\n', 'import subprocess\nimport sys\n\nimport pytest\n', 1)
+          test_text += '''\n\ndef test_security_bypass_parameter_is_not_supported():\n    with pytest.raises(TypeError):\n        SQLTranspiler().transpile(\n            "DROP TABLE users",\n            "mysql",\n            "postgres",\n            skip_security=True,\n        )\n'''
+          test_file.write_text(test_text, encoding="utf-8")
+
+          # 5) Document the syntax-vs-semantics limitation explicitly.
+          readme = Path("README.md")
+          readme_text = readme.read_text(encoding="utf-8")
+          marker = "## ⚙️ Configuration\n"
+          limitation = '''## ⚠️ Limitations\n\nSQL dialect conversion is not universally semantics-preserving. The engine validates generated SQL against the target parser, but parser acceptance does not prove equivalent runtime behavior. Database-specific differences in NULL handling, implicit casts, date/time semantics, collation, timezone behavior, JSON/array operations, and other vendor features may require manual review or execution against the target database.\n\nNL2SQL is heuristic/template-driven rather than a calibrated probabilistic model. The returned confidence score should be treated as a generation-quality signal, not as a statistical probability that the SQL is correct.\n\n'''
+          assert readme_text.count(marker) == 1, "README configuration marker not found"
+          readme_text = readme_text.replace(marker, limitation + marker, 1)
+          readme.write_text(readme_text, encoding="utf-8")
+          PY
+
+          # Verify no stale public bypass or hard-coded rule count remains in active code.
+          ! grep -R --line-number --fixed-strings 'skip_security' backend --exclude-dir='__pycache__' || true
+          ! grep -R --line-number --fixed-strings 'conversion_rules": 40' backend || true
+          ! grep -R --line-number --fixed-strings '"rules": {"count": 40' backend || true
+
+      - name: Install locked dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-lock.txt
+          pip install -e ".[dev]" --no-deps
+
+      - name: Verify first-batch changes
+        run: |
+          pytest backend/tests/test_default_security_policy.py -q
+          pytest backend/tests/test_api.py backend/tests/test_api_error_codes.py -q
+          python -m compileall -q backend frontend sdm_local.py
+
+      - name: Commit first-batch changes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md .env.example backend/core/config.py backend/core/__init__.py backend/core/transpiler.py backend/api/main.py backend/tests/test_default_security_policy.py
+          git diff --cached --check
+          git commit -m "chore: apply first batch hardening"
+          git push origin HEAD:fix/first-batch-hardening
