@@ -13,7 +13,7 @@ def test_transpiler_rejects_stacked_statements():
     )
 
     assert result.success is False
-    assert result.error_code == "VALIDATION_FAILED"
+    assert result.error_code == "SECURITY_VIOLATION"
     assert "Multiple SQL statements" in result.error
 
 
