@@ -130,6 +130,28 @@ class SQLTranspiler:
             )
 
         try:
+            parsed_statements = sqlglot.parse(sql, read=source)
+            if len(parsed_statements) != 1:
+                return TranspileResult(
+                    success=False,
+                    source_sql=sql,
+                    source_dialect=source,
+                    target_dialect=target,
+                    error="Exactly one SQL statement is required",
+                    error_code=ErrorCode.VALIDATION_FAILED.value,
+                )
+        except Exception as parse_error:
+            logger.warning("SQL input validation failed: %s", parse_error)
+            return TranspileResult(
+                success=False,
+                source_sql=sql,
+                source_dialect=source,
+                target_dialect=target,
+                error=f"Invalid SQL input: {str(parse_error)[:200]}",
+                error_code=ErrorCode.VALIDATION_FAILED.value,
+            )
+
+        try:
             transpiled = sqlglot.transpile(sql, read=source, write=target, pretty=pretty)[0]
             final_sql, transformations = self.post_processor.process(transpiled, source, target)
             compat_notes = self._get_compatibility_notes(source, target, sql)
@@ -246,7 +268,9 @@ class SQLTranspiler:
     def _validate_output(self, sql: str, dialect: str) -> Optional[str]:
         """Validate output SQL syntax under the requested target dialect."""
         try:
-            sqlglot.parse_one(sql, read=dialect)
+            parsed_statements = sqlglot.parse(sql, read=dialect)
+            if len(parsed_statements) != 1:
+                return "Output SQL must contain exactly one SQL statement"
             return None
         except Exception as target_error:
             return f"⚠️ Output SQL may have syntax issues: {str(target_error)[:100]}"
