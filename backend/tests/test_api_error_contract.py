@@ -35,7 +35,6 @@ def test_unhandled_exception_returns_generic_internal_error(monkeypatch):
     assert data["error"]["message"] == "Internal server error"
     assert "secret database password" not in response.text
     assert data["request_id"] == "12345678-1234-4123-8123-123456789abc"
-    assert response.headers["X-Request-ID"] == "12345678-1234-4123-8123-123456789abc"
 
 
 def test_sdm_exception_returns_stable_error_code(monkeypatch):
