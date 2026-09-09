@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import weakref
 from datetime import datetime
 from typing import Any
 
@@ -15,9 +16,20 @@ logger = logging.getLogger(__name__)
 
 _READINESS_CACHE_TTL_SECONDS = 5.0
 _READINESS_TIMEOUT_SECONDS = 3.0
-_READINESS_LOCK = asyncio.Lock()
+_READINESS_LOCKS: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = weakref.WeakKeyDictionary()
+_READINESS_LOCKS_GUARD = __import__("threading").Lock()
 _cached_checks: dict[str, dict[str, Any]] | None = None
 _cached_at = 0.0
+
+
+def _get_readiness_lock() -> asyncio.Lock:
+    loop = asyncio.get_running_loop()
+    with _READINESS_LOCKS_GUARD:
+        lock = _READINESS_LOCKS.get(loop)
+        if lock is None:
+            lock = asyncio.Lock()
+            _READINESS_LOCKS[loop] = lock
+        return lock
 
 
 def _run_checks() -> dict[str, dict[str, Any]]:
@@ -53,12 +65,12 @@ def _run_checks() -> dict[str, dict[str, Any]]:
 
 
 async def _get_checks() -> dict[str, dict[str, Any]]:
-    """Run at most one expensive probe at a time and reuse it briefly."""
+    """Run at most one expensive probe at a time per event loop and reuse it briefly."""
     global _cached_checks, _cached_at
     now = time.monotonic()
     if _cached_checks is not None and now - _cached_at < _READINESS_CACHE_TTL_SECONDS:
         return _cached_checks
-    async with _READINESS_LOCK:
+    async with _get_readiness_lock():
         now = time.monotonic()
         if _cached_checks is not None and now - _cached_at < _READINESS_CACHE_TTL_SECONDS:
             return _cached_checks
