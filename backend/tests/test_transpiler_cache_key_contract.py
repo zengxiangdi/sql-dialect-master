@@ -16,13 +16,17 @@ def test_cache_key_separates_validation_mode() -> None:
 
 def test_cache_key_changes_when_rule_contract_changes() -> None:
     transpiler = SQLTranspiler()
-    baseline = transpiler._cache_key("SELECT 1", "postgres", "mysql")
+    baseline = transpiler._cache_key(
+        "SELECT 1", "postgres", "mysql", pretty=True, validate=True
+    )
 
     rule = transpiler.post_processor.engine.rules[0]
     original_pattern = rule.pattern
     try:
         rule.pattern = original_pattern + "_cache_contract"
-        changed = transpiler._cache_key("SELECT 1", "postgres", "mysql")
+        changed = transpiler._cache_key(
+            "SELECT 1", "postgres", "mysql", pretty=True, validate=True
+        )
     finally:
         rule.pattern = original_pattern
 
