@@ -91,7 +91,8 @@ def executable_segments(sql: str) -> Iterator[Tuple[int, int]]:
                 i += 1
             continue
         if state == "dollar_quote":
-            assert dollar_tag is not None
+            if dollar_tag is None:
+                return
             end = sql.find(dollar_tag, i)
             if end == -1:
                 return
