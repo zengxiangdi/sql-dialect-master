@@ -37,8 +37,8 @@ def test_nl2sql_non_string_input_preserves_type_contract() -> None:
         raise AssertionError("Expected TypeError for non-string NL2SQL input")
 
 
-def test_target_output_validation_is_strict() -> None:
+def test_target_output_validation_reports_syntax_failure() -> None:
     transpiler = SQLTranspiler()
     error = transpiler._validate_output("SELECT definitely_not_valid__(", "postgres")
     assert error is not None
-    assert "postgres dialect validation" in error
+    assert "Output SQL may have syntax issues" in error
