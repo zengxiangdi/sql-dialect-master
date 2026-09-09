@@ -5,14 +5,14 @@ from importlib import import_module
 _PATCH_MODULES = (
     "nl2sql_null_predicate_fix",
     "nl2sql_comparison_precedence_fix",
-    "final_hardening",
     "audit_hardening",
+    "final_hardening",
     "production_hardening",
 )
 
 
 def install_compatibility_patches() -> None:
-    """Install remaining legacy compatibility adapters in order."""
+    """Install remaining legacy compatibility adapters in deterministic order."""
     from .nl2sql import NL2SQLGenerator
     from .nl2sql_components.boolean_conditions import extract_boolean_conditions
 
