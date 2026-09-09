@@ -2,6 +2,8 @@
 
 Enterprise-grade multi-database SQL conversion engine supporting 12 database dialects.
 
+Current release: 1.0.1
+
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-green.svg)](https://fastapi.tiangolo.com/)
@@ -146,6 +148,7 @@ sql-dialect-master/
 │   │   └── exceptions.py        # Custom exceptions + ErrorCode taxonomy
 │   ├── utils/
 │   │   └── validators.py        # Input validation
+│   │
 │   └── tests/                   # Test suite and regression coverage
 ├── frontend/                    # Streamlit UI Components
 │   ├── tabs/                    # Modular Tab Pages
@@ -162,6 +165,8 @@ sql-dialect-master/
 ├── examples/
 │   ├── api_client.py             # API usage examples
 │   └── basic_usage.py            # SDK usage examples
+├── scripts/
+│   └── verify_readme_consistency.py # README source-of-truth checks
 ├── sdm_local.py                 # Streamlit Application Entry
 ├── pyproject.toml               # Project configuration
 ├── requirements.txt              # Legacy/runtime dependency list
@@ -198,7 +203,21 @@ The semantic CI gate executes representative conversions against PostgreSQL and 
 
 Security validation structurally detects stacked SQL statements using the parser when available, with configurable policy controlling whether dangerous input is blocked or only warned about.
 
-The async batch API bounds concurrent work and preserves input order. A reproducible transpiler benchmark is available under `backend/benchmarks/` and is intentionally kept outside CI performance assertions.
+The async batch API bounds concurrent work and preserves input order. A reproducible transpiler benchmark is available under `backend/benchmarks/` and is also executed in CI for performance observability. The benchmark intentionally reports measurements without failing the build on a fixed latency threshold because hosted CI timing is variable.
+
+README source-of-truth checks run in CI and verify the release version, Python requirement, supported dialect list, and benchmark references against repository sources.
+
+To run the benchmark locally:
+
+```bash
+python backend/benchmarks/transpiler_benchmark.py --iterations 100 --repeats 3
+```
+
+To validate README consistency locally:
+
+```bash
+python scripts/verify_readme_consistency.py
+```
 
 ## ⚠️ Limitations
 
@@ -218,49 +237,3 @@ cp .env.example .env
 
 Key settings (prefixed with `SDM_`):
 - `SDM_CACHE_ENABLED` - Enable/disable caching
-- `SDM_CACHE_TTL` - Cache time-to-live (seconds)
-- `SDM_RATE_LIMIT_REQUESTS` - Rate limit per window
-- `SDM_LOG_LEVEL` - Logging level
-- `SDM_SECURITY_BLOCK_DANGEROUS` - Block dangerous SQL instead of warning
-
-## 🧪 Testing
-
-```bash
-# Install development dependencies
-python -m pip install -e ".[dev]"
-
-# Run all tests
-pytest
-
-# Run with coverage
-pytest --cov=backend
-
-# Run database-backed semantic tests
-python -m pip install -e ".[dev,semantic]"
-pytest backend/tests/test_runtime_semantics.py -q
-
-# Run the reproducible benchmark
-python backend/benchmarks/transpiler_benchmark.py
-```
-
-CI runs the complete pytest suite and Python compilation checks on Python 3.11 and 3.12, plus a PostgreSQL + DuckDB runtime semantic gate on Python 3.12.
-
-## 📄 License
-
-MIT License - see [LICENSE](LICENSE) file.
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-## 📬 Contact
-
-- Issues: [GitHub Issues](https://github.com/zengxiangdi/sql-dialect-master/issues)
-
----
-
-Made with ❤️ using [sqlglot](https://github.com/tobymao/sqlglot), [FastAPI](https://fastapi.tiangolo.com/), and [Streamlit](https://streamlit.io/)
