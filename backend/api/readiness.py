@@ -20,6 +20,7 @@ _READINESS_CACHE_TTL_SECONDS = 5.0
 _READINESS_TIMEOUT_SECONDS = 3.0
 _READINESS_LOCKS: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = weakref.WeakKeyDictionary()
 _READINESS_LOCKS_GUARD = __import__("threading").Lock()
+_READINESS_CACHE = {"checks": None, "cached_at": 0.0}
 _HEALTH_PROBE_PATHS = {"/ready", "/health/deep"}
 
 
@@ -108,14 +109,14 @@ def _run_checks() -> dict[str, dict[str, Any]]:
 async def _get_checks() -> dict[str, dict[str, Any]]:
     """Run at most one expensive probe at a time per event loop and reuse it briefly."""
     now = time.monotonic()
-    cached_checks = getattr(_get_checks, "_cached_checks", None)
-    cached_at = getattr(_get_checks, "_cached_at", 0.0)
+    cached_checks = _READINESS_CACHE["checks"]
+    cached_at = _READINESS_CACHE["cached_at"]
     if cached_checks is not None and now - cached_at < _READINESS_CACHE_TTL_SECONDS:
         return cached_checks
     async with _get_readiness_lock():
         now = time.monotonic()
-        cached_checks = getattr(_get_checks, "_cached_checks", None)
-        cached_at = getattr(_get_checks, "_cached_at", 0.0)
+        cached_checks = _READINESS_CACHE["checks"]
+        cached_at = _READINESS_CACHE["cached_at"]
         if cached_checks is not None and now - cached_at < _READINESS_CACHE_TTL_SECONDS:
             return cached_checks
         try:
@@ -126,8 +127,8 @@ async def _get_checks() -> dict[str, dict[str, Any]]:
         except Exception:
             logger.exception("Readiness probe failed unexpectedly")
             checks = {"probe": {"status": "error", "code": "probe_failed"}}
-        _get_checks._cached_checks = checks
-        _get_checks._cached_at = time.monotonic()
+        _READINESS_CACHE["checks"] = checks
+        _READINESS_CACHE["cached_at"] = time.monotonic()
         return checks
 
 
