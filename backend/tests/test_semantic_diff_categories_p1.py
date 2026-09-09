@@ -59,7 +59,7 @@ def test_join_only_change_reports_join_without_projection():
         target_dialect="postgres",
     )
 
-    assert result.difference_categories == ["join", "predicate"]
+    assert result.difference_categories == ["join"]
 
 
 def test_limit_only_change_reports_row_limit():
