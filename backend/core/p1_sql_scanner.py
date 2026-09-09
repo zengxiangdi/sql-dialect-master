@@ -11,7 +11,6 @@ def executable_segments(sql: str) -> Iterator[Tuple[int, int]]:
     n = len(sql)
     state = "code"
     dollar_tag = None
-    quote = None
     while i < n:
         if state == "code":
             if sql.startswith("--", i):
