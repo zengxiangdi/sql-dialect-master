@@ -19,17 +19,15 @@ from backend.core.p1_sql_scanner import mask_non_executable
 
 
 def _probe_allowed(request: Any) -> bool:
-    """Only permit health probes from loopback or with an explicitly configured token."""
+    """Allow probes only from loopback or with an explicitly configured secret."""
     token = os.getenv("SDM_HEALTH_PROBE_TOKEN", "").strip()
     supplied = request.headers.get("X-Health-Probe-Token", "")
     if token and supplied and secrets.compare_digest(supplied, token):
         return True
     client = request.client
-    host = client.host if client else None
-    return host in {"127.0.0.1", "::1", "localhost"}
+    return bool(client and client.host in {"127.0.0.1", "::1", "localhost"})
 
 
-# Validate generator-level use regardless of which API calls the core directly.
 _ORIGINAL_NL2SQL_GENERATE = NL2SQLGenerator.generate
 
 
@@ -52,30 +50,28 @@ if not getattr(NL2SQLGenerator, "_sdm_column_hints_validation", False):
     NL2SQLGenerator._sdm_column_hints_validation = True
 
 
-# Replace the remaining global-regex ROWNUM rewrite with position-preserving scanning.
 def _convert_rownum_scanned(self, sql: str):
+    """Convert only an executable ROWNUM predicate; never rewrite literals/comments."""
     notes = []
     masked = mask_non_executable(sql)
     match = re.search(r"ROWNUM\s*<=?\s*(\d+)", masked, re.IGNORECASE)
     if not match:
         return sql, notes
+
     n = match.group(1)
     start, end = match.span()
-    result = sql[:start] + sql[end:]
-    # Remove an adjacent AND / WHERE keyword only in the same executable slice.
-    result = re.sub(r"\s+AND\s*$", "", result[:start]) + result[start:] if False else result
-    masked_result = mask_non_executable(result)
-    # Safe cleanup of the exact clause boundaries using the scanner-masked text
-    # to locate, then apply slices to the original text.
-    before = result[:start]
-    after = result[start:]
-    if re.search(r"\bWHERE\s*$", mask_non_executable(before), re.IGNORECASE):
-        before = re.sub(r"\s+WHERE\s*$", "", before, flags=re.IGNORECASE)
-    elif re.search(r"\s+AND\s*$", mask_non_executable(before), re.IGNORECASE):
-        before = re.sub(r"\s+AND\s*$", "", before, flags=re.IGNORECASE)
+    before = sql[:start]
+    after = sql[end:]
+    masked_before = masked[:start]
+
+    boundary = re.search(r"(?:\bWHERE\s*|\bAND\s*)$", masked_before, re.IGNORECASE)
+    if boundary:
+        before = before[:boundary.start()]
+
     result = before + after
+    masked_result = mask_non_executable(result)
     if "LIMIT" not in masked_result.upper():
-        result = result.rstrip(';').rstrip() + f" LIMIT {n}"
+        result = result.rstrip(";").rstrip() + f" LIMIT {n}"
     notes.append(f"Converted ROWNUM to LIMIT {n}")
     return result, notes
 
@@ -85,7 +81,6 @@ if not getattr(PostProcessor, "_sdm_rownum_scanner_patch", False):
     PostProcessor._sdm_rownum_scanner_patch = True
 
 
-# Gate readiness and deep-health endpoints and make both use the same cached probe result.
 _ORIGINAL_RATE_LIMIT_DISPATCH = RateLimitMiddleware.dispatch
 
 
@@ -130,7 +125,6 @@ if not getattr(RateLimitMiddleware, "_sdm_operational_health_patch", False):
     RateLimitMiddleware._sdm_operational_health_patch = True
 
 
-# Ensure every FastAPI application created by this service has structured request logging.
 _ORIGINAL_FASTAPI_INIT = FastAPI.__init__
 
 
