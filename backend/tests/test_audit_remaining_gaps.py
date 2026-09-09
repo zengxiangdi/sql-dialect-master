@@ -80,10 +80,22 @@ def test_real_app_health_probes_are_publicly_denied():
     assert client.get("/health/deep").status_code == 403
 
 
-def test_real_app_health_probes_accept_authorized_token(monkeypatch):
+def test_real_app_health_probes_accept_authorized_probe(monkeypatch):
     from backend.api.main import app
 
     monkeypatch.setenv("SDM_HEALTH_PROBE_TOKEN", "test-health-token")
+    monkeypatch.setattr(
+        readiness,
+        "_run_checks",
+        lambda: {
+            "transpiler": {"status": "ok"},
+            "functions": {"status": "ok"},
+            "types": {"status": "ok"},
+            "nl2sql": {"status": "ok"},
+        },
+    )
+    readiness._cached_checks = None
+    readiness._cached_at = 0.0
     client = TestClient(app)
 
     ready = client.get("/ready", headers=PROBE_HEADERS)
@@ -93,6 +105,7 @@ def test_real_app_health_probes_accept_authorized_token(monkeypatch):
     assert ready.json()["probe"] == "readiness"
     assert deep.status_code == 200
     assert "checks" in deep.json()
+    assert deep.json()["status"] == "✅ healthy"
 
 
 def test_real_app_ready_and_deep_health_share_probe_cache(monkeypatch):
