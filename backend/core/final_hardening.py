@@ -81,6 +81,14 @@ def _apply_dialect_adjustments_safe(self, sql: str, dialect: str):
     elif dialect == "mysql":
         replacements = [
             (
+                re.compile(r"\bDATE_SUB\(CURRENT_DATE\s*,\s*(\d+)\s*\)", re.IGNORECASE),
+                r"DATE_SUB(CURRENT_DATE, INTERVAL \1 DAY)",
+            ),
+            (
+                re.compile(r"\bDATE_ADD\(CURRENT_DATE\s*,\s*(\d+)\s*\)", re.IGNORECASE),
+                r"DATE_ADD(CURRENT_DATE, INTERVAL \1 DAY)",
+            ),
+            (
                 re.compile(r"\bADD_MONTHS\(CURRENT_DATE\s*,\s*([+-]?\d+)\s*\)", re.IGNORECASE),
                 lambda match: (
                     f"DATE_SUB(CURRENT_DATE, INTERVAL {abs(int(match.group(1)))} MONTH)"
@@ -151,6 +159,20 @@ def _generate_from_template_with_order_semantics(
 
 
 NL2SQLGenerator._generate_from_template = _generate_from_template_with_order_semantics
+
+
+_original_match_templates = NL2SQLGenerator._match_templates
+
+
+def _match_templates_skip_dml(self, text: str):
+    """Route explicit INSERT/UPDATE/DELETE requests to the semantic builder."""
+    operation = self._detect_operation(text)
+    if operation in {"INSERT", "UPDATE", "DELETE"}:
+        return None, None
+    return _original_match_templates(self, text)
+
+
+NL2SQLGenerator._match_templates = _match_templates_skip_dml
 
 
 _original_generate = NL2SQLGenerator.generate
