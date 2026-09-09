@@ -1,9 +1,12 @@
 """AST regressions for IN / NOT IN boolean predicates."""
 
+import time
+
 import sqlglot
 from sqlglot import exp
 
 from backend.core.nl2sql import NL2SQLGenerator
+from backend.core.nl2sql_components.boolean_conditions import extract_boolean_conditions
 
 
 nl2sql = NL2SQLGenerator()
@@ -56,3 +59,15 @@ def test_chinese_not_in_predicate_is_preserved_with_comparison():
     assert isinstance(boolean.this.this.this, exp.In)
     assert isinstance(boolean.expression, exp.Paren)
     assert isinstance(boolean.expression.this, exp.GT)
+
+
+def test_chinese_set_predicate_handles_long_uncontrolled_value_linearly():
+    values = ",".join(f"value{i}" for i in range(5000))
+    text = f"查询类别在{values}中且价格大于100的产品"
+
+    started = time.monotonic()
+    conditions = extract_boolean_conditions(text)
+    elapsed = time.monotonic() - started
+
+    assert conditions
+    assert elapsed < 2.0
