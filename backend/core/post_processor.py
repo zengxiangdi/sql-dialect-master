@@ -9,6 +9,7 @@ import re
 from typing import Tuple, List, Callable
 
 from .rules import rule_engine, RuleEngine
+from .function_call_scanner import replace_function_calls
 from .p1_sql_scanner import mask_non_executable
 
 logger = logging.getLogger(__name__)
@@ -54,9 +55,18 @@ class PostProcessor:
             notes.extend(gc_notes)
         return result, notes
 
+    def _replace_function_calls(
+        self,
+        sql: str,
+        function_name: str,
+        replacer: Callable[[str, str], str],
+    ) -> str:
+        """Replace function calls using the shared quote/comment-aware scanner."""
+        return replace_function_calls(sql, function_name, replacer)
+
     def _convert_decode_to_case(self, sql: str) -> Tuple[str, List[str]]:
         notes = []
-        if "DECODE" not in sql.upper():
+        if "DECODE" not in mask_non_executable(sql).upper():
             return sql, notes
         def decode_to_case(args_str: str, original: str) -> str:
             args = self._parse_function_args(args_str)
@@ -109,7 +119,7 @@ class PostProcessor:
 
     def _convert_mysql_date_format(self, sql: str) -> Tuple[str, List[str]]:
         notes = []
-        if "DATE_FORMAT" not in sql.upper():
+        if "DATE_FORMAT" not in mask_non_executable(sql).upper():
             return sql, notes
         def convert_format(args_str: str, original: str) -> str:
             args = self._parse_function_args(args_str)
@@ -128,7 +138,7 @@ class PostProcessor:
 
     def _convert_postgres_to_char(self, sql: str) -> Tuple[str, List[str]]:
         notes = []
-        if "TO_CHAR" not in sql.upper():
+        if "TO_CHAR" not in mask_non_executable(sql).upper():
             return sql, notes
         def convert_format(args_str: str, original: str) -> str:
             args = self._parse_function_args(args_str)
@@ -200,7 +210,7 @@ class PostProcessor:
 
     def _check_warnings(self, sql: str, source: str, target: str) -> List[str]:
         warnings = []
-        sql_upper = sql.upper()
+        sql_upper = mask_non_executable(sql).upper()
         if source == "hive" and "INSERT OVERWRITE" in sql_upper and target in ("mysql", "postgres", "tsql", "oracle"):
             warnings.append(f"WARNING: INSERT OVERWRITE not supported in {target}. Use TRUNCATE + INSERT or MERGE instead.")
         if source == "oracle" and "CONNECT BY" in sql_upper and target in ("hive", "postgres", "mysql"):
