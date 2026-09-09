@@ -1,6 +1,7 @@
 """Focused regression coverage for the middleware error-code matrix."""
 
 import asyncio
+import json
 
 import pytest
 from starlette.responses import JSONResponse, Response
@@ -33,7 +34,7 @@ def test_error_status_matrix_has_stable_code(status_code, expected_code):
     )
 
     assert normalized.status_code == status_code
-    data = normalized.json()
+    data = json.loads(normalized.body)
     assert data["success"] is False
     assert data["error"]["code"] == expected_code
     assert data["request_id"] == REQUEST_ID
@@ -57,7 +58,7 @@ def test_domain_error_code_is_preserved_across_4xx_normalization():
         StructuredLoggingMiddleware._normalize_error_response(response, REQUEST_ID)
     )
 
-    assert normalized.json()["error"]["code"] == "TRANSPILE_FAILED"
+    assert json.loads(normalized.body)["error"]["code"] == "TRANSPILE_FAILED"
 
 
 def test_non_json_response_is_left_unchanged():
@@ -68,4 +69,4 @@ def test_non_json_response_is_left_unchanged():
     )
 
     assert normalized is response
-    assert normalized.text == "plain text"
+    assert normalized.body.decode() == "plain text"
