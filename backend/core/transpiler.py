@@ -17,15 +17,13 @@ from .config import (
 )
 from .post_processor import PostProcessor
 from .cache import TTLCache
-from .exceptions import (
-    ErrorCode,
-    TranspileError,
-    UnsupportedDialectError,
-    SecurityViolationError,
-    ValidationError
-)
+from .exceptions import ErrorCode, ValidationError
+from .p1_sql_scanner import mask_non_executable
 
 logger = logging.getLogger(__name__)
+_DANGEROUS_OPERATION_PATTERN = re.compile(
+    r"\b(DROP|TRUNCATE|ALTER|CREATE|GRANT|REVOKE)\b", re.IGNORECASE
+)
 
 
 @dataclass
@@ -75,14 +73,56 @@ class SQLTranspiler:
         validate: bool = True,
         skip_security: bool = False
     ) -> TranspileResult:
+        if not isinstance(sql, str):
+            return TranspileResult(
+                success=False,
+                source_sql=str(sql),
+                source_dialect=source if isinstance(source, str) else str(source),
+                target_dialect=target if isinstance(target, str) else str(target),
+                error="sql must be a string",
+                error_code=ErrorCode.VALIDATION_FAILED.value,
+            )
+        if not isinstance(source, str):
+            return TranspileResult(
+                success=False,
+                source_sql=sql,
+                source_dialect=str(source),
+                target_dialect=target if isinstance(target, str) else str(target),
+                error="source must be a string",
+                error_code=ErrorCode.VALIDATION_FAILED.value,
+            )
+        if not isinstance(target, str):
+            return TranspileResult(
+                success=False,
+                source_sql=sql,
+                source_dialect=source,
+                target_dialect=str(target),
+                error="target must be a string",
+                error_code=ErrorCode.VALIDATION_FAILED.value,
+            )
+
+        if len(sql) > settings.transpiler_max_sql_length:
+            return TranspileResult(
+                success=False,
+                source_sql=sql[:100] + "...",
+                source_dialect=source.strip().lower(),
+                target_dialect=target.strip().lower(),
+                error=f"SQL exceeds maximum length of {settings.transpiler_max_sql_length} characters",
+                error_code=ErrorCode.VALIDATION_FAILED.value,
+            )
+
         source = source.strip().lower()
         target = target.strip().lower()
 
         logger.info(f"Transpiling SQL: {source} -> {target}, length={len(sql)}")
         logger.debug(f"Input SQL: {sql[:200]}{'...' if len(sql) > 200 else ''}")
 
-        if self._security_enabled and not skip_security:
+        security_warnings: List[str] = []
+        security_enabled = settings.security_check_enabled
+        self._security_enabled = security_enabled
+        if security_enabled and not skip_security:
             security_result = self._validate_security(sql)
+            security_warnings = list(security_result["warnings"])
             if security_result["blocked"]:
                 logger.warning(f"SQL blocked by security check: {security_result['reason']}")
                 return TranspileResult(
@@ -92,15 +132,18 @@ class SQLTranspiler:
                     target_dialect=target,
                     error=f"Security check failed: {security_result['reason']}",
                     error_code=ErrorCode.SECURITY_VIOLATION.value,
-                    warnings=security_result["warnings"]
+                    warnings=security_warnings
                 )
 
-        if self._cache_enabled:
-            cache_key = self._cache_key(sql, source, target, pretty, validate, skip_security)
-            cached = self._cache.get(cache_key)
-            if cached:
-                logger.info("Returning cached result")
-                return TranspileResult(**cached)
+        if self._has_multiple_statements(sql):
+            return TranspileResult(
+                success=False,
+                source_sql=sql,
+                source_dialect=source,
+                target_dialect=target,
+                error="Multiple SQL statements are not supported; submit one statement per request",
+                error_code=ErrorCode.VALIDATION_FAILED.value,
+            )
 
         if source not in SUPPORTED_DIALECTS:
             return TranspileResult(
@@ -116,46 +159,34 @@ class SQLTranspiler:
                 error_code=ErrorCode.UNSUPPORTED_DIALECT.value
             )
 
-        if len(sql) > settings.transpiler_max_sql_length:
-            return TranspileResult(
-                success=False, source_sql=sql[:100] + "...", source_dialect=source, target_dialect=target,
-                error=f"SQL exceeds maximum length of {settings.transpiler_max_sql_length} characters",
-                error_code=ErrorCode.VALIDATION_FAILED.value
-            )
-
-        if not sql or not sql.strip():
+        if not sql.strip():
             return TranspileResult(
                 success=False, source_sql=sql, source_dialect=source, target_dialect=target,
                 error="Empty SQL statement", error_code=ErrorCode.VALIDATION_FAILED.value
             )
 
+        if self._cache_enabled:
+            cache_key = self._cache_key(sql, source, target, pretty, validate, skip_security)
+            cached = self._cache.get(cache_key)
+            if cached:
+                logger.info("Returning cached result")
+                return TranspileResult(**cached)
+
         try:
             transpiled = sqlglot.transpile(sql, read=source, write=target, pretty=pretty)[0]
             final_sql, transformations = self.post_processor.process(transpiled, source, target)
             compat_notes = self._get_compatibility_notes(source, target, sql)
-            warnings = self._generate_warnings(sql, source, target)
+            warnings = security_warnings + self._generate_warnings(sql, source, target)
 
             if validate:
                 validation_warning = self._validate_output(final_sql, target)
                 if validation_warning:
-                    logger.error(
-                        f"Output SQL validation failed: {source} -> {target}: {validation_warning}"
-                    )
+                    logger.error(f"Output SQL validation failed: {source} -> {target}: {validation_warning}")
                     return TranspileResult(
-                        success=False,
-                        source_sql=sql,
-                        source_dialect=source,
-                        target_dialect=target,
-                        error=validation_warning,
-                        error_code=ErrorCode.VALIDATION_FAILED.value,
-                        compatibility_notes=compat_notes,
-                        transformations=transformations,
-                        warnings=warnings
+                        success=False, source_sql=sql, source_dialect=source, target_dialect=target,
+                        error=validation_warning, error_code=ErrorCode.VALIDATION_FAILED.value,
+                        compatibility_notes=compat_notes, transformations=transformations, warnings=warnings
                     )
-
-            if self._security_enabled and not skip_security:
-                security_result = self._validate_security(sql)
-                warnings.extend(security_result["warnings"])
 
             result = TranspileResult(
                 success=True,
@@ -171,9 +202,7 @@ class SQLTranspiler:
             if self._cache_enabled:
                 cache_key = self._cache_key(sql, source, target, pretty, validate, skip_security)
                 self._cache.set(cache_key, result.to_dict())
-
             return result
-
         except Exception as e:
             logger.error(f"Transpile failed: {source} -> {target}, error={str(e)}")
             return TranspileResult(
@@ -181,11 +210,17 @@ class SQLTranspiler:
                 error=str(e), error_code=ErrorCode.TRANSPILE_FAILED.value
             )
 
-    def _cache_key(
-        self, sql: str, source: str, target: str, pretty: bool, validate: bool = True,
-        skip_security: bool = False
-    ) -> str:
-        """Build a cache key from rules, validation mode, and security policy."""
+    @staticmethod
+    def _has_multiple_statements(sql: str) -> bool:
+        """Return true when SQL contains more than one parsed statement."""
+        if not isinstance(sql, str) or not sql.strip():
+            return False
+        try:
+            return len(sqlglot.parse(sql)) > 1
+        except Exception:
+            return False
+
+    def _cache_key(self, sql: str, source: str, target: str, pretty: bool, validate: bool = True, skip_security: bool = False) -> str:
         rule_payload = "\n".join(
             "|".join([
                 rule.name, rule.source, rule.target, rule.pattern, rule.replacement,
@@ -194,19 +229,15 @@ class SQLTranspiler:
             for rule in self.post_processor.engine.rules
         )
         rule_version = hashlib.sha256(rule_payload.encode("utf-8")).hexdigest()[:16]
-        security_version = f"{self._security_enabled}|{settings.security_block_dangerous}"
-        return (
-            f"v4|{rule_version}|{security_version}|{skip_security}|"
-            f"{sql}|{source}|{target}|{pretty}|{validate}"
-        )
+        security_version = f"{settings.security_check_enabled}|{settings.security_block_dangerous}"
+        return f"v4|{rule_version}|{security_version}|{skip_security}|{sql}|{source}|{target}|{pretty}|{validate}"
 
     def _get_compatibility_notes(self, source: str, target: str, sql: str = "") -> List[str]:
-        notes = []
-        notes.extend(get_compatibility_notes(source, target))
+        notes = list(get_compatibility_notes(source, target))
         sql_upper = sql.upper()
         if "LIMIT" in sql_upper and target == "oracle":
             notes.append("Oracle uses FETCH FIRST n ROWS ONLY (12c+) or ROWNUM for LIMIT")
-        if "AUTO_INCREMENT" in sql_upper and target not in ["mysql"]:
+        if "AUTO_INCREMENT" in sql_upper and target != "mysql":
             notes.append("AUTO_INCREMENT syntax varies by database")
         if "LATERAL VIEW" in sql_upper and target not in ["hive", "spark", "databricks"]:
             notes.append("LATERAL VIEW is Hive/Spark specific, converted to UNNEST/JSON_TABLE")
@@ -219,8 +250,8 @@ class SQLTranspiler:
         return notes
 
     def _generate_warnings(self, sql: str, source: str, target: str) -> List[str]:
+        sql_upper = mask_non_executable(sql).upper()
         warnings = []
-        sql_upper = sql.upper()
         if "DROP TABLE" in sql_upper or "TRUNCATE" in sql_upper:
             warnings.append("⚠️ Dangerous operation detected: DROP/TRUNCATE")
         if "DELETE" in sql_upper and "WHERE" not in sql_upper:
@@ -244,7 +275,6 @@ class SQLTranspiler:
         return warnings
 
     def _validate_output(self, sql: str, dialect: str) -> Optional[str]:
-        """Validate output SQL syntax under the requested target dialect."""
         try:
             sqlglot.parse_one(sql, read=dialect)
             return None
@@ -253,6 +283,15 @@ class SQLTranspiler:
 
     def _validate_security(self, sql: str) -> Dict[str, Any]:
         result = {"blocked": False, "reason": None, "warnings": []}
+        executable_sql = mask_non_executable(sql)
+        dangerous_operation = _DANGEROUS_OPERATION_PATTERN.search(executable_sql)
+        if dangerous_operation:
+            message = f"Dangerous SQL operation detected: {dangerous_operation.group(1).upper()}"
+            if settings.security_block_dangerous:
+                result["blocked"] = True
+                result["reason"] = message
+                return result
+            result["warnings"].append(f"🔒 Security: {message}")
         try:
             parsed_statements = sqlglot.parse(sql)
             if len(parsed_statements) > 1:
@@ -265,27 +304,29 @@ class SQLTranspiler:
         except Exception:
             pass
         for pattern, message in DANGEROUS_SQL_PATTERNS:
-            if pattern.search(sql):
+            if pattern.search(executable_sql):
                 if settings.security_block_dangerous:
                     result["blocked"] = True
                     result["reason"] = message
                     return result
                 result["warnings"].append(f"🔒 Security: {message}")
         for pattern, message in WARNING_SQL_PATTERNS:
-            if pattern.search(sql):
+            if pattern.search(executable_sql):
                 result["warnings"].append(f"⚠️ {message}")
         return result
 
     def batch_transpile(self, statements: List[str], source: str, target: str, pretty: bool = True) -> List[TranspileResult]:
+        if not isinstance(statements, list):
+            raise ValidationError("statements must be a list", field="statements", value=type(statements).__name__)
         if len(statements) > settings.max_batch_size:
-            statements = statements[:settings.max_batch_size]
+            raise ValidationError(f"Batch contains {len(statements)} statements; maximum is {settings.max_batch_size}", field="statements", value=str(len(statements)))
         return [self.transpile(sql, source, target, pretty) for sql in statements]
 
-    async def batch_transpile_async(
-        self, statements: List[str], source: str, target: str, pretty: bool = True, max_concurrent: int = 10
-    ) -> List[TranspileResult]:
+    async def batch_transpile_async(self, statements: List[str], source: str, target: str, pretty: bool = True, max_concurrent: int = 10) -> List[TranspileResult]:
+        if not isinstance(statements, list):
+            raise ValidationError("statements must be a list", field="statements", value=type(statements).__name__)
         if len(statements) > settings.max_batch_size:
-            statements = statements[:settings.max_batch_size]
+            raise ValidationError(f"Batch contains {len(statements)} statements; maximum is {settings.max_batch_size}", field="statements", value=str(len(statements)))
         if max_concurrent <= 0:
             raise ValidationError("max_concurrent must be positive", field="max_concurrent", value=str(max_concurrent))
         semaphore = asyncio.Semaphore(max_concurrent)
@@ -295,8 +336,7 @@ class SQLTranspiler:
                 loop = asyncio.get_running_loop()
                 return await loop.run_in_executor(None, lambda: self.transpile(sql, source, target, pretty))
 
-        tasks = [limited_transpile(sql) for sql in statements]
-        return await asyncio.gather(*tasks)
+        return await asyncio.gather(*(limited_transpile(sql) for sql in statements))
 
     def get_supported_dialects(self) -> List[str]:
         return SUPPORTED_DIALECTS.copy()
@@ -308,11 +348,7 @@ class SQLTranspiler:
             "post_processor": self.post_processor.get_stats(),
             "cache": self._cache.get_stats() if self._cache_enabled else {"enabled": False},
             "security": {"enabled": self._security_enabled, "block_dangerous": settings.security_block_dangerous},
-            "settings": {
-                "cache_enabled": self._cache_enabled,
-                "max_batch_size": settings.max_batch_size,
-                "max_sql_length": settings.transpiler_max_sql_length
-            }
+            "settings": {"cache_enabled": self._cache_enabled, "max_batch_size": settings.max_batch_size, "max_sql_length": settings.transpiler_max_sql_length}
         }
 
     def clear_cache(self) -> None:

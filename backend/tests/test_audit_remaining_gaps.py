@@ -72,6 +72,99 @@ def test_readiness_cache_is_shared_by_deep_health(monkeypatch):
     asyncio.run(exercise())
 
 
+def test_real_app_health_probes_are_publicly_denied():
+    from backend.api.main import app
+
+    client = TestClient(app)
+    assert client.get("/ready").status_code == 403
+    assert client.get("/health/deep").status_code == 403
+
+
+def test_real_app_health_probes_accept_authorized_probe(monkeypatch):
+    from backend.api.main import app
+
+    monkeypatch.setenv("SDM_HEALTH_PROBE_TOKEN", "test-health-token")
+    monkeypatch.setattr(
+        readiness,
+        "_run_checks",
+        lambda: {
+            "transpiler": {"status": "ok"},
+            "functions": {"status": "ok"},
+            "types": {"status": "ok"},
+            "nl2sql": {"status": "ok"},
+        },
+    )
+    readiness._cached_checks = None
+    readiness._cached_at = 0.0
+    client = TestClient(app)
+
+    ready = client.get("/ready", headers=PROBE_HEADERS)
+    deep = client.get("/health/deep", headers=PROBE_HEADERS)
+
+    assert ready.status_code == 200
+    assert ready.json()["probe"] == "readiness"
+    assert deep.status_code == 200
+    assert "checks" in deep.json()
+    assert deep.json()["status"] == "✅ healthy"
+
+
+def test_real_app_ready_and_deep_health_share_probe_cache(monkeypatch):
+    from backend.api.main import app
+
+    calls = 0
+
+    def fake_probe():
+        nonlocal calls
+        calls += 1
+        return {
+            "transpiler": {"status": "ok"},
+            "functions": {"status": "ok"},
+            "types": {"status": "ok"},
+            "nl2sql": {"status": "ok"},
+        }
+
+    monkeypatch.setenv("SDM_HEALTH_PROBE_TOKEN", "test-health-token")
+    monkeypatch.setattr(readiness, "_run_checks", fake_probe)
+    readiness._cached_checks = None
+    readiness._cached_at = 0.0
+    original_ttl = readiness._READINESS_CACHE_TTL_SECONDS
+    readiness._READINESS_CACHE_TTL_SECONDS = 30.0
+    try:
+        client = TestClient(app)
+        assert client.get("/ready", headers=PROBE_HEADERS).status_code == 200
+        assert client.get("/health/deep", headers=PROBE_HEADERS).status_code == 200
+        assert calls == 1
+    finally:
+        readiness._READINESS_CACHE_TTL_SECONDS = original_ttl
+        readiness._cached_checks = None
+        readiness._cached_at = 0.0
+
+
+def test_real_app_health_probes_return_503_on_dependency_failure(monkeypatch):
+    from backend.api.main import app
+
+    monkeypatch.setenv("SDM_HEALTH_PROBE_TOKEN", "test-health-token")
+
+    def failed_probe():
+        return {
+            "transpiler": {"status": "error", "code": "probe_failed"},
+            "functions": {"status": "ok"},
+            "types": {"status": "ok"},
+            "nl2sql": {"status": "ok"},
+        }
+
+    monkeypatch.setattr(readiness, "_run_checks", failed_probe)
+    readiness._cached_checks = None
+    readiness._cached_at = 0.0
+    client = TestClient(app)
+
+    response = client.get("/ready", headers=PROBE_HEADERS)
+
+    assert response.status_code == 503
+    assert response.json()["status"] == "not_ready"
+    assert response.json()["checks"]["transpiler"]["code"] == "probe_failed"
+
+
 def test_health_deep_rejects_public_requests(monkeypatch):
     monkeypatch.setenv("SDM_HEALTH_PROBE_TOKEN", "test-health-token")
     app = FastAPI()
@@ -87,6 +180,18 @@ def test_health_deep_rejects_public_requests(monkeypatch):
 
 def test_health_deep_accepts_internal_probe_token(monkeypatch):
     monkeypatch.setenv("SDM_HEALTH_PROBE_TOKEN", "test-health-token")
+    monkeypatch.setattr(
+        readiness,
+        "_run_checks",
+        lambda: {
+            "transpiler": {"status": "ok"},
+            "functions": {"status": "ok"},
+            "types": {"status": "ok"},
+            "nl2sql": {"status": "ok"},
+        },
+    )
+    readiness._cached_checks = None
+    readiness._cached_at = 0.0
     app = FastAPI()
     app.add_middleware(RateLimitMiddleware, enabled=True)
 
@@ -121,6 +226,60 @@ def test_nl2sql_api_rejects_non_identifier_column_hints():
         json={"text": "查询所有用户", "column_hints": ["count(*)"]},
     )
     assert response.status_code == 422
+
+
+def test_nl2sql_openapi_exposes_column_hints():
+    from backend.api.main import app
+
+    schema = TestClient(app).get("/openapi.json").json()
+    request_schema = schema["components"]["schemas"]["NL2SQLRequest"]
+    column_schema = request_schema["properties"]["column_hints"]
+    assert "column_hints" in request_schema["properties"]
+    assert column_schema.get("type") == "array" or any(
+        branch.get("type") == "array" for branch in column_schema.get("anyOf", [])
+    )
+
+
+def test_nl2sql_api_passes_valid_column_hints_to_generator(monkeypatch):
+    import backend.api.main as main_module
+
+    captured = {}
+
+    def fake_generate(text, dialect, table_hint=None, column_hints=None):
+        captured.update(
+            text=text,
+            dialect=dialect,
+            table_hint=table_hint,
+            column_hints=column_hints,
+        )
+        from backend.core.nl2sql import NL2SQLResult
+        return NL2SQLResult(
+            success=True,
+            input_text=text,
+            sql="SELECT users.id, users.name FROM users",
+            dialect=dialect,
+            explanation="test",
+            confidence=0.9,
+        )
+
+    monkeypatch.setattr(
+        main_module,
+        "nl2sql_generator",
+        type("Generator", (), {"generate": staticmethod(fake_generate)})(),
+    )
+    response = TestClient(main_module.app).post(
+        "/api/nl2sql",
+        json={
+            "text": "查询所有用户",
+            "dialect": "mysql",
+            "table_hint": "users",
+            "column_hints": ["users.id", "users.name"],
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["column_hints"] == ["users.id", "users.name"]
+    assert response.json()["sql"] == "SELECT users.id, users.name FROM users"
 
 
 def test_structured_logging_is_registered_on_main_app():

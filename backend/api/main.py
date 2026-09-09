@@ -30,6 +30,7 @@ from core.parser import SQLParser, SUPPORTED_DIALECTS
 from core.functions_lookup import FunctionEncyclopedia
 from core.type_mapping import TypeMapper
 from core.nl2sql import NL2SQLGenerator
+from backend.api.readiness import health_probe_response
 
 # Configure logging for the application
 logger = setup_logging(level=logging.INFO)
@@ -228,12 +229,17 @@ class NL2SQLRequest(BaseModel):
     text: str = Field(..., description="Natural language query (Chinese or English)")
     dialect: str = Field("hive", description="Target SQL dialect")
     table_hint: Optional[str] = Field(None, description="Optional table name hint")
+    column_hints: Optional[List[str]] = Field(
+        None,
+        description="Optional column identifier hints; accepts simple or dotted identifiers",
+    )
 
     model_config = ConfigDict(json_schema_extra={
         "example": {
             "text": "统计每个部门的员工数量",
             "dialect": "mysql",
-            "table_hint": "employees"
+            "table_hint": "employees",
+            "column_hints": ["employees.department", "employees.id"]
         }
     })
 
@@ -304,6 +310,8 @@ async def root():
             "🗂️ types": {"url": "/api/types", "method": "GET"},
             "💬 nl2sql": {"url": "/api/nl2sql", "method": "POST"},
             "❤️ health": {"url": "/health", "method": "GET"},
+            "🟢 readiness": {"url": "/ready", "method": "GET"},
+            "🔍 deep health": {"url": "/health/deep", "method": "GET"},
             "📖 docs": {"url": "/docs", "method": "GET"}
         },
         "quick_start": {
@@ -570,7 +578,8 @@ async def generate_sql(request: NL2SQLRequest):
     result = nl2sql_generator.generate(
         request.text,
         dialect,
-        request.table_hint
+        request.table_hint,
+        request.column_hints,
     )
     return NL2SQLResponse(
         success=result.success,
@@ -591,74 +600,15 @@ async def health_check():
         "timestamp": datetime.now().isoformat(),
     }
 
+@app.get("/ready", tags=["system"])
+async def readiness_check(request: Request):
+    """Return readiness after authorized dependency probes."""
+    return await health_probe_response(request)
 
 @app.get("/health/deep", tags=["system"])
-async def deep_health_check():
-    """
-    🔍 Deep Health Check Endpoint
-
-    Performs actual validation of all components:
-    - Tests transpiler with sample SQL
-    - Validates function encyclopedia data
-    - Checks type mapping integrity
-    - Verifies NL2SQL generation
-    """
-    checks = {}
-
-    # Test transpiler
-    try:
-        result = transpiler.transpile("SELECT 1 AS test", "mysql", "postgres")
-        checks["transpiler"] = {
-            "status": "✅ ok" if result.success else "❌ error",
-            "test_result": result.success,
-            "cache_stats": transpiler.get_stats().get("cache", {})
-        }
-    except Exception:
-        checks["transpiler"] = {"status": "❌ error", "code": "probe_failed"}
-
-    # Test function encyclopedia
-    try:
-        func = func_encyclopedia.get_function("CONCAT")
-        checks["functions"] = {
-            "status": "✅ ok" if func else "⚠️ warning",
-            "total_count": len(func_encyclopedia.functions),
-            "sample_lookup": "CONCAT" if func else None
-        }
-    except Exception:
-        checks["functions"] = {"status": "❌ error", "code": "probe_failed"}
-
-    # Test type mapper
-    try:
-        type_result = type_mapper.map_type("VARCHAR", "mysql", "postgres")
-        checks["types"] = {
-            "status": "✅ ok" if type_result.get("success") else "⚠️ warning",
-            "total_count": len(type_mapper.mappings),
-            "sample_mapping": type_result.get("target_type")
-        }
-    except Exception:
-        checks["types"] = {"status": "❌ error", "code": "probe_failed"}
-
-    # Test NL2SQL
-    try:
-        nl_result = nl2sql_generator.generate("查询所有用户", "mysql")
-        checks["nl2sql"] = {
-            "status": "✅ ok" if nl_result.success else "⚠️ warning",
-            "confidence": nl_result.confidence,
-            "generated_sql": nl_result.sql[:50] if nl_result.sql else None
-        }
-    except Exception:
-        checks["nl2sql"] = {"status": "❌ error", "code": "probe_failed"}
-
-    # Overall status
-    all_ok = all("ok" in c.get("status", "") for c in checks.values())
-    has_errors = any("error" in c.get("status", "") for c in checks.values())
-
-    return {
-        "status": "✅ healthy" if all_ok else ("❌ unhealthy" if has_errors else "⚠️ degraded"),
-        "version": API_VERSION,
-        "checks": checks,
-        "timestamp": datetime.now().isoformat()
-    }
+async def deep_health_check(request: Request):
+    """Return deep health using the shared authorized dependency probe service."""
+    return await health_probe_response(request)
 
 @app.get("/api/stats", tags=["system"])
 async def get_stats():

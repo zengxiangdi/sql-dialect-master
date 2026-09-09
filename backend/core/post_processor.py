@@ -9,6 +9,7 @@ import re
 from typing import Tuple, List, Callable
 
 from .rules import rule_engine, RuleEngine
+from .function_call_scanner import replace_function_calls
 from .p1_sql_scanner import mask_non_executable
 
 logger = logging.getLogger(__name__)
@@ -55,64 +56,14 @@ class PostProcessor:
         return result, notes
 
     def _replace_function_calls(self, sql: str, function_name: str, replacer: Callable[[str, str], str]) -> str:
-        """Replace complete function calls with balanced parentheses using a quote-aware scanner."""
-        upper_name = function_name.upper()
-        name_len = len(function_name)
-        result = []
-        i = 0
-        quote = False
-        length = len(sql)
-        while i < length:
-            char = sql[i]
-            if char == "'":
-                result.append(char)
-                if quote and i + 1 < length and sql[i + 1] == "'":
-                    result.append(sql[i + 1])
-                    i += 2
-                    continue
-                quote = not quote
-                i += 1
-                continue
-            if not quote and sql[i:i + name_len].upper() == upper_name:
-                name_end = i + name_len
-                if i == 0 or not (sql[i - 1].isalnum() or sql[i - 1] == '_'):
-                    j = name_end
-                    while j < length and sql[j].isspace():
-                        j += 1
-                    if j < length and sql[j] == '(':
-                        depth = 0
-                        inner_quote = False
-                        k = j
-                        while k < length:
-                            inner = sql[k]
-                            if inner == "'":
-                                if inner_quote and k + 1 < length and sql[k + 1] == "'":
-                                    k += 2
-                                    continue
-                                inner_quote = not inner_quote
-                            elif not inner_quote:
-                                if inner == '(':
-                                    depth += 1
-                                elif inner == ')':
-                                    depth -= 1
-                                    if depth == 0:
-                                        args = sql[j + 1:k]
-                                        result.append(replacer(args, sql[i:k + 1]))
-                                        i = k + 1
-                                        break
-                            k += 1
-                        else:
-                            result.append(sql[i:])
-                            break
-                        continue
-            result.append(char)
-            i += 1
-        return ''.join(result)
+        """Replace function calls using the shared quote/comment-aware scanner."""
+        return replace_function_calls(sql, function_name, replacer)
 
     def _convert_decode_to_case(self, sql: str) -> Tuple[str, List[str]]:
         notes = []
-        if "DECODE" not in sql.upper():
+        if "DECODE" not in mask_non_executable(sql).upper():
             return sql, notes
+
         def decode_to_case(args_str: str, original: str) -> str:
             args = self._parse_function_args(args_str)
             if len(args) < 3:
@@ -122,10 +73,13 @@ class PostProcessor:
             case_parts = []
             i = 0
             while i < len(pairs) - 1:
-                case_parts.append(f"WHEN {col} = {pairs[i]} THEN {pairs[i+1]}")
+                value = pairs[i]
+                comparator = "IS NULL" if value.strip().upper() == "NULL" else f"= {value}"
+                case_parts.append(f"WHEN {col} {comparator} THEN {pairs[i + 1]}")
                 i += 2
             default = pairs[-1] if len(pairs) % 2 == 1 else "NULL"
             return f"CASE {' '.join(case_parts)} ELSE {default} END"
+
         result = self._replace_function_calls(sql, "DECODE", decode_to_case)
         if result != sql:
             notes.append("Converted DECODE to CASE WHEN")
@@ -164,7 +118,7 @@ class PostProcessor:
 
     def _convert_mysql_date_format(self, sql: str) -> Tuple[str, List[str]]:
         notes = []
-        if "DATE_FORMAT" not in sql.upper():
+        if "DATE_FORMAT" not in mask_non_executable(sql).upper():
             return sql, notes
         def convert_format(args_str: str, original: str) -> str:
             args = self._parse_function_args(args_str)
@@ -183,7 +137,7 @@ class PostProcessor:
 
     def _convert_postgres_to_char(self, sql: str) -> Tuple[str, List[str]]:
         notes = []
-        if "TO_CHAR" not in sql.upper():
+        if "TO_CHAR" not in mask_non_executable(sql).upper():
             return sql, notes
         def convert_format(args_str: str, original: str) -> str:
             args = self._parse_function_args(args_str)
@@ -223,7 +177,14 @@ class PostProcessor:
         start, end = match.span()
         result = sql[:start] + "SELECT" + sql[end:]
         if "LIMIT" not in mask_non_executable(result).upper():
-            result = result.rstrip(';').rstrip() + f" LIMIT {n}"
+            if result.endswith("\n"):
+                result += f" LIMIT {n}"
+            else:
+                line_comment = re.search(r"--[^\n]*$", result)
+                if line_comment:
+                    result = result[:line_comment.start()].rstrip() + f" LIMIT {n} " + result[line_comment.start():]
+                else:
+                    result = result.rstrip(';').rstrip() + f" LIMIT {n}"
         return result, [f"Converted TOP {n} to LIMIT {n}"]
 
     def _convert_rownum_to_limit(self, sql: str) -> Tuple[str, List[str]]:
@@ -255,7 +216,7 @@ class PostProcessor:
 
     def _check_warnings(self, sql: str, source: str, target: str) -> List[str]:
         warnings = []
-        sql_upper = sql.upper()
+        sql_upper = mask_non_executable(sql).upper()
         if source == "hive" and "INSERT OVERWRITE" in sql_upper and target in ("mysql", "postgres", "tsql", "oracle"):
             warnings.append(f"WARNING: INSERT OVERWRITE not supported in {target}. Use TRUNCATE + INSERT or MERGE instead.")
         if source == "oracle" and "CONNECT BY" in sql_upper and target in ("hive", "postgres", "mysql"):

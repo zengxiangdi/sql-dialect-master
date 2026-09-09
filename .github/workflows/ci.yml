@@ -35,6 +35,9 @@ jobs:
       - name: Run full test suite
         run: pytest
 
+      - name: Run API integration gate
+        run: pytest backend/tests/test_audit_remaining_gaps.py -q
+
       - name: Compile Python sources
         run: python -m compileall -q backend frontend sdm_local.py
 

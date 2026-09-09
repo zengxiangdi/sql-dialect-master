@@ -5,7 +5,7 @@ from typing import Iterator, Tuple
 
 
 def executable_segments(sql: str) -> Iterator[Tuple[int, int]]:
-    """Yield [start, end) ranges outside strings and SQL comments."""
+    """Yield [start, end) ranges outside strings, quoted identifiers and comments."""
     i = 0
     start = 0
     n = len(sql)
@@ -28,6 +28,18 @@ def executable_segments(sql: str) -> Iterator[Tuple[int, int]]:
                 start = i
                 continue
             ch = sql[i]
+            if ch == "q" or ch == "Q":
+                if i + 2 < n and sql[i + 1] == "'":
+                    opener = sql[i + 2]
+                    closer = {"[": "]", "{": "}", "(": ")", "<": ">"}.get(opener, opener)
+                    delimiter = f"{closer}'"
+                    end = sql.find(delimiter, i + 3)
+                    if end != -1:
+                        if start < i:
+                            yield start, i
+                        i = end + len(delimiter)
+                        start = i
+                        continue
             if ch == "'":
                 if start < i:
                     yield start, i
@@ -39,6 +51,20 @@ def executable_segments(sql: str) -> Iterator[Tuple[int, int]]:
                 if start < i:
                     yield start, i
                 state = "double_quote"
+                i += 1
+                start = i
+                continue
+            if ch == '`':
+                if start < i:
+                    yield start, i
+                state = "backtick_quote"
+                i += 1
+                start = i
+                continue
+            if ch == '[':
+                if start < i:
+                    yield start, i
+                state = "bracket_quote"
                 i += 1
                 start = i
                 continue
@@ -58,6 +84,9 @@ def executable_segments(sql: str) -> Iterator[Tuple[int, int]]:
             if sql[i:i + 2] == "''":
                 i += 2
                 continue
+            if sql[i] == "\\" and i + 1 < n:
+                i += 2
+                continue
             if sql[i] == "'":
                 state = "code"
                 i += 1
@@ -70,6 +99,28 @@ def executable_segments(sql: str) -> Iterator[Tuple[int, int]]:
                 i += 2
                 continue
             if sql[i] == '"':
+                state = "code"
+                i += 1
+                start = i
+                continue
+            i += 1
+            continue
+        if state == "backtick_quote":
+            if sql[i:i + 2] == "``":
+                i += 2
+                continue
+            if sql[i] == '`':
+                state = "code"
+                i += 1
+                start = i
+                continue
+            i += 1
+            continue
+        if state == "bracket_quote":
+            if sql[i:i + 2] == "]]":
+                i += 2
+                continue
+            if sql[i] == ']':
                 state = "code"
                 i += 1
                 start = i

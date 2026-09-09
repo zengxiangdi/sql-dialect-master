@@ -12,9 +12,11 @@ from .nl2sql import NL2SQLGenerator
 from .post_processor import PostProcessor
 from .rules import TransformRule
 from .transpiler import SQLTranspiler
+from .p1_sql_scanner import mask_non_executable
 
 logger = logging.getLogger(__name__)
 _ORIGINAL_PROCESS = PostProcessor.process
+_DANGEROUS_OPERATION_PATTERN = re.compile(r"\b(DROP|TRUNCATE|ALTER|CREATE|GRANT|REVOKE)\b", re.IGNORECASE)
 
 
 def _scan_segments(sql: str):
@@ -24,8 +26,6 @@ def _scan_segments(sql: str):
     n = len(sql)
     while i < n:
         ch = sql[i]
-
-        # PostgreSQL dollar-quoted strings: $$...$$ and $tag$...$tag$.
         if ch == "$":
             match = re.match(r"\$([A-Za-z_][A-Za-z0-9_]*)?\$", sql[i:])
             if match:
@@ -38,8 +38,6 @@ def _scan_segments(sql: str):
                 yield "quoted", sql[qstart:i]
                 start = i
                 continue
-
-        # Oracle q-quoted literals: q'[...']', q'{...}', q'(...)', q'<...>', q'|...|'.
         if ch in "qQ" and i + 2 < n and sql[i + 1] == "'":
             opener = sql[i + 2]
             closer = {"[": "]", "{": "}", "(": ")", "<": ">"}.get(opener, opener)
@@ -52,7 +50,6 @@ def _scan_segments(sql: str):
                 i = end
                 start = i
                 continue
-
         if ch in ("'", '"', '`') or ch == '[':
             if start < i:
                 yield "code", sql[start:i]
@@ -73,7 +70,6 @@ def _scan_segments(sql: str):
             yield "quoted", sql[qstart:i]
             start = i
             continue
-
         if ch == '-' and i + 1 < n and sql[i + 1] == '-':
             if start < i:
                 yield "code", sql[start:i]
@@ -84,7 +80,6 @@ def _scan_segments(sql: str):
             i = j
             start = i
             continue
-
         if ch == '/' and i + 1 < n and sql[i + 1] == '*':
             if start < i:
                 yield "code", sql[start:i]
@@ -96,18 +91,13 @@ def _scan_segments(sql: str):
             i = j
             start = i
             continue
-
         i += 1
-
     if start < n:
         yield "code", sql[start:]
 
 
 def _mask_non_executable(sql: str) -> str:
-    return ''.join(
-        text if kind == "code" else ''.join('\n' if c in '\r\n' else ' ' for c in text)
-        for kind, text in _scan_segments(sql)
-    )
+    return mask_non_executable(sql)
 
 
 def _replace_outside(sql: str, pattern: re.Pattern, replacement: str | Callable[[re.Match], str]):
@@ -181,6 +171,14 @@ def _dml_without_where(sql: str):
 def _validate_security(self, sql: str):
     result = {"blocked": False, "reason": None, "warnings": []}
     masked = _mask_non_executable(sql)
+    dangerous_operation = _DANGEROUS_OPERATION_PATTERN.search(masked)
+    if dangerous_operation:
+        message = f"Dangerous SQL operation detected: {dangerous_operation.group(1).upper()}"
+        if settings.security_block_dangerous:
+            result["blocked"] = True
+            result["reason"] = message
+            return result
+        result["warnings"].append(f"🔒 Security: {message}")
     try:
         if len(sqlglot.parse(sql)) > 1:
             message = "Multiple SQL statements detected"
@@ -210,6 +208,7 @@ def _validate_security(self, sql: str):
         if pattern.search(masked):
             result["warnings"].append(f"⚠️ {message}")
     return result
+
 
 SQLTranspiler._validate_security = _validate_security
 
@@ -257,7 +256,6 @@ def _simple_rownum_transform(sql: str):
 def _convert_rownum_to_limit(self, sql: str):
     result, note = _simple_rownum_transform(sql)
     return result, ([note] if note else [])
-
 
 PostProcessor._convert_rownum_to_limit = _convert_rownum_to_limit
 

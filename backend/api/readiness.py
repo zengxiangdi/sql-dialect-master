@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import secrets
 import time
 import weakref
 from datetime import datetime
@@ -20,6 +22,39 @@ _READINESS_LOCKS: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.L
 _READINESS_LOCKS_GUARD = __import__("threading").Lock()
 _cached_checks: dict[str, dict[str, Any]] | None = None
 _cached_at = 0.0
+_HEALTH_PROBE_PATHS = {"/ready", "/health/deep"}
+
+
+def _probe_allowed(request: Request) -> bool:
+    """Allow health probes only from loopback or with the configured probe secret."""
+    token = os.getenv("SDM_HEALTH_PROBE_TOKEN", "").strip()
+    supplied = request.headers.get("X-Health-Probe-Token", "")
+    if token and supplied and secrets.compare_digest(supplied, token):
+        return True
+    client = request.client
+    return bool(client and client.host in {"127.0.0.1", "::1", "localhost"})
+
+
+def _health_probe_denied_response() -> JSONResponse:
+    """Return a stable denial response for public health probe requests."""
+    return JSONResponse(
+        status_code=403,
+        content={
+            "success": False,
+            "error": {"code": 403, "message": "health probe access denied"},
+        },
+    )
+
+
+async def health_probe_response(request: Request) -> JSONResponse:
+    """Authorize and dispatch a readiness/deep-health probe request."""
+    if request.url.path not in _HEALTH_PROBE_PATHS or request.method not in {"GET", "HEAD"}:
+        raise ValueError("health_probe_response called for a non-probe request")
+    if not _probe_allowed(request):
+        return _health_probe_denied_response()
+    if request.url.path == "/ready":
+        return await readiness_response(request)
+    return await deep_health_response(request)
 
 
 def _get_readiness_lock() -> asyncio.Lock:
@@ -87,13 +122,40 @@ async def _get_checks() -> dict[str, dict[str, Any]]:
         return checks
 
 
+def _response_status(checks: dict[str, dict[str, Any]]) -> tuple[int, bool]:
+    """Return the HTTP status and health flag for a probe result."""
+    failed = [name for name, check in checks.items() if check.get("status") != "ok"]
+    return (200 if not failed else 503, not failed)
+
+
 async def readiness_response(request: Request) -> JSONResponse:
     """Return HTTP 200 only when all core service probes pass."""
     checks = await _get_checks()
-    failed = [name for name, check in checks.items() if check.get("status") != "ok"]
+    status_code, healthy = _response_status(checks)
     return JSONResponse(
-        status_code=200 if not failed else 503,
-        content={"status": "ready" if not failed else "not_ready", "version": _api_version(), "probe": "readiness", "checks": checks, "timestamp": datetime.now().isoformat()},
+        status_code=status_code,
+        content={
+            "status": "ready" if healthy else "not_ready",
+            "version": _api_version(),
+            "probe": "readiness",
+            "checks": checks,
+            "timestamp": datetime.now().isoformat(),
+        },
+    )
+
+
+async def deep_health_response(request: Request) -> JSONResponse:
+    """Return deep health using the same cached dependency probes as readiness."""
+    checks = await _get_checks()
+    status_code, healthy = _response_status(checks)
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "status": "✅ healthy" if healthy else "❌ unhealthy",
+            "version": _api_version(),
+            "checks": checks,
+            "timestamp": datetime.now().isoformat(),
+        },
     )
 
 

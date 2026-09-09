@@ -1,7 +1,7 @@
 """P1 hardening adapter for stacked-statement correctness.
 
 SQL custom transformations live in ``PostProcessor`` and are scanner-aware.
-This adapter only preserves the legacy core transpiler boundary for rejecting
+This adapter preserves the legacy core transpiler boundary for rejecting
 multi-statement input before the original transpiler can silently keep the
 first statement.
 """
@@ -77,7 +77,9 @@ def _transpile_single_statement(
     source_normalized = source.strip().lower()
     target_normalized = target.strip().lower()
 
-    # Keep security validation precedence over stacked-query rejection.
+    # When dangerous SQL blocking is enabled, let the established security
+    # taxonomy own the rejection and error code. With the legacy opt-out,
+    # retain the dedicated validation-level stacked-statement boundary.
     if self._security_enabled and not skip_security and isinstance(sql, str):
         security_result = self._validate_security(sql)
         if security_result["blocked"]:

@@ -3,21 +3,18 @@
 from importlib import import_module
 
 _PATCH_MODULES = (
-    "batch_validation",
-    "input_validation",
     "nl2sql_null_predicate_fix",
     "nl2sql_comparison_precedence_fix",
     "final_hardening",
     "audit_hardening",
     "production_hardening",
-    "p1_hardening",
 )
 
 _installed = False
 
 
 def install_compatibility_patches() -> None:
-    """Install compatibility adapters once, in their required order."""
+    """Install remaining legacy compatibility adapters once, in order."""
     global _installed
     if _installed:
         return
