@@ -177,7 +177,7 @@ def _sql_without_comments(sql: str) -> str:
 
 
 def _contains_limit(tree: exp.Expression) -> bool:
-    return tree.find(exp.Limit) is not None or tree.find(exp.Fetch) is not None or tree.find(exp.Top) is not None
+    return tree.find(exp.Limit) is not None or tree.find(exp.Fetch) is not None
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case.name)
@@ -195,7 +195,7 @@ def test_nl2sql_corpus_cases_are_semantically_parseable(generator: NL2SQLGenerat
 
     operation = tree.find(exp.Update) or tree.find(exp.Delete)
     if case.operation == "SELECT":
-        assert isinstance(tree, (exp.Select, exp.Subqueryable, exp.Union, exp.With)) or operation is None
+        assert isinstance(tree, (exp.Select, exp.Union, exp.With)) or operation is None
     else:
         assert operation is not None
 
