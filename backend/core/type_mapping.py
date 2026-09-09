@@ -32,6 +32,10 @@ class TypeMapper:
     
     DIALECTS = SUPPORTED_DIALECTS
     TYPE_CATEGORIES = TYPE_CATEGORIES
+    # Explicit aliases preserve deterministic resolution without fuzzy matching.
+    TYPE_ALIASES = {
+        "INTEGER": "INT",
+    }
     
     def __init__(self, data_path: Optional[Path] = None):
         """Initialize mapper with type mapping data.
@@ -118,8 +122,12 @@ class TypeMapper:
                 "target_dialect": target,
             }
         
-        # Find the type in mappings.
+        # Resolve exact canonical names first, then only explicitly supported aliases.
+        canonical_type_name = type_name
         type_info = self.mappings.get(type_name)
+        if not type_info:
+            canonical_type_name = self.TYPE_ALIASES.get(type_name, type_name)
+            type_info = self.mappings.get(canonical_type_name)
         
         if not type_info:
             return {
@@ -137,11 +145,11 @@ class TypeMapper:
         
         # Check for precision warnings
         warnings = []
-        if type_name in self.precision_warnings:
-            warnings.append(self.precision_warnings[type_name])
+        if canonical_type_name in self.precision_warnings:
+            warnings.append(self.precision_warnings[canonical_type_name])
         
         # Add specific warnings based on type and dialects
-        warnings.extend(self._get_type_specific_warnings(type_name, source, target))
+        warnings.extend(self._get_type_specific_warnings(canonical_type_name, source, target))
         
         return {
             "success": True,
@@ -152,7 +160,7 @@ class TypeMapper:
             "target_type": target_type,
             "notes": notes,
             "warnings": warnings,
-            "category": self.get_type_category(type_name)
+            "category": self.get_type_category(canonical_type_name)
         }
     
     def _get_type_specific_warnings(
