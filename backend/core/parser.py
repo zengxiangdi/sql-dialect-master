@@ -13,13 +13,10 @@ from typing import Optional, List, Dict, Any
 import sqlglot
 from sqlglot import exp
 
-# Import from centralized config
-from .config import SUPPORTED_DIALECTS
+from .config import SUPPORTED_DIALECTS, settings
 
-# Configure module logger
 logger = logging.getLogger(__name__)
 
-# Re-export for backward compatibility
 __all__ = ['SUPPORTED_DIALECTS', 'ParseResult', 'SQLParser']
 
 
@@ -38,49 +35,35 @@ class ParseResult:
 
 
 class SQLParser:
-    """SQL Parser using sqlglot for multi-dialect support.
-    
-    Supports all 12 dialects:
-    - RDBMS: MySQL, PostgreSQL, Oracle, SQL Server (T-SQL)
-    - Big Data: Hive, Spark, Trino, Databricks
-    - Cloud DW: Snowflake, Redshift
-    - OLAP: ClickHouse
-    - Embedded: DuckDB
-    """
-    
+    """SQL Parser using sqlglot for multi-dialect support."""
+
     def __init__(self, dialect: str = "hive"):
-        """Initialize parser with target dialect.
-        
-        Args:
-            dialect: SQL dialect to use for parsing
-            
-        Raises:
-            ValueError: If dialect is not supported
-        """
-        dialect_lower = dialect.lower()
+        """Initialize parser with a normalized supported dialect."""
+        dialect_lower = dialect.strip().lower()
         if dialect_lower not in SUPPORTED_DIALECTS:
             raise ValueError(
                 f"Unsupported dialect: {dialect}. "
                 f"Supported: {', '.join(SUPPORTED_DIALECTS)}"
             )
         self.dialect = dialect_lower
-    
+
     def parse(self, sql: str) -> ParseResult:
-        """Parse SQL string into AST.
-        
-        Args:
-            sql: SQL statement to parse
-            
-        Returns:
-            ParseResult with AST and extracted elements
-        """
+        """Parse SQL string into AST."""
+        if not isinstance(sql, str):
+            return ParseResult(success=False, error="SQL statement must be a string", dialect=self.dialect)
+        if len(sql) > settings.parser_max_sql_length:
+            return ParseResult(
+                success=False,
+                error=f"SQL exceeds maximum length of {settings.parser_max_sql_length} characters",
+                dialect=self.dialect,
+            )
         if not sql or not sql.strip():
             return ParseResult(
                 success=False,
                 error="Empty SQL statement",
                 dialect=self.dialect
             )
-        
+
         try:
             ast = sqlglot.parse_one(sql, read=self.dialect)
             result = ParseResult(
@@ -100,38 +83,28 @@ class SQLParser:
                 error=str(e),
                 dialect=self.dialect
             )
-    
+
     def validate(self, sql: str) -> tuple:
-        """Validate SQL syntax.
-        
-        Args:
-            sql: SQL statement to validate
-            
-        Returns:
-            Tuple of (is_valid: bool, error_message: Optional[str])
-        """
+        """Validate SQL syntax."""
+        if not isinstance(sql, str):
+            return False, "SQL statement must be a string"
+        if len(sql) > settings.parser_max_sql_length:
+            return False, f"SQL exceeds maximum length of {settings.parser_max_sql_length} characters"
         if not sql or not sql.strip():
             return False, "Empty SQL statement"
-        
+
         try:
             sqlglot.parse_one(sql, read=self.dialect)
             return True, None
         except Exception as e:
             return False, str(e)
-    
+
     def extract_elements(self, sql: str) -> Dict[str, Any]:
-        """Extract all SQL elements for analysis.
-        
-        Args:
-            sql: SQL statement to analyze
-            
-        Returns:
-            Dictionary with extracted elements
-        """
+        """Extract all SQL elements for analysis."""
         result = self.parse(sql)
         if not result.success:
             return {"error": result.error}
-        
+
         return {
             "query_type": result.query_type,
             "tables": result.tables,
@@ -147,50 +120,35 @@ class SQLParser:
             "has_order_by": self._has_order_by(result.ast),
             "has_limit": self._has_limit(result.ast),
         }
-    
+
     def get_complexity_score(self, sql: str) -> Dict[str, Any]:
-        """Calculate SQL complexity score.
-        
-        Args:
-            sql: SQL statement to analyze
-            
-        Returns:
-            Dictionary with complexity metrics
-        """
+        """Calculate SQL complexity score."""
         result = self.parse(sql)
         if not result.success:
             return {"error": result.error, "score": 0}
-        
-        score = 1  # Base score
+
+        score = 1
         factors = []
-        
-        # Add complexity for various features
         if result.joins:
             join_score = len(result.joins) * 2
             score += join_score
             factors.append(f"Joins: +{join_score}")
-        
         if self._has_subquery(result.ast):
             score += 3
             factors.append("Subquery: +3")
-        
         if self._has_cte(result.ast):
             score += 2
             factors.append("CTE: +2")
-        
         if self._has_window_function(result.ast):
             score += 2
             factors.append("Window function: +2")
-        
         if self._has_aggregation(result.ast):
             score += 1
             factors.append("Aggregation: +1")
-        
         if self._has_union(result.ast):
             score += 2
             factors.append("UNION: +2")
-        
-        # Complexity level
+
         if score <= 2:
             level = "Simple"
         elif score <= 5:
@@ -199,7 +157,7 @@ class SQLParser:
             level = "Complex"
         else:
             level = "Very Complex"
-        
+
         return {
             "score": score,
             "level": level,
@@ -209,7 +167,7 @@ class SQLParser:
             "functions_count": len(result.functions),
             "joins_count": len(result.joins)
         }
-    
+
     def _get_query_type(self, ast: exp.Expression) -> str:
         """Determine the type of SQL query."""
         type_map = {
@@ -227,12 +185,11 @@ class SQLParser:
             if isinstance(ast, exp_type):
                 return name
         return "UNKNOWN"
-    
+
     def _extract_tables(self, ast: exp.Expression) -> List[Dict[str, Any]]:
         """Extract all table references."""
         tables = []
         seen = set()
-        
         for table in ast.find_all(exp.Table):
             key = (table.name, table.alias)
             if key not in seen:
@@ -244,12 +201,11 @@ class SQLParser:
                     "catalog": table.catalog if hasattr(table, 'catalog') and table.catalog else None
                 })
         return tables
-    
+
     def _extract_columns(self, ast: exp.Expression) -> List[Dict[str, Any]]:
         """Extract all column references."""
         columns = []
         seen = set()
-        
         for col in ast.find_all(exp.Column):
             key = (col.name, col.table)
             if key not in seen:
@@ -257,15 +213,14 @@ class SQLParser:
                 columns.append({
                     "name": col.name,
                     "table": col.table if col.table else None,
-                    "alias": None  # Column aliases are in Alias nodes
+                    "alias": None
                 })
         return columns
-    
+
     def _extract_functions(self, ast: exp.Expression) -> List[Dict[str, Any]]:
         """Extract all function calls."""
         functions = []
         seen = set()
-        
         for func in ast.find_all(exp.Func):
             name = func.sql_name() if hasattr(func, 'sql_name') else type(func).__name__
             if name not in seen:
@@ -274,10 +229,10 @@ class SQLParser:
                     "name": name,
                     "args_count": len(func.args) if hasattr(func, 'args') else 0,
                     "is_aggregate": isinstance(func, (exp.AggFunc,)),
-                    "is_window": False  # Will be updated if in window context
+                    "is_window": False
                 })
         return functions
-    
+
     def _extract_joins(self, ast: exp.Expression) -> List[Dict[str, Any]]:
         """Extract all JOIN operations."""
         joins = []
@@ -287,50 +242,39 @@ class SQLParser:
                 join_type = join.kind.upper()
             elif join.side:
                 join_type = f"{join.side.upper()} OUTER"
-            
-            table_name = ""
             if hasattr(join.this, 'name'):
                 table_name = join.this.name
             elif hasattr(join.this, 'alias'):
                 table_name = str(join.this)
             else:
                 table_name = str(join.this)
-            
             joins.append({
                 "type": join_type,
                 "table": table_name,
                 "on_condition": str(join.args.get('on')) if join.args.get('on') else None
             })
         return joins
-    
+
     def _has_subquery(self, ast: exp.Expression) -> bool:
-        """Check if query contains subqueries."""
         return len(list(ast.find_all(exp.Subquery))) > 0
-    
+
     def _has_cte(self, ast: exp.Expression) -> bool:
-        """Check if query contains CTEs (WITH clause)."""
         return ast.find(exp.With) is not None
-    
+
     def _has_window_function(self, ast: exp.Expression) -> bool:
-        """Check if query contains window functions."""
         return len(list(ast.find_all(exp.Window))) > 0
-    
+
     def _has_aggregation(self, ast: exp.Expression) -> bool:
-        """Check if query contains GROUP BY."""
-        return ast.find(exp.Group) is not None
-    
+        return ast.find(exp.Group) is not None or ast.find(exp.AggFunc) is not None
+
     def _has_distinct(self, ast: exp.Expression) -> bool:
-        """Check if query contains DISTINCT."""
         return ast.find(exp.Distinct) is not None
-    
+
     def _has_union(self, ast: exp.Expression) -> bool:
-        """Check if query contains UNION."""
         return isinstance(ast, exp.Union) or ast.find(exp.Union) is not None
-    
+
     def _has_order_by(self, ast: exp.Expression) -> bool:
-        """Check if query contains ORDER BY."""
         return ast.find(exp.Order) is not None
-    
+
     def _has_limit(self, ast: exp.Expression) -> bool:
-        """Check if query contains LIMIT."""
         return ast.find(exp.Limit) is not None or ast.find(exp.Fetch) is not None
