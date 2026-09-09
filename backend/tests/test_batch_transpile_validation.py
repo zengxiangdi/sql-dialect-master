@@ -61,3 +61,23 @@ def test_batch_transpile_async_rejects_non_positive_concurrency() -> None:
         assert error.error_code == ErrorCode.VALIDATION_FAILED
         assert error.details["field"] == "max_concurrent"
         assert error.details["value"] == str(max_concurrent)
+
+
+def test_batch_transpile_async_rejects_non_integer_concurrency() -> None:
+    transpiler = SQLTranspiler()
+
+    for max_concurrent in (1.5, True, "2"):
+        with pytest.raises(ValidationError) as exc_info:
+            asyncio.run(
+                transpiler.batch_transpile_async(
+                    ["SELECT 1"],
+                    "mysql",
+                    "postgres",
+                    max_concurrent=max_concurrent,
+                )
+            )
+
+        error = exc_info.value
+        assert error.error_code == ErrorCode.VALIDATION_FAILED
+        assert error.details["field"] == "max_concurrent"
+        assert error.details["value"] == str(max_concurrent)

@@ -354,8 +354,8 @@ class SQLTranspiler:
             raise ValidationError("statements must be a list", field="statements", value=type(statements).__name__)
         if len(statements) > settings.max_batch_size:
             raise ValidationError(f"Batch contains {len(statements)} statements; maximum is {settings.max_batch_size}", field="statements", value=str(len(statements)))
-        if max_concurrent <= 0:
-            raise ValidationError("max_concurrent must be positive", field="max_concurrent", value=str(max_concurrent))
+        if isinstance(max_concurrent, bool) or not isinstance(max_concurrent, int) or max_concurrent <= 0:
+            raise ValidationError("max_concurrent must be a positive integer", field="max_concurrent", value=str(max_concurrent))
         semaphore = asyncio.Semaphore(max_concurrent)
 
         async def limited_transpile(sql: str) -> TranspileResult:
