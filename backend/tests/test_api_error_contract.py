@@ -7,7 +7,7 @@ from backend.api.main import app
 from backend.core.exceptions import TranspileError
 
 
-client = TestClient(app)
+client = TestClient(app, raise_server_exceptions=False)
 
 
 def test_unhandled_exception_returns_generic_internal_error(monkeypatch):
