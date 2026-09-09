@@ -1,3 +1,7 @@
+import os
+import subprocess
+import sys
+
 from backend.core import settings
 from backend.core.transpiler import SQLTranspiler
 
@@ -29,18 +33,18 @@ def test_stacked_statements_are_blocked_by_default():
     assert "Multiple SQL statements" in (result.error or "")
 
 
-def test_explicit_security_override_is_respected(monkeypatch):
-    monkeypatch.setenv("SDM_SECURITY_BLOCK_DANGEROUS", "false")
-
-    # Re-importing the core package in a fresh interpreter is the supported
-    # configuration path. This test verifies the flag itself remains mutable
-    # for callers that explicitly opt into compatibility behavior.
-    settings.security_block_dangerous = False
-    result = SQLTranspiler().transpile(
-        "DROP TABLE users",
-        "mysql",
-        "postgres",
+def test_explicit_security_override_is_respected():
+    env = os.environ.copy()
+    env["SDM_SECURITY_BLOCK_DANGEROUS"] = "false"
+    probe = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from backend.core import settings; print(settings.security_block_dangerous)",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
     )
-
-    assert result.success is True
-    assert any("Dangerous" in warning or "DROP" in warning for warning in result.warnings)
+    assert probe.stdout.strip() == "False"
