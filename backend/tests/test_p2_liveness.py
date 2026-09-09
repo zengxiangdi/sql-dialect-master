@@ -11,12 +11,16 @@ def test_health_is_true_liveness(monkeypatch):
     monkeypatch.setattr(readiness, "_get_checks", fail_probe)
 
     response = TestClient(app).get("/health")
+    payload = response.json()
 
     assert response.status_code == 200
-    assert response.json()["status"] == "alive"
-    assert response.json()["version"]
-    assert "services" not in response.json()
-    assert "stats" not in response.json()
+    assert payload["status"] == "alive"
+    assert payload["version"]
+    assert "timestamp" in payload
+    assert "services" not in payload
+    assert "stats" not in payload
+    assert "uptime" not in payload
+    assert "checks" not in payload
 
 
 def test_health_liveness_survives_business_component_failure(monkeypatch):
