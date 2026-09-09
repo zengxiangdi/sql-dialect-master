@@ -148,6 +148,8 @@ def diff_sql_ast(
             differences.append(
                 f"AST node count changed: {node_name} {source_count} -> {target_count}"
             )
+            if not categories:
+                categories = ["structure"]
 
     context_sensitive = sorted(
         set(_context_sensitive_functions(source_tree))
@@ -160,12 +162,12 @@ def diff_sql_ast(
         )
         categories = sorted(set(categories) | {"context_sensitive"})
 
-    if source_normalized == target_normalized and not changed_nodes:
-        status = "unknown" if context_sensitive else "equivalent"
-    elif source_normalized == target_normalized and not context_sensitive:
-        status = "equivalent"
+    if context_sensitive:
+        status = "unknown"
+    elif differences:
+        status = "different"
     else:
-        status = "unknown" if context_sensitive else "different"
+        status = "equivalent"
 
     return SemanticDiff(
         equivalent=status == "equivalent",
