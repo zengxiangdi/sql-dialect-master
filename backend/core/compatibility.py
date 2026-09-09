@@ -4,6 +4,7 @@ from importlib import import_module
 import re
 
 from .config import settings
+from .p1_sql_scanner import mask_non_executable
 
 _PATCH_MODULES = (
     "batch_validation",
@@ -61,15 +62,13 @@ def install_compatibility_patches() -> None:
 
         def validate_security_with_default_dangerous_block(self, sql):
             result = original_validate_security(self, sql)
-            # Stacked statements have a dedicated P1 boundary and stable
-            # VALIDATION_FAILED error code; do not consume that result here.
-            if result.get("reason") == "Multiple SQL statements detected":
-                result["blocked"] = False
-                result["reason"] = None
+            if result.get("blocked"):
                 return result
-            if settings.security_block_dangerous and _DANGEROUS_OPERATION_PATTERN.search(sql):
-                result["blocked"] = True
-                result["reason"] = "Dangerous SQL operation detected"
+            if settings.security_block_dangerous:
+                executable_sql = mask_non_executable(sql)
+                if _DANGEROUS_OPERATION_PATTERN.search(executable_sql):
+                    result["blocked"] = True
+                    result["reason"] = "Dangerous SQL operation detected"
             return result
 
         SQLTranspiler._validate_security = validate_security_with_default_dangerous_block
