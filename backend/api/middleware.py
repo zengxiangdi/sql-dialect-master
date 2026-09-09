@@ -226,8 +226,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                             "code": 422,
                             "message": "column_hints entries must be simple identifiers or dotted identifiers",
                         },
+                        "timestamp": datetime.now().isoformat(),
                     },
-                    "timestamp": datetime.now().isoformat(),
                 )
         return None
 
