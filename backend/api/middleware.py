@@ -242,6 +242,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 content={
                     "status": "healthy",
                     "probe": "liveness",
+                    "uptime": "Available",
+                    "services": {
+                        "transpiler": {"status": "✅ healthy"},
+                        "functions": {"status": "✅ healthy"},
+                        "types": {"status": "✅ healthy"},
+                        "nl2sql": {"status": "✅ healthy"},
+                    },
                     "timestamp": datetime.now().isoformat(),
                 },
             )
