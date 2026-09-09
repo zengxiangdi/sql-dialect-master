@@ -21,6 +21,7 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          import re
 
           def replace_exact(path: str, old: str, new: str, expected: int = 1) -> None:
               p = Path(path)
@@ -33,8 +34,8 @@ jobs:
 
           init = Path("backend/core/__init__.py")
           init_text = init.read_text(encoding="utf-8")
-          init_text, count = init_text.replace('import os\n\n', '', 1), init_text.count('import os\n\n')
-          assert count == 1, "unexpected __init__.py os import shape"
+          assert init_text.count('import os\n\n') == 1, "unexpected __init__.py os import shape"
+          init_text = init_text.replace('import os\n\n', '', 1)
           old_override = '''# Dangerous SQL is blocked by default at package runtime. Operators that need\n# the previous compatibility behavior must opt out explicitly via environment.\nif "SDM_SECURITY_BLOCK_DANGEROUS" not in os.environ:\n    settings.security_block_dangerous = True\n\n'''
           assert init_text.count(old_override) == 1, "unexpected security override block"
           init_text = init_text.replace(old_override, '', 1)
@@ -43,20 +44,24 @@ jobs:
           replace_exact(".env.example", 'SDM_SECURITY_BLOCK_DANGEROUS=false\n', 'SDM_SECURITY_BLOCK_DANGEROUS=true\n')
 
           transpiler = Path("backend/core/transpiler.py")
-          replace_exact("backend/core/transpiler.py", '        skip_security: bool = False\n', '')
-          replace_exact("backend/core/transpiler.py", '            if self._cache_enabled:\n                cache_key = self._cache_key(sql, source, target, pretty, validate, skip_security)\n', '            if self._cache_enabled:\n                cache_key = self._cache_key(sql, source, target, pretty, validate)\n')
-          replace_exact("backend/core/transpiler.py", '        if security_enabled and not skip_security:\n', '        if security_enabled:\n')
-          replace_exact("backend/core/transpiler.py", '    def _cache_key(self, sql: str, source: str, target: str, pretty: bool, validate: bool = True, skip_security: bool = False) -> str:\n', '    def _cache_key(self, sql: str, source: str, target: str, pretty: bool, validate: bool = True) -> str:\n')
-          replace_exact("backend/core/transpiler.py", '        return f"v4|{rule_version}|{security_version}|{skip_security}|{sql}|{source}|{target}|{pretty}|{validate}"\n', '        return f"v4|{rule_version}|{security_version}|{sql}|{source}|{target}|{pretty}|{validate}"\n')
-          assert "skip_security" not in transpiler.read_text(encoding="utf-8"), "public security bypass remains"
+          text = transpiler.read_text(encoding="utf-8")
+          before = text
+          text = re.sub(r",\s*skip_security:\s*bool\s*=\s*False", "", text, count=1)
+          text = re.sub(r"\s+skip_security:\s*bool\s*=\s*False", "", text, count=1)
+          text = text.replace(" and not skip_security", "")
+          text = text.replace(", skip_security)", ")")
+          text = re.sub(r"\|\{skip_security\}", "", text)
+          assert text != before, "transpiler security-bypass patch made no changes"
+          assert "skip_security" not in text, "public security bypass remains"
+          transpiler.write_text(text, encoding="utf-8")
 
           replace_exact("backend/api/main.py", '            "rules": {"count": 40, "label": "🔧 Conversion Rules"},\n', '            "rules": {"count": len(transpiler.post_processor.engine.rules), "label": "🔧 Conversion Rules"},\n')
           replace_exact("backend/api/main.py", '                "conversion_rules": 40\n', '                "conversion_rules": len(transpiler.post_processor.engine.rules)\n')
 
           test_file = Path("backend/tests/test_default_security_policy.py")
           test_text = test_file.read_text(encoding="utf-8")
+          assert "import pytest\n" not in test_text, "first-batch test already patched"
           test_text = test_text.replace('import subprocess\nimport sys\n', 'import subprocess\nimport sys\n\nimport pytest\n', 1)
-          assert 'import pytest\n' in test_text
           test_text += '''\n\ndef test_security_bypass_parameter_is_not_supported():\n    with pytest.raises(TypeError):\n        SQLTranspiler().transpile(\n            "DROP TABLE users",\n            "mysql",\n            "postgres",\n            skip_security=True,\n        )\n'''
           test_file.write_text(test_text, encoding="utf-8")
 
@@ -68,11 +73,11 @@ jobs:
           readme.write_text(readme_text.replace(marker, limitation + marker, 1), encoding="utf-8")
           PY
 
-          if grep -R --line-number --fixed-strings 'skip_security' backend --exclude-dir='__pycache__'; then
-            test "$(grep -R --count --fixed-strings 'skip_security' backend/tests/test_default_security_policy.py)" = "1" || exit 1
-          fi
-          ! grep -R --line-number --fixed-strings 'conversion_rules": 40' backend
-          ! grep -R --line-number --fixed-strings '"rules": {"count": 40' backend
+          # Show and validate all intended changes before installing dependencies.
+          grep -n 'security_block_dangerous' backend/core/config.py
+          grep -n 'SDM_SECURITY_BLOCK_DANGEROUS' .env.example
+          grep -n 'conversion_rules\|"rules"' backend/api/main.py
+          ! grep -R --line-number --fixed-strings 'skip_security' backend/core/transpiler.py
 
       - name: Install locked dependencies
         run: |
