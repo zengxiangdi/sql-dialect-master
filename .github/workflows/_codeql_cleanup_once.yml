@@ -23,71 +23,78 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Fix static-analysis findings
+      - name: Apply static-analysis fixes
         run: |
           python -m pip install ruff
           ruff check backend/core/nl2sql.py backend/core/transpiler.py backend/api/main.py backend/core/config.py backend/core/parser.py backend/core/rules.py backend/tests/test_properties.py backend/tests/test_audit_remaining_gaps.py backend/tests/test_api.py frontend/components.py frontend/themes.py frontend/tabs/lineage.py sdm_local.py --select F401,F841,I001 --fix || true
           python - <<'PY'
           from pathlib import Path
+          import re
 
-          nl2sql = Path("backend/core/nl2sql.py")
-          text = nl2sql.read_text()
-          text = text.replace(
-              '        logger.info("NL2SQL: Processing \'%s...\' for dialect %s", text[:50], dialect)\n',
-              '        log_text = text[:50].replace("\\r", "\\\\r").replace("\\n", "\\\\n")\n'
-              '        logger.info("NL2SQL: Processing \'%s...\' for dialect %s", log_text, dialect)\n',
+          changed = []
+
+          path = Path("backend/core/nl2sql.py")
+          text = path.read_text()
+          old = '        logger.info("NL2SQL: Processing \'%s...\' for dialect %s", text[:50], dialect)\n'
+          new = '        log_text = text[:50].replace("\\r", "\\\\r").replace("\\n", "\\\\n")\n        logger.info("NL2SQL: Processing \'%s...\' for dialect %s", log_text, dialect)\n'
+          if old in text:
+              text = text.replace(old, new, 1)
+              changed.append("nl2sql log sanitization")
+
+          match = re.search(
+              r'(    def _extract_ordering\(self, text: str\) -> Optional\[Tuple\[str, str\]\]:.*?\n)(?=    def )',
+              text,
+              re.DOTALL,
           )
-          start = text.index('        if any(k in text for k in ["排序", "排列", "sort", "order", "sorted"]):')
-          end = text.index('        if any(k in text for k in ["最大", "最高", "最多", "max", "highest", "top"]):', start)
-          text = (
-              text[:start]
-              + '        if any(k in text for k in ["排序", "排列", "sort", "order", "sorted"]):\n'
-                '            return (\n'
-                '                order_col or "id",\n'
-                '                "DESC"\n'
-                '                if any(k in text for k in ["降序", "从大到小", "递减", "desc", "descending", "decreasing"])\n'
-                '                else "ASC",\n'
-                '            )\n'
-              + text[end:]
+          if not match:
+              raise SystemExit("Could not locate _extract_ordering")
+          block = match.group(1)
+          block2 = re.sub(r'^        direction = "ASC"\n', '', block, count=1, flags=re.MULTILINE)
+          block2 = re.sub(
+              r'(?P<indent>        )if any\(k in text for k in \["排序", "排列", "sort", "order", "sorted"\]\):\n'
+              r'            direction = \(\n'
+              r'                "DESC"\n'
+              r'                if any\(k in text for k in \["降序", "从大到小", "递减", "desc", "descending", "decreasing"\]\)\n'
+              r'                else "ASC"\n'
+              r'            \)\n'
+              r'            return \(order_col or "id", direction\)\n',
+              '        if any(k in text for k in ["排序", "排列", "sort", "order", "sorted"]):\n'
+              '            return (\n'
+              '                order_col or "id",\n'
+              '                "DESC"\n'
+              '                if any(k in text for k in ["降序", "从大到小", "递减", "desc", "descending", "decreasing"])\n'
+              '                else "ASC",\n'
+              '            )\n',
+              block2,
           )
-          nl2sql.write_text(text)
+          if block2 == block:
+              raise SystemExit("Could not rewrite _extract_ordering")
+          text = text[:match.start(1)] + block2 + text[match.end(1):]
+          path.write_text(text)
+          changed.append("nl2sql ordering assignment")
 
-          transpiler = Path("backend/core/transpiler.py")
-          text = transpiler.read_text()
-          text = text.replace(
-              '                result["warnings"].append(f"🔒 Security: {message}")\n'
-              '        except Exception:\n'
-              '            pass\n',
-              '                result["warnings"].append(f"🔒 Security: {message}")\n'
-              '        except Exception as exc:\n'
-              '            logger.debug("SQL statement parsing failed during security validation: %s", exc)\n',
-          )
-          transpiler.write_text(text)
+          path = Path("backend/core/transpiler.py")
+          text = path.read_text()
+          old = '        except Exception:\n            pass\n'
+          new = '        except Exception as exc:\n            logger.debug("SQL statement parsing failed during security validation: %s", exc)\n'
+          if old not in text:
+              raise SystemExit("Could not rewrite empty except")
+          text = text.replace(old, new, 1)
+          path.write_text(text)
+          changed.append("transpiler empty except")
 
-          lineage = Path("frontend/tabs/lineage.py")
-          text = lineage.read_text().replace(
-              'from frontend.app_context import DIALECTS, DIALECT_INFO, get_dialect_label\n',
-              'from frontend.app_context import DIALECTS, get_dialect_label\n',
-          )
-          lineage.write_text(text)
+          path = Path("backend/tests/test_api.py")
+          text = path.read_text()
+          start = text.index('    def test_stacked_query_injection(self):')
+          end = text.index('    def test_timing_attack_sleep(self):', start)
+          segment = text[start:end]
+          segment2 = segment.replace('        data = response.json()\n', '', 1)
+          if segment == segment2:
+              raise SystemExit("Could not remove test_api data assignment")
+          path.write_text(text[:start] + segment2 + text[end:])
+          changed.append("test_api unused local")
 
-          themes = Path("frontend/themes.py")
-          themes.write_text(themes.read_text().replace('from typing import Dict, Any\n', 'from typing import Dict\n'))
-
-          sdm_local = Path("sdm_local.py")
-          sdm_local.write_text(sdm_local.read_text().replace('    DIALECT_INFO,\n', ''))
-
-          audit = Path("backend/tests/test_audit_remaining_gaps.py")
-          text = audit.read_text().replace('    import backend.api.main as main_module\n', '    from backend.api import main as main_module\n')
-          audit.write_text(text)
-
-          api_test = Path("backend/tests/test_api.py")
-          text = api_test.read_text()
-          function_start = text.index('    def test_stacked_query_injection(self):')
-          function_end = text.index('    def test_timing_attack_sleep(self):', function_start)
-          segment = text[function_start:function_end].replace('        data = response.json()\n', '')
-          text = text[:function_start] + segment + text[function_end:]
-          api_test.write_text(text)
+          print("Applied:", ", ".join(changed))
           PY
 
       - name: Validate targeted files
@@ -101,9 +108,5 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           rm -f .github/workflows/_codeql_cleanup_once.yml CODEQL_CLEANUP_TRIGGER.txt
           git add -A
-          if git diff --cached --quiet; then
-            echo "No changes to commit"
-            exit 0
-          fi
           git commit -m "fix: clear remaining CodeQL findings"
           git push origin HEAD:fix/codeql-post-merge-cleanup
