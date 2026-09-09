@@ -67,29 +67,37 @@ def _get_readiness_lock() -> asyncio.Lock:
 
 def _run_checks() -> dict[str, dict[str, Any]]:
     """Run the lightweight-but-real component checks synchronously."""
-    from backend.api import main
+    from backend.core.functions_lookup import FunctionEncyclopedia
+    from backend.core.nl2sql import NL2SQLGenerator
+    from backend.core.transpiler import SQLTranspiler
+    from backend.core.type_mapping import TypeMapper
+
+    transpiler = SQLTranspiler()
+    function_encyclopedia = FunctionEncyclopedia()
+    type_mapper = TypeMapper()
+    nl2sql_generator = NL2SQLGenerator()
 
     checks: dict[str, dict[str, Any]] = {}
     try:
-        result = main.transpiler.transpile("SELECT 1 AS readiness_probe", "mysql", "postgres")
+        result = transpiler.transpile("SELECT 1 AS readiness_probe", "mysql", "postgres")
         checks["transpiler"] = {"status": "ok" if result.success else "error", "test_result": result.success}
     except Exception:
         logger.exception("Readiness transpiler probe failed")
         checks["transpiler"] = {"status": "error", "code": "probe_failed"}
     try:
-        function = main.func_encyclopedia.get_function("CONCAT")
+        function = function_encyclopedia.get_function("CONCAT")
         checks["functions"] = {"status": "ok" if function else "error", "sample_lookup": "CONCAT" if function else None}
     except Exception:
         logger.exception("Readiness function probe failed")
         checks["functions"] = {"status": "error", "code": "probe_failed"}
     try:
-        mapping = main.type_mapper.map_type("VARCHAR", "mysql", "postgres")
+        mapping = type_mapper.map_type("VARCHAR", "mysql", "postgres")
         checks["types"] = {"status": "ok" if mapping.get("success") else "error", "sample_mapping": mapping.get("target_type")}
     except Exception:
         logger.exception("Readiness type probe failed")
         checks["types"] = {"status": "error", "code": "probe_failed"}
     try:
-        generated = main.nl2sql_generator.generate("查询所有用户", "mysql")
+        generated = nl2sql_generator.generate("查询所有用户", "mysql")
         checks["nl2sql"] = {"status": "ok" if generated.success else "error", "confidence": generated.confidence}
     except Exception:
         logger.exception("Readiness NL2SQL probe failed")
