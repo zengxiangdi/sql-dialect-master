@@ -11,13 +11,12 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict
 
-from fastapi import HTTPException, Request, Response
+from fastapi import Request, Response
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from .rate_limit_store import RateLimitStore, create_rate_limit_store
 from .readiness import health_probe_response
-from backend.core.exceptions import SDMException, ErrorCode
 
 logger = logging.getLogger(__name__)
 DEFAULT_MAX_REQUEST_BODY_BYTES = 512 * 1024
@@ -142,7 +141,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
 
 class StructuredLoggingMiddleware(BaseHTTPMiddleware):
-    """Structured logging middleware and last-resort API error boundary."""
+    """Structured request logging and request-id propagation."""
 
     def __init__(self, app, log_body: bool = False):
         super().__init__(app)
@@ -161,53 +160,20 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
                 pass
         return str(uuid.uuid4())
 
-    @staticmethod
-    def _error_response(request_id: str, status_code: int, error_code: str, message: str) -> JSONResponse:
-        """Return the stable API error envelope without internal exception details."""
-        return JSONResponse(
-            status_code=status_code,
-            content={
-                "success": False,
-                "error": {
-                    "code": error_code,
-                    "message": message,
-                },
-                "request_id": request_id,
-                "timestamp": datetime.now().isoformat(),
-            },
-            headers={"X-Request-ID": request_id},
-        )
-
     async def dispatch(self, request: Request, call_next) -> Response:
         start_time = time.time()
         request_id = self._get_request_id(request)
+        request.state.request_id = request_id
         status_code = 500
         error = None
-        response: Response | None = None
         log_data = {"event": "request_start", "request_id": request_id, "method": _sanitize_log_value(request.method), "path": _sanitize_log_value(request.url.path), "query": _sanitize_log_value(str(request.query_params)), "client": _sanitize_log_value(request.client.host if request.client else "unknown"), "timestamp": datetime.now().isoformat()}
         logger.info(json.dumps(log_data))
         try:
             response = await call_next(request)
             status_code = response.status_code
-        except SDMException as exc:
-            status_code = 400
-            error = _sanitize_log_value(str(exc))
-            code = exc.error_code.value if isinstance(exc.error_code, ErrorCode) else str(exc.error_code)
-            response = self._error_response(request_id, status_code, code, exc.message)
-        except HTTPException as exc:
-            status_code = exc.status_code
-            error = _sanitize_log_value(str(exc.detail))
-            response = self._error_response(request_id, status_code, f"HTTP_{status_code}", str(exc.detail))
         except Exception as exc:
-            status_code = 500
             error = _sanitize_log_value(str(exc))
-            logger.exception("Unhandled API exception", extra={"request_id": request_id})
-            response = self._error_response(
-                request_id,
-                status_code,
-                ErrorCode.INTERNAL_ERROR.value,
-                "Internal server error",
-            )
+            raise
         finally:
             process_time = time.time() - start_time
             log_data = {"event": "request_end", "request_id": request_id, "method": _sanitize_log_value(request.method), "path": _sanitize_log_value(request.url.path), "status_code": status_code, "process_time_ms": round(process_time * 1000, 2), "error": error, "timestamp": datetime.now().isoformat()}
