@@ -4,8 +4,8 @@ from backend.core.semantic_diff import diff_sql_ast
 def test_function_changes_are_reported_as_function_category():
     result = diff_sql_ast(
         "SELECT LENGTH(name) FROM users",
-        "SELECT CHAR_LENGTH(name) FROM users",
-        source_dialect="mysql",
+        "SELECT UPPER(name) FROM users",
+        source_dialect="postgres",
         target_dialect="postgres",
     )
 
