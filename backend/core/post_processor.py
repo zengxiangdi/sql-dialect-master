@@ -9,119 +9,59 @@ import re
 from typing import Tuple, List, Callable
 
 from .rules import rule_engine, RuleEngine
+from .p1_sql_scanner import mask_non_executable
 
-# Configure module logger
 logger = logging.getLogger(__name__)
 
 
 class PostProcessor:
-    """Apply dialect-specific fixes after sqlglot transpilation.
-    
-    Uses a combination of:
-    1. Rule engine for declarative pattern-based transformations
-    2. Custom handlers for complex transformations
-    """
-    
+    """Apply dialect-specific fixes after sqlglot transpilation."""
+
     def __init__(self, engine: RuleEngine = None):
-        """Initialize with rule engine.
-        
-        Args:
-            engine: Rule engine to use. Uses global engine if None.
-        """
         self.engine = engine or rule_engine
-    
+
     def process(self, sql: str, source: str, target: str) -> Tuple[str, List[str]]:
-        """Apply post-processing rules.
-        
-        Args:
-            sql: SQL to process
-            source: Source dialect
-            target: Target dialect
-            
-        Returns:
-            Tuple of (processed_sql, list_of_notes)
-        """
         result = sql
         all_notes = []
-        
-        # Step 1: Apply rule engine transformations
         result, rule_notes = self.engine.apply_rules(result, source, target)
         all_notes.extend(rule_notes)
-        
-        # Step 2: Apply complex transformations that need custom logic
         result, custom_notes = self._apply_custom_transformations(result, source, target)
         all_notes.extend(custom_notes)
-        
-        # Step 3: Add warnings for unsupported constructs
         warnings = self._check_warnings(sql, source, target)
         all_notes.extend(warnings)
-        
         return result, all_notes
-    
+
     def _apply_custom_transformations(self, sql: str, source: str, target: str) -> Tuple[str, List[str]]:
-        """Apply complex transformations that need custom logic.
-        
-        Args:
-            sql: SQL to transform
-            source: Source dialect
-            target: Target dialect
-            
-        Returns:
-            Tuple of (transformed_sql, list_of_notes)
-        """
         result = sql
         notes = []
-        
-        # Oracle DECODE → CASE WHEN (complex transformation)
         if source == "oracle" and target != "oracle":
             result, decode_notes = self._convert_decode_to_case(result)
             notes.extend(decode_notes)
-        
-        # MySQL DATE_FORMAT → PostgreSQL TO_CHAR
         if source == "mysql" and target == "postgres":
             result, date_notes = self._convert_mysql_date_format(result)
             notes.extend(date_notes)
-        
-        # PostgreSQL TO_CHAR → MySQL DATE_FORMAT
         if source == "postgres" and target == "mysql":
             result, date_notes = self._convert_postgres_to_char(result)
             notes.extend(date_notes)
-        
-        # SQL Server TOP → LIMIT
         if source == "tsql" and target in ("mysql", "postgres", "hive", "spark"):
             result, top_notes = self._convert_top_to_limit(result)
             notes.extend(top_notes)
-        
-        # Oracle ROWNUM → LIMIT
         if source == "oracle" and target in ("mysql", "postgres", "hive", "spark"):
             result, rownum_notes = self._convert_rownum_to_limit(result)
             notes.extend(rownum_notes)
-        
-        # GROUP_CONCAT with default separator fix
         if source == "mysql" and target == "postgres":
             result, gc_notes = self._fix_group_concat_default_separator(result)
             notes.extend(gc_notes)
-        
         return result, notes
 
-    def _replace_function_calls(
-        self,
-        sql: str,
-        function_name: str,
-        replacer: Callable[[str, str], str],
-    ) -> str:
-        """Replace complete function calls with balanced parentheses.
-
-        The scanner is quote-aware so text inside SQL string literals is never
-        treated as executable function syntax.
-        """
+    def _replace_function_calls(self, sql: str, function_name: str, replacer: Callable[[str, str], str]) -> str:
+        """Replace complete function calls with balanced parentheses using a quote-aware scanner."""
         upper_name = function_name.upper()
         name_len = len(function_name)
         result = []
         i = 0
         quote = False
         length = len(sql)
-
         while i < length:
             char = sql[i]
             if char == "'":
@@ -133,7 +73,6 @@ class PostProcessor:
                 quote = not quote
                 i += 1
                 continue
-
             if not quote and sql[i:i + name_len].upper() == upper_name:
                 name_end = i + name_len
                 if i == 0 or not (sql[i - 1].isalnum() or sql[i - 1] == '_'):
@@ -166,53 +105,33 @@ class PostProcessor:
                             result.append(sql[i:])
                             break
                         continue
-
             result.append(char)
             i += 1
-
         return ''.join(result)
-    
+
     def _convert_decode_to_case(self, sql: str) -> Tuple[str, List[str]]:
-        """Convert Oracle DECODE to CASE WHEN."""
         notes = []
-        
         if "DECODE" not in sql.upper():
             return sql, notes
-        
         def decode_to_case(args_str: str, original: str) -> str:
-            # Parse arguments carefully handling nested parentheses
             args = self._parse_function_args(args_str)
-            
             if len(args) < 3:
                 return original
-            
             col = args[0]
             pairs = args[1:]
-            
-            # Build CASE expression
             case_parts = []
             i = 0
             while i < len(pairs) - 1:
                 case_parts.append(f"WHEN {col} = {pairs[i]} THEN {pairs[i+1]}")
                 i += 2
-            
-            # Last argument is default if odd number of remaining args
-            if len(pairs) % 2 == 1:
-                default = pairs[-1]
-            else:
-                default = "NULL"
-            
+            default = pairs[-1] if len(pairs) % 2 == 1 else "NULL"
             return f"CASE {' '.join(case_parts)} ELSE {default} END"
-        
         result = self._replace_function_calls(sql, "DECODE", decode_to_case)
-        
         if result != sql:
             notes.append("Converted DECODE to CASE WHEN")
-        
         return result, notes
-    
+
     def _parse_function_args(self, args_str: str) -> List[str]:
-        """Parse function arguments handling nested parentheses and quotes."""
         args = []
         current = ""
         depth = 0
@@ -239,19 +158,14 @@ class PostProcessor:
             else:
                 current += char
             i += 1
-        
         if current.strip():
             args.append(current.strip())
-        
         return args
-    
+
     def _convert_mysql_date_format(self, sql: str) -> Tuple[str, List[str]]:
-        """Convert MySQL DATE_FORMAT to PostgreSQL TO_CHAR."""
         notes = []
-        
         if "DATE_FORMAT" not in sql.upper():
             return sql, notes
-        
         def convert_format(args_str: str, original: str) -> str:
             args = self._parse_function_args(args_str)
             if len(args) != 2:
@@ -260,35 +174,17 @@ class PostProcessor:
             if len(fmt) < 2 or fmt[0] != "'" or fmt[-1] != "'":
                 return original
             fmt = fmt[1:-1]
-            # Convert MySQL format specifiers to PostgreSQL
-            pg_fmt = fmt
-            pg_fmt = pg_fmt.replace('%Y', 'YYYY')
-            pg_fmt = pg_fmt.replace('%y', 'YY')
-            pg_fmt = pg_fmt.replace('%m', 'MM')
-            pg_fmt = pg_fmt.replace('%d', 'DD')
-            pg_fmt = pg_fmt.replace('%H', 'HH24')
-            pg_fmt = pg_fmt.replace('%h', 'HH12')
-            pg_fmt = pg_fmt.replace('%i', 'MI')
-            pg_fmt = pg_fmt.replace('%s', 'SS')
-            pg_fmt = pg_fmt.replace('%p', 'AM')
-            pg_fmt = pg_fmt.replace('%W', 'Day')
-            pg_fmt = pg_fmt.replace('%M', 'Month')
+            pg_fmt = fmt.replace('%Y', 'YYYY').replace('%y', 'YY').replace('%m', 'MM').replace('%d', 'DD').replace('%H', 'HH24').replace('%h', 'HH12').replace('%i', 'MI').replace('%s', 'SS').replace('%p', 'AM').replace('%W', 'Day').replace('%M', 'Month')
             return f"TO_CHAR({expr}, '{pg_fmt.replace(chr(39), chr(39) * 2)}')"
-        
         result = self._replace_function_calls(sql, "DATE_FORMAT", convert_format)
-        
         if result != sql:
             notes.append("Converted DATE_FORMAT to TO_CHAR")
-        
         return result, notes
-    
+
     def _convert_postgres_to_char(self, sql: str) -> Tuple[str, List[str]]:
-        """Convert PostgreSQL TO_CHAR to MySQL DATE_FORMAT."""
         notes = []
-        
         if "TO_CHAR" not in sql.upper():
             return sql, notes
-        
         def convert_format(args_str: str, original: str) -> str:
             args = self._parse_function_args(args_str)
             if len(args) != 2:
@@ -297,153 +193,83 @@ class PostProcessor:
             if len(fmt) < 2 or fmt[0] != "'" or fmt[-1] != "'":
                 return original
             fmt = fmt[1:-1]
-            # Convert PostgreSQL format specifiers to MySQL
-            my_fmt = fmt
-            my_fmt = my_fmt.replace('YYYY', '%Y')
-            my_fmt = my_fmt.replace('YY', '%y')
-            my_fmt = my_fmt.replace('MM', '%m')
-            my_fmt = my_fmt.replace('DD', '%d')
-            my_fmt = my_fmt.replace('HH24', '%H')
-            my_fmt = my_fmt.replace('HH12', '%h')
-            my_fmt = my_fmt.replace('HH', '%H')
-            my_fmt = my_fmt.replace('MI', '%i')
-            my_fmt = my_fmt.replace('SS', '%s')
-            my_fmt = my_fmt.replace('AM', '%p')
-            my_fmt = my_fmt.replace('Day', '%W')
-            my_fmt = my_fmt.replace('Month', '%M')
+            my_fmt = fmt.replace('YYYY', '%Y').replace('YY', '%y').replace('MM', '%m').replace('DD', '%d').replace('HH24', '%H').replace('HH12', '%h').replace('HH', '%H').replace('MI', '%i').replace('SS', '%s').replace('AM', '%p').replace('Day', '%W').replace('Month', '%M')
             return f"DATE_FORMAT({expr}, '{my_fmt.replace(chr(39), chr(39) * 2)}')"
-        
         result = self._replace_function_calls(sql, "TO_CHAR", convert_format)
-        
         if result != sql:
             notes.append("Converted TO_CHAR to DATE_FORMAT")
-        
         return result, notes
-    
+
+    @staticmethod
+    def _single_rewrite(sql: str, pattern: str, replacement: Callable[[re.Match], str]):
+        """Apply one regex match against scanner-masked SQL and splice into original text."""
+        masked = mask_non_executable(sql)
+        match = re.search(pattern, masked, re.IGNORECASE)
+        if not match:
+            return sql, None
+        start, end = match.span()
+        original_match = sql[start:end]
+        proxy = re.match(pattern, original_match, re.IGNORECASE)
+        if proxy is None:
+            return sql, None
+        return sql[:start] + replacement(proxy) + sql[end:], match
+
     def _convert_top_to_limit(self, sql: str) -> Tuple[str, List[str]]:
-        """Convert SQL Server TOP to LIMIT."""
-        notes = []
-        
-        match = re.search(r"SELECT\s+TOP\s+(\d+)", sql, re.IGNORECASE)
+        masked = mask_non_executable(sql)
+        match = re.search(r"SELECT\s+TOP\s+(\d+)", masked, re.IGNORECASE)
         if not match:
-            return sql, notes
-        
+            return sql, []
         n = match.group(1)
-        result = re.sub(r"SELECT\s+TOP\s+\d+", "SELECT", sql, flags=re.IGNORECASE)
-        
-        # Add LIMIT if not already present
-        if "LIMIT" not in result.upper():
+        start, end = match.span()
+        result = sql[:start] + "SELECT" + sql[end:]
+        if "LIMIT" not in mask_non_executable(result).upper():
             result = result.rstrip(';').rstrip() + f" LIMIT {n}"
-        
-        notes.append(f"Converted TOP {n} to LIMIT {n}")
-        return result, notes
-    
+        return result, [f"Converted TOP {n} to LIMIT {n}"]
+
     def _convert_rownum_to_limit(self, sql: str) -> Tuple[str, List[str]]:
-        """Convert Oracle ROWNUM to LIMIT."""
-        notes = []
-        
-        if "ROWNUM" not in sql.upper():
-            return sql, notes
-        
-        match = re.search(r"ROWNUM\s*<=?\s*(\d+)", sql, re.IGNORECASE)
+        masked = mask_non_executable(sql)
+        match = re.search(r"ROWNUM\s*<=?\s*(\d+)", masked, re.IGNORECASE)
         if not match:
-            return sql, notes
-        
+            return sql, []
         n = match.group(1)
-        result = sql
-        
-        # Remove ROWNUM condition
-        result = re.sub(r"\s*AND\s+ROWNUM\s*<=?\s*\d+", "", result, flags=re.IGNORECASE)
-        result = re.sub(r"\s*WHERE\s+ROWNUM\s*<=?\s*\d+", "", result, flags=re.IGNORECASE)
-        
-        # Add LIMIT if not already present
-        if "LIMIT" not in result.upper():
+        start, end = match.span()
+        before = sql[:start]
+        after = sql[end:]
+        boundary = re.search(r"(?:\bWHERE\s*|\bAND\s*)$", masked[:start], re.IGNORECASE)
+        if boundary:
+            before = before[:boundary.start()]
+        result = before + after
+        if "LIMIT" not in mask_non_executable(result).upper():
             result = result.rstrip(';').rstrip() + f" LIMIT {n}"
-        
-        notes.append(f"Converted ROWNUM to LIMIT {n}")
-        return result, notes
-    
+        return result, [f"Converted ROWNUM to LIMIT {n}"]
+
     def _fix_group_concat_default_separator(self, sql: str) -> Tuple[str, List[str]]:
-        """Fix GROUP_CONCAT without separator for STRING_AGG conversion."""
-        notes = []
-        
-        # Match GROUP_CONCAT without SEPARATOR clause
-        pattern = r"GROUP_CONCAT\s*\((\w+)\)(?!\s+SEPARATOR)"
-        
-        def add_default_separator(match):
-            col = match.group(1)
-            return f"STRING_AGG({col}::TEXT, ',')"
-        
-        result = re.sub(pattern, add_default_separator, sql, flags=re.IGNORECASE)
-        
-        if result != sql:
-            notes.append("Converted GROUP_CONCAT to STRING_AGG with default separator")
-        
-        return result, notes
-    
+        masked = mask_non_executable(sql)
+        match = re.search(r"GROUP_CONCAT\s*\((\w+)\)(?!\s+SEPARATOR)", masked, re.IGNORECASE)
+        if not match:
+            return sql, []
+        col = match.group(1)
+        start, end = match.span()
+        result = sql[:start] + f"STRING_AGG({col}::TEXT, ',')" + sql[end:]
+        return result, ["Converted GROUP_CONCAT to STRING_AGG with default separator"]
+
     def _check_warnings(self, sql: str, source: str, target: str) -> List[str]:
-        """Check for constructs that may need manual attention.
-        
-        Args:
-            sql: Original SQL
-            source: Source dialect
-            target: Target dialect
-            
-        Returns:
-            List of warning messages
-        """
         warnings = []
         sql_upper = sql.upper()
-        
-        # Hive INSERT OVERWRITE
-        if source == "hive" and "INSERT OVERWRITE" in sql_upper:
-            if target in ("mysql", "postgres", "tsql", "oracle"):
-                warnings.append(
-                    f"WARNING: INSERT OVERWRITE not supported in {target}. "
-                    "Use TRUNCATE + INSERT or MERGE instead."
-                )
-        
-        # Oracle CONNECT BY
-        if source == "oracle" and "CONNECT BY" in sql_upper:
-            if target in ("hive", "postgres", "mysql"):
-                warnings.append(
-                    "WARNING: CONNECT BY requires manual conversion to WITH RECURSIVE CTE"
-                )
-        
-        # Hive DISTRIBUTE BY / CLUSTER BY
-        if source == "hive" and target in ("mysql", "postgres", "oracle", "tsql"):
-            if "DISTRIBUTE BY" in sql_upper or "CLUSTER BY" in sql_upper:
-                warnings.append(
-                    "WARNING: DISTRIBUTE BY/CLUSTER BY are Hive-specific hints, removed in target"
-                )
-        
-        # Stored procedures / PL/SQL
+        if source == "hive" and "INSERT OVERWRITE" in sql_upper and target in ("mysql", "postgres", "tsql", "oracle"):
+            warnings.append(f"WARNING: INSERT OVERWRITE not supported in {target}. Use TRUNCATE + INSERT or MERGE instead.")
+        if source == "oracle" and "CONNECT BY" in sql_upper and target in ("hive", "postgres", "mysql"):
+            warnings.append("WARNING: CONNECT BY requires manual conversion to WITH RECURSIVE CTE")
+        if source == "hive" and target in ("mysql", "postgres", "oracle", "tsql") and ("DISTRIBUTE BY" in sql_upper or "CLUSTER BY" in sql_upper):
+            warnings.append("WARNING: DISTRIBUTE BY/CLUSTER BY are Hive-specific hints, removed in target")
         if any(kw in sql_upper for kw in ["CREATE PROCEDURE", "CREATE FUNCTION", "BEGIN", "DECLARE"]):
-            warnings.append(
-                "WARNING: Procedural code detected. Stored procedure syntax varies significantly between databases."
-            )
-        
-        # Materialized views
+            warnings.append("WARNING: Procedural code detected. Stored procedure syntax varies significantly between databases.")
         if "MATERIALIZED VIEW" in sql_upper:
-            warnings.append(
-                "WARNING: Materialized view syntax and refresh mechanisms vary by database."
-            )
-        
+            warnings.append("WARNING: Materialized view syntax and refresh mechanisms vary by database.")
         return warnings
-    
+
     def get_stats(self) -> dict:
-        """Get post-processor statistics.
-        
-        Returns:
-            Dictionary with stats
-        """
         return {
             "rule_engine": self.engine.get_stats(),
-            "custom_handlers": [
-                "DECODE to CASE",
-                "DATE_FORMAT conversion",
-                "TOP to LIMIT",
-                "ROWNUM to LIMIT",
-                "GROUP_CONCAT separator fix"
-            ]
+            "custom_handlers": ["DECODE to CASE", "DATE_FORMAT conversion", "TOP to LIMIT", "ROWNUM to LIMIT", "GROUP_CONCAT separator fix"]
         }
