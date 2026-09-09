@@ -54,61 +54,6 @@ class PostProcessor:
             notes.extend(gc_notes)
         return result, notes
 
-    def _replace_function_calls(self, sql: str, function_name: str, replacer: Callable[[str, str], str]) -> str:
-        """Replace complete function calls with balanced parentheses using a quote-aware scanner."""
-        upper_name = function_name.upper()
-        name_len = len(function_name)
-        result = []
-        i = 0
-        quote = False
-        length = len(sql)
-        while i < length:
-            char = sql[i]
-            if char == "'":
-                result.append(char)
-                if quote and i + 1 < length and sql[i + 1] == "'":
-                    result.append(sql[i + 1])
-                    i += 2
-                    continue
-                quote = not quote
-                i += 1
-                continue
-            if not quote and sql[i:i + name_len].upper() == upper_name:
-                name_end = i + name_len
-                if i == 0 or not (sql[i - 1].isalnum() or sql[i - 1] == '_'):
-                    j = name_end
-                    while j < length and sql[j].isspace():
-                        j += 1
-                    if j < length and sql[j] == '(':
-                        depth = 0
-                        inner_quote = False
-                        k = j
-                        while k < length:
-                            inner = sql[k]
-                            if inner == "'":
-                                if inner_quote and k + 1 < length and sql[k + 1] == "'":
-                                    k += 2
-                                    continue
-                                inner_quote = not inner_quote
-                            elif not inner_quote:
-                                if inner == '(':
-                                    depth += 1
-                                elif inner == ')':
-                                    depth -= 1
-                                    if depth == 0:
-                                        args = sql[j + 1:k]
-                                        result.append(replacer(args, sql[i:k + 1]))
-                                        i = k + 1
-                                        break
-                            k += 1
-                        else:
-                            result.append(sql[i:])
-                            break
-                        continue
-            result.append(char)
-            i += 1
-        return ''.join(result)
-
     def _convert_decode_to_case(self, sql: str) -> Tuple[str, List[str]]:
         notes = []
         if "DECODE" not in sql.upper():
