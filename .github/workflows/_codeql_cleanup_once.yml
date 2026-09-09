@@ -37,21 +37,18 @@ jobs:
               '        log_text = text[:50].replace("\\r", "\\\\r").replace("\\n", "\\\\n")\n'
               '        logger.info("NL2SQL: Processing \'%s...\' for dialect %s", log_text, dialect)\n',
           )
-          text = text.replace(
-              '        if any(k in text for k in ["排序", "排列", "sort", "order", "sorted"]):\n'
-              '            direction = (\n'
-              '                "DESC"\n'
-              '                if any(k in text for k in ["降序", "从大到小", "递减", "desc", "descending", "decreasing"])\n'
-              '                else "ASC"\n'
-              '            )\n'
-              '            return (order_col or "id", direction)\n',
-              '        if any(k in text for k in ["排序", "排列", "sort", "order", "sorted"]):\n'
-              '            return (\n'
-              '                order_col or "id",\n'
-              '                "DESC"\n'
-              '                if any(k in text for k in ["降序", "从大到小", "递减", "desc", "descending", "decreasing"])\n'
-              '                else "ASC",\n'
-              '            )\n',
+          start = text.index('        if any(k in text for k in ["排序", "排列", "sort", "order", "sorted"]):')
+          end = text.index('        if any(k in text for k in ["最大", "最高", "最多", "max", "highest", "top"]):', start)
+          text = (
+              text[:start]
+              + '        if any(k in text for k in ["排序", "排列", "sort", "order", "sorted"]):\n'
+                '            return (\n'
+                '                order_col or "id",\n'
+                '                "DESC"\n'
+                '                if any(k in text for k in ["降序", "从大到小", "递减", "desc", "descending", "decreasing"])\n'
+                '                else "ASC",\n'
+                '            )\n'
+              + text[end:]
           )
           nl2sql.write_text(text)
 
@@ -85,7 +82,11 @@ jobs:
           audit.write_text(text)
 
           api_test = Path("backend/tests/test_api.py")
-          text = api_test.read_text().replace('        data = response.json()\n    \n    def test_timing_attack_sleep', '    \n    def test_timing_attack_sleep')
+          text = api_test.read_text()
+          function_start = text.index('    def test_stacked_query_injection(self):')
+          function_end = text.index('    def test_timing_attack_sleep(self):', function_start)
+          segment = text[function_start:function_end].replace('        data = response.json()\n', '')
+          text = text[:function_start] + segment + text[function_end:]
           api_test.write_text(text)
           PY
 
@@ -98,7 +99,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          rm -f .github/workflows/_codeql_cleanup_once.yml
+          rm -f .github/workflows/_codeql_cleanup_once.yml CODEQL_CLEANUP_TRIGGER.txt
           git add -A
           if git diff --cached --quiet; then
             echo "No changes to commit"
