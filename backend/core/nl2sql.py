@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import sqlglot
 
 from .config import SUPPORTED_DIALECTS, settings
+from .column_hint_validation import validate_column_hints
 from .nl2sql_components.mappings import (
     KEYWORDS as MAPPING_KEYWORDS,
     TABLE_PATTERNS as MAPPING_TABLE_PATTERNS,
@@ -276,6 +277,15 @@ class NL2SQLGenerator:
     ) -> NL2SQLResult:
         """Generate SQL from natural language text."""
         dialect = dialect or self.default_dialect
+        column_hints_error = validate_column_hints(column_hints)
+        if column_hints_error:
+            return NL2SQLResult(
+                success=False,
+                input_text=text if isinstance(text, str) else "",
+                dialect=dialect,
+                explanation=column_hints_error,
+                confidence=0.0,
+            )
         text_lower = text.lower()
 
         logger.info("NL2SQL: Processing '%s...' for dialect %s", text[:50], dialect)

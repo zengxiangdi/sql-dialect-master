@@ -22,6 +22,7 @@ from .config import (
     settings
 )
 from .exceptions import ConfigurationError
+from .p2_data_validation import _validate_function_entry
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -80,6 +81,8 @@ class FunctionEncyclopedia:
                 f"Invalid function data in {self.data_path}: 'functions' must be a list",
                 details={"data_path": str(self.data_path)},
             )
+        for index, entry in enumerate(functions):
+            _validate_function_entry(self.data_path, index, entry)
         return functions
     
     def _build_index(self) -> None:

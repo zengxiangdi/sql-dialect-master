@@ -153,6 +153,9 @@ app.add_middleware(
     enabled=settings.rate_limit_enabled,
 )
 
+# Structured request logging must wrap rate limiting so rejected requests also get IDs.
+app.add_middleware(StructuredLoggingMiddleware)
+
 # Initialize services
 transpiler = SQLTranspiler()
 func_encyclopedia = FunctionEncyclopedia()
@@ -581,35 +584,11 @@ async def generate_sql(request: NL2SQLRequest):
 
 @app.get("/health", tags=["system"])
 async def health_check():
-    """
-    ❤️ Health Check Endpoint
-
-    Returns comprehensive service status including:
-    - Overall health status
-    - Individual service status
-    - Resource statistics
-    """
-    services = {
-        "transpiler": {"status": "✅ healthy", "rules": 40, "description": "SQL conversion engine"},
-        "functions": {"status": "✅ healthy", "count": len(func_encyclopedia.functions), "description": "Function encyclopedia"},
-        "types": {"status": "✅ healthy", "count": len(type_mapper.mappings), "description": "Type mapping service"},
-        "nl2sql": {"status": "✅ healthy", "description": "Natural language processor"}
-    }
-
-    all_healthy = all("healthy" in s["status"] for s in services.values())
-
+    """Return process liveness without probing business dependencies."""
     return {
-        "status": "✅ healthy" if all_healthy else "⚠️ degraded",
+        "status": "alive",
         "version": API_VERSION,
-        "uptime": "Available",
         "timestamp": datetime.now().isoformat(),
-        "services": services,
-        "stats": {
-            "dialects": len(SUPPORTED_DIALECTS),
-            "functions": len(func_encyclopedia.functions),
-            "types": len(type_mapper.mappings),
-            "rules": 40
-        }
     }
 
 
@@ -634,8 +613,8 @@ async def deep_health_check():
             "test_result": result.success,
             "cache_stats": transpiler.get_stats().get("cache", {})
         }
-    except Exception as e:
-        checks["transpiler"] = {"status": "❌ error", "message": str(e)}
+    except Exception:
+        checks["transpiler"] = {"status": "❌ error", "code": "probe_failed"}
 
     # Test function encyclopedia
     try:
@@ -645,8 +624,8 @@ async def deep_health_check():
             "total_count": len(func_encyclopedia.functions),
             "sample_lookup": "CONCAT" if func else None
         }
-    except Exception as e:
-        checks["functions"] = {"status": "❌ error", "message": str(e)}
+    except Exception:
+        checks["functions"] = {"status": "❌ error", "code": "probe_failed"}
 
     # Test type mapper
     try:
@@ -656,8 +635,8 @@ async def deep_health_check():
             "total_count": len(type_mapper.mappings),
             "sample_mapping": type_result.get("target_type")
         }
-    except Exception as e:
-        checks["types"] = {"status": "❌ error", "message": str(e)}
+    except Exception:
+        checks["types"] = {"status": "❌ error", "code": "probe_failed"}
 
     # Test NL2SQL
     try:
@@ -667,8 +646,8 @@ async def deep_health_check():
             "confidence": nl_result.confidence,
             "generated_sql": nl_result.sql[:50] if nl_result.sql else None
         }
-    except Exception as e:
-        checks["nl2sql"] = {"status": "❌ error", "message": str(e)}
+    except Exception:
+        checks["nl2sql"] = {"status": "❌ error", "code": "probe_failed"}
 
     # Overall status
     all_ok = all("ok" in c.get("status", "") for c in checks.values())

@@ -3,9 +3,11 @@
 
 Provides rate limiting, request-size protection, logging, and security headers.
 """
-import logging
-import time
 import json
+import logging
+import os
+import secrets
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -55,6 +57,16 @@ class RateLimiter:
         return stats
 
 
+def _probe_allowed(request: Request) -> bool:
+    """Allow health probes only from loopback or with the configured probe secret."""
+    token = os.getenv("SDM_HEALTH_PROBE_TOKEN", "").strip()
+    supplied = request.headers.get("X-Health-Probe-Token", "")
+    if token and supplied and secrets.compare_digest(supplied, token):
+        return True
+    client = request.client
+    return bool(client and client.host in {"127.0.0.1", "::1", "localhost"})
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """Rate limiting middleware with a bounded request-body guard."""
 
@@ -93,8 +105,42 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         body_error = await self._read_bounded_body(request)
         if body_error is not None:
             return body_error
-        if request.url.path == "/ready" and request.method in {"GET", "HEAD"}:
-            return await readiness_response(request)
+
+        if request.url.path in {"/ready", "/health/deep"} and request.method in {"GET", "HEAD"}:
+            if not _probe_allowed(request):
+                return JSONResponse(
+                    status_code=403,
+                    content={"success": False, "error": {"code": 403, "message": "health probe access denied"}},
+                )
+            if request.url.path == "/ready":
+                return await readiness_response(request)
+            from . import readiness
+            checks = await readiness._get_checks()
+            failed = [name for name, check in checks.items() if check.get("status") != "ok"]
+            return JSONResponse(
+                status_code=503 if failed else 200,
+                content={
+                    "status": "❌ unhealthy" if failed else "✅ healthy",
+                    "version": readiness._api_version(),
+                    "checks": checks,
+                },
+            )
+
+        if request.url.path == "/api/nl2sql" and request.method == "POST":
+            try:
+                body = await request.body()
+                payload = json.loads(body.decode("utf-8")) if body else {}
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                payload = None
+            if isinstance(payload, dict):
+                from backend.core.column_hint_validation import validate_column_hints
+                error = validate_column_hints(payload.get("column_hints"))
+                if error:
+                    return JSONResponse(
+                        status_code=422,
+                        content={"success": False, "error": {"code": "VALIDATION_FAILED", "message": error}},
+                    )
+
         if not self.enabled:
             return await call_next(request)
         if request.url.path in ["/health", "/"] and request.method in {"GET", "HEAD"}:

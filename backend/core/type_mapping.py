@@ -14,6 +14,7 @@ from typing import Optional, List, Dict, Any
 
 from .config import SUPPORTED_DIALECTS, TYPE_CATEGORIES, TypeMappingInfo
 from .exceptions import ConfigurationError
+from .p2_data_validation import _validate_type_mapping_entry
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -75,6 +76,14 @@ class TypeMapper:
                 f"Invalid type mapping data in {self.data_path}: 'precision_warnings' must be an object",
                 details={"data_path": str(self.data_path)},
             )
+        for name, entry in mappings.items():
+            _validate_type_mapping_entry(self.data_path, name, entry)
+        for name, warning in precision_warnings.items():
+            if not isinstance(name, str) or not name.strip() or not isinstance(warning, str):
+                raise ConfigurationError(
+                    f"Invalid runtime data in {self.data_path}: precision_warnings must map non-empty strings to strings",
+                    details={"data_path": str(self.data_path)},
+                )
 
         return data
     

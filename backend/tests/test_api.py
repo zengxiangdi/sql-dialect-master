@@ -9,12 +9,17 @@ Tests all API endpoints for correct behavior:
 - /api/nl2sql - Natural language to SQL
 - /health - Health check endpoints
 """
+import os
 import pytest
 import sys
 from pathlib import Path
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+# Internal health endpoints require an explicit probe credential in tests.
+os.environ.setdefault("SDM_HEALTH_PROBE_TOKEN", "test-health-token")
+HEALTH_HEADERS = {"X-Health-Probe-Token": "test-health-token"}
 
 from fastapi.testclient import TestClient
 from backend.api.main import app
@@ -53,7 +58,7 @@ class TestDialectsEndpoint:
     """Tests for the /api/dialects endpoint."""
     
     def test_dialects_returns_200(self):
-        """Dialects endpoint returns 200 OK."""
+        """Dialects list endpoint returns 200 OK."""
         response = client.get("/api/dialects")
         assert response.status_code == 200
     
@@ -175,7 +180,6 @@ class TestFunctionsEndpoint:
         response = client.get("/api/functions?search=concat")
         data = response.json()
         assert data["success"] is True
-        # Should find CONCAT or related functions
     
     def test_functions_filter_by_category(self):
         """Filter functions by category."""
@@ -198,7 +202,6 @@ class TestFunctionsEndpoint:
     def test_get_specific_function(self):
         """Get specific function by name."""
         response = client.get("/api/functions/CONCAT")
-        # May return 200 or 404 depending on data
         assert response.status_code in [200, 404]
     
     def test_get_nonexistent_function(self):
@@ -311,29 +314,27 @@ class TestHealthEndpoints:
         response = client.get("/health")
         assert response.status_code == 200
     
-    def test_health_contains_status(self):
-        """Health response contains status."""
+    def test_health_is_liveness(self):
+        """Health endpoint exposes only process liveness."""
         response = client.get("/health")
         data = response.json()
-        assert "status" in data
-        assert "healthy" in data["status"]
-    
-    def test_health_contains_services(self):
-        """Health response contains services info."""
-        response = client.get("/health")
-        data = response.json()
-        assert "services" in data
-        assert "transpiler" in data["services"]
-        assert "functions" in data["services"]
+        assert response.status_code == 200
+        assert data["status"] == "alive"
+        assert data["version"]
+        assert "timestamp" in data
+        assert "services" not in data
+        assert "stats" not in data
+        assert "uptime" not in data
+        assert "checks" not in data
     
     def test_deep_health_returns_200(self):
-        """Deep health check returns 200 OK."""
-        response = client.get("/health/deep")
+        """Deep health check returns 200 OK for an authenticated internal probe."""
+        response = client.get("/health/deep", headers=HEALTH_HEADERS)
         assert response.status_code == 200
     
     def test_deep_health_contains_checks(self):
         """Deep health check contains check results."""
-        response = client.get("/health/deep")
+        response = client.get("/health/deep", headers=HEALTH_HEADERS)
         data = response.json()
         assert "checks" in data
         assert "transpiler" in data["checks"]
@@ -369,13 +370,12 @@ class TestErrorHandling:
             content="not valid json",
             headers={"Content-Type": "application/json"}
         )
-        assert response.status_code == 422  # Unprocessable Entity
+        assert response.status_code == 422
     
     def test_missing_required_field(self):
         """Missing required field returns appropriate error."""
         response = client.post("/api/convert", json={
             "sql": "SELECT * FROM users"
-            # Missing source_dialect and target_dialect
         })
         assert response.status_code == 422
     
@@ -416,7 +416,6 @@ class TestSecurityValidation:
         })
         assert response.status_code == 200
         data = response.json()
-        # Should still convert but may include warnings
         assert data["success"] is True or "security" in str(data).lower()
     
     def test_sql_injection_union_select(self):
@@ -427,7 +426,6 @@ class TestSecurityValidation:
             "target_dialect": "postgres"
         })
         assert response.status_code == 200
-        # Should have warnings about system table access or injection
     
     def test_stacked_query_injection(self):
         """Stacked query injection should be detected."""
@@ -438,7 +436,6 @@ class TestSecurityValidation:
         })
         assert response.status_code == 200
         data = response.json()
-        # May fail to parse or include security warnings
     
     def test_timing_attack_sleep(self):
         """SLEEP-based timing attack should be detected."""
@@ -458,7 +455,6 @@ class TestSecurityValidation:
         })
         assert response.status_code == 200
         data = response.json()
-        # Should include warning about DROP operation
         if data.get("warnings"):
             assert any("drop" in w.lower() or "dangerous" in w.lower() for w in data["warnings"])
 
@@ -468,7 +464,6 @@ class TestEdgeCases:
     
     def test_very_long_sql(self):
         """Very long SQL statements should be handled gracefully."""
-        # Generate a large but valid SQL
         columns = ", ".join([f"col{i}" for i in range(500)])
         long_sql = f"SELECT {columns} FROM very_long_table_name"
         
@@ -479,12 +474,10 @@ class TestEdgeCases:
         })
         assert response.status_code == 200
         data = response.json()
-        # Should succeed or fail gracefully
         assert "success" in data
     
     def test_sql_exceeds_max_length(self):
         """SQL that exceeds max length should fail gracefully."""
-        # Generate extremely large SQL (over 100KB)
         huge_sql = "SELECT " + ", ".join([f"column_{i}" for i in range(20000)])
         
         response = client.post("/api/convert", json={
@@ -494,7 +487,6 @@ class TestEdgeCases:
         })
         assert response.status_code == 200
         data = response.json()
-        # Should fail with appropriate error
         if len(huge_sql) > 100000:
             assert data["success"] is False or "error" in data
     
@@ -507,7 +499,6 @@ class TestEdgeCases:
         })
         assert response.status_code == 200
         data = response.json()
-        # Should fail as empty
         assert data["success"] is False
     
     def test_sql_with_special_characters(self):
@@ -537,7 +528,6 @@ class TestEdgeCases:
             "source_dialect": "mysql",
             "target_dialect": "postgres"
         })
-        # May succeed or fail - just shouldn't crash
         assert response.status_code in [200, 400]
 
 
@@ -604,22 +594,18 @@ class TestPerformance:
     
     def test_cache_stats_accessible(self):
         """Cache statistics should be accessible via deep health."""
-        # First make a request to populate cache
         client.post("/api/convert", json={
             "sql": "SELECT 1 AS cache_test",
             "source_dialect": "mysql",
             "target_dialect": "postgres"
         })
-        
-        # Check deep health for cache stats
-        response = client.get("/health/deep")
+        response = client.get("/health/deep", headers=HEALTH_HEADERS)
         assert response.status_code == 200
         data = response.json()
         assert "checks" in data
     
     def test_batch_conversion_limit(self):
         """Batch conversion should handle multiple statements."""
-        # Use API for single conversion (batch is internal)
         statements = [
             "SELECT * FROM users",
             "SELECT * FROM orders",
@@ -635,7 +621,6 @@ class TestPerformance:
             })
             results.append(response.status_code == 200)
         
-        # All should succeed
         assert all(results)
 
 
