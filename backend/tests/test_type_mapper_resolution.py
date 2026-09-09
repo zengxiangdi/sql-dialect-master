@@ -17,8 +17,8 @@ def test_unknown_type_does_not_fall_back_to_partial_match(mapper):
 
 
 def test_known_canonical_type_still_maps(mapper):
-    result = mapper.map_type("INT", "postgres", "mysql")
+    result = mapper.map_type("INTEGER", "postgres", "mysql")
 
     assert result["success"] is True
-    assert result["source_type"] == "INT"
+    assert result["source_type"] == "INTEGER"
     assert result["target_type"] == "INT"
