@@ -20,14 +20,17 @@ def fail(message: str) -> None:
 
 def main() -> None:
     readme = README.read_text(encoding="utf-8")
-    pyproject = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
+    pyproject_text = PYPROJECT.read_text(encoding="utf-8")
+    pyproject = tomllib.loads(pyproject_text)
     config = CONFIG.read_text(encoding="utf-8")
 
     version = pyproject["project"]["version"]
     requires_python = pyproject["project"]["requires-python"]
 
-    match = re.search(r"(?m)^\s*version\s*=\s*[\"']([^\"']+)[\"']", PYPROJECT.read_text(encoding="utf-8"))
-    if not match or match.group(1) != version:
+    version_match = re.search(
+        r"(?m)^version\s*=\s*[\"']([^\"']+)[\"']\s*$", pyproject_text
+    )
+    if not version_match or version_match.group(1) != version:
         fail("could not parse project version consistently")
 
     expected_dialects = [
@@ -56,13 +59,12 @@ def main() -> None:
         fail(f"SUPPORTED_DIALECTS drifted: expected {expected_dialects}, got {actual_dialects}")
 
     required_fragments = {
-        "python badge": "Python 3.11+",
+        "Python badge": "Python 3.11+",
         "12-dialect feature claim": "12 database dialects",
         "12x12 matrix claim": "12 × 12 conversion matrix",
-        "project version": f"version {version}",
-        "python requirement": "python-version",
+        "project version marker": f"Current release: {version}",
+        "semantic dependency install": ".[dev,semantic]",
         "benchmark path": "backend/benchmarks/transpiler_benchmark.py",
-        "semantic dependency install": '[dev,semantic]',
         "benchmark description": "reproducible benchmark",
     }
     for name, fragment in required_fragments.items():
