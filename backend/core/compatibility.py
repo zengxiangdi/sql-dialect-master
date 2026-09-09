@@ -14,8 +14,7 @@ _PATCH_MODULES = (
     "p2_data_validation",
     "p2_health_semantics",
     "p2_health_semantics_fix",
-    "p2_sql_safety",
-    "p2_scanner_transforms",
+    "p2_api_runtime",
 )
 
 _installed = False
