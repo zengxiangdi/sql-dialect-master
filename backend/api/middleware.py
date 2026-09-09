@@ -164,8 +164,16 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
 
     @staticmethod
     async def _normalize_error_response(response: Response, request_id: str) -> Response:
-        """Normalize generic 4xx JSON responses, including streamed responses."""
-        if response.status_code not in {400, 404, 422}:
+        """Normalize standard HTTP 4xx JSON responses while preserving domain-specific codes."""
+        code_by_status = {
+            400: ErrorCode.BAD_REQUEST.value,
+            404: ErrorCode.NOT_FOUND.value,
+            405: ErrorCode.METHOD_NOT_ALLOWED.value,
+            413: ErrorCode.PAYLOAD_TOO_LARGE.value,
+            422: ErrorCode.VALIDATION_FAILED.value,
+            429: ErrorCode.RATE_LIMITED.value,
+        }
+        if response.status_code not in code_by_status:
             return response
 
         try:
@@ -181,46 +189,55 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
             return response
 
         error = payload.get("error") if isinstance(payload, dict) else None
+        expected_code = code_by_status[response.status_code]
         if not isinstance(error, dict):
             detail = payload.get("detail") if isinstance(payload, dict) else None
             if response.status_code == 422:
                 error = {
-                    "code": ErrorCode.VALIDATION_FAILED.value,
+                    "code": expected_code,
                     "message": "Request validation failed",
                     "details": detail if isinstance(detail, list) else ([detail] if detail else []),
                 }
-            elif response.status_code == 404:
+            elif response.status_code == 413:
                 error = {
-                    "code": ErrorCode.NOT_FOUND.value,
-                    "message": str(detail or "Resource not found"),
+                    "code": expected_code,
+                    "message": str(detail or "Request body exceeds the maximum allowed size"),
+                    "details": {},
+                }
+            elif response.status_code == 429:
+                error = {
+                    "code": expected_code,
+                    "message": str(detail or "Rate limit exceeded"),
+                    "details": {},
+                }
+            elif response.status_code == 405:
+                error = {
+                    "code": expected_code,
+                    "message": str(detail or "Method not allowed"),
                     "details": {},
                 }
             else:
                 error = {
-                    "code": ErrorCode.BAD_REQUEST.value,
-                    "message": str(detail or "Bad request"),
+                    "code": expected_code,
+                    "message": str(detail or ("Resource not found" if response.status_code == 404 else "Bad request")),
                     "details": {},
                 }
         else:
             code = error.get("code")
-            if response.status_code == 404 and not isinstance(code, str):
-                error["code"] = ErrorCode.NOT_FOUND.value
-            elif response.status_code == 400 and not isinstance(code, str):
-                error["code"] = ErrorCode.BAD_REQUEST.value
-            elif response.status_code == 422 and not isinstance(code, str):
-                error["code"] = ErrorCode.VALIDATION_FAILED.value
+            if not isinstance(code, str):
+                error["code"] = expected_code
             error.setdefault("details", {})
 
-        payload = {
+        normalized = {
             "success": False,
             "error": error,
-            "timestamp": payload.get("timestamp", datetime.now().isoformat()),
+            "timestamp": payload.get("timestamp", datetime.now().isoformat()) if isinstance(payload, dict) else datetime.now().isoformat(),
             "request_id": request_id,
         }
         headers = dict(response.headers)
         headers.pop("content-length", None)
         headers.pop("content-type", None)
-        return JSONResponse(status_code=response.status_code, content=payload, headers=headers)
+        return JSONResponse(status_code=response.status_code, content=normalized, headers=headers)
 
     async def dispatch(self, request: Request, call_next) -> Response:
         start_time = time.time()
