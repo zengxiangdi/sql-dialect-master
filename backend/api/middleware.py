@@ -141,7 +141,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
 
 class StructuredLoggingMiddleware(BaseHTTPMiddleware):
-    """Structured logging middleware for API requests."""
+    """Structured request logging and request-id propagation."""
 
     def __init__(self, app, log_body: bool = False):
         super().__init__(app)
@@ -163,6 +163,7 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
         start_time = time.time()
         request_id = self._get_request_id(request)
+        request.state.request_id = request_id
         status_code = 500
         error = None
         log_data = {"event": "request_start", "request_id": request_id, "method": _sanitize_log_value(request.method), "path": _sanitize_log_value(request.url.path), "query": _sanitize_log_value(str(request.query_params)), "client": _sanitize_log_value(request.client.host if request.client else "unknown"), "timestamp": datetime.now().isoformat()}

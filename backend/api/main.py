@@ -122,7 +122,7 @@ from backend.api.middleware import (
     SecurityHeadersMiddleware,
     StructuredLoggingMiddleware,
 )
-from backend.core.exceptions import SDMException, UnsupportedDialectError
+from backend.core.exceptions import SDMException, UnsupportedDialectError, ErrorCode
 
 # Configure CORS from the centralized Pydantic settings source.
 ALLOWED_ORIGINS = [origin.strip() for origin in settings.allowed_origins.split(",") if origin.strip()]
@@ -669,14 +669,36 @@ async def sdm_exception_handler(request: Request, exc: SDMException):
     if isinstance(exc, UnsupportedDialectError):
         status_code = 400
 
+    error = exc.to_dict()
+    if "code" not in error:
+        error["code"] = exc.error_code.value if isinstance(exc.error_code, ErrorCode) else str(exc.error_code)
+
     return JSONResponse(
         status_code=status_code,
         content={
             "success": False,
-            "error": exc.to_dict(),
+            "error": error,
             "timestamp": datetime.now().isoformat()
         }
     )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Return a generic 500 response while retaining request correlation internally."""
+    request_id = getattr(request.state, "request_id", None)
+    logger.exception("Unhandled API exception", extra={"request_id": request_id})
+    content = {
+        "success": False,
+        "error": {
+            "code": ErrorCode.INTERNAL_ERROR.value,
+            "message": "Internal server error",
+        },
+        "timestamp": datetime.now().isoformat(),
+    }
+    if request_id:
+        content["request_id"] = request_id
+    return JSONResponse(status_code=500, content=content)
 
 # Run with: uvicorn backend.api.main:app --reload
 if __name__ == "__main__":
