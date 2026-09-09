@@ -180,6 +180,18 @@ def test_health_deep_rejects_public_requests(monkeypatch):
 
 def test_health_deep_accepts_internal_probe_token(monkeypatch):
     monkeypatch.setenv("SDM_HEALTH_PROBE_TOKEN", "test-health-token")
+    monkeypatch.setattr(
+        readiness,
+        "_run_checks",
+        lambda: {
+            "transpiler": {"status": "ok"},
+            "functions": {"status": "ok"},
+            "types": {"status": "ok"},
+            "nl2sql": {"status": "ok"},
+        },
+    )
+    readiness._cached_checks = None
+    readiness._cached_at = 0.0
     app = FastAPI()
     app.add_middleware(RateLimitMiddleware, enabled=True)
 
