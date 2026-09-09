@@ -31,76 +31,51 @@ class PostProcessor:
         self.engine = engine or rule_engine
     
     def process(self, sql: str, source: str, target: str) -> Tuple[str, List[str]]:
-        """Apply post-processing rules.
-        
-        Args:
-            sql: SQL to process
-            source: Source dialect
-            target: Target dialect
-            
-        Returns:
-            Tuple of (processed_sql, list_of_notes)
-        """
+        """Apply post-processing rules."""
         result = sql
         all_notes = []
-        
-        # Step 1: Apply rule engine transformations
+
+        # GROUP_CONCAT must be handled before declarative rules.  The rule
+        # engine's legacy pattern only handles a bare identifier and would
+        # otherwise turn a missing separator into an empty string separator.
+        if source == "mysql" and target == "postgres":
+            result, gc_notes = self._convert_group_concat(result)
+            all_notes.extend(gc_notes)
+
         result, rule_notes = self.engine.apply_rules(result, source, target)
         all_notes.extend(rule_notes)
-        
-        # Step 2: Apply complex transformations that need custom logic
+
         result, custom_notes = self._apply_custom_transformations(result, source, target)
         all_notes.extend(custom_notes)
-        
-        # Step 3: Add warnings for unsupported constructs
+
         warnings = self._check_warnings(sql, source, target)
         all_notes.extend(warnings)
-        
         return result, all_notes
     
     def _apply_custom_transformations(self, sql: str, source: str, target: str) -> Tuple[str, List[str]]:
-        """Apply complex transformations that need custom logic.
-        
-        Args:
-            sql: SQL to transform
-            source: Source dialect
-            target: Target dialect
-            
-        Returns:
-            Tuple of (transformed_sql, list_of_notes)
-        """
+        """Apply complex transformations that need custom logic."""
         result = sql
         notes = []
         
-        # Oracle DECODE → CASE WHEN (complex transformation)
         if source == "oracle" and target != "oracle":
             result, decode_notes = self._convert_decode_to_case(result)
             notes.extend(decode_notes)
         
-        # MySQL DATE_FORMAT → PostgreSQL TO_CHAR
         if source == "mysql" and target == "postgres":
             result, date_notes = self._convert_mysql_date_format(result)
             notes.extend(date_notes)
         
-        # PostgreSQL TO_CHAR → MySQL DATE_FORMAT
         if source == "postgres" and target == "mysql":
             result, date_notes = self._convert_postgres_to_char(result)
             notes.extend(date_notes)
         
-        # SQL Server TOP → LIMIT
         if source == "tsql" and target in ("mysql", "postgres", "hive", "spark"):
             result, top_notes = self._convert_top_to_limit(result)
             notes.extend(top_notes)
         
-        # Oracle ROWNUM → LIMIT
         if source == "oracle" and target in ("mysql", "postgres", "hive", "spark"):
             result, rownum_notes = self._convert_rownum_to_limit(result)
             notes.extend(rownum_notes)
-        
-        # GROUP_CONCAT with default separator fix
-        if source == "mysql" and target == "postgres":
-            result, gc_notes = self._fix_group_concat_default_separator(result)
-            notes.extend(gc_notes)
         
         return result, notes
 
@@ -180,7 +155,6 @@ class PostProcessor:
             return sql, notes
         
         def decode_to_case(args_str: str, original: str) -> str:
-            # Parse arguments carefully handling nested parentheses
             args = self._parse_function_args(args_str)
             
             if len(args) < 3:
@@ -188,15 +162,12 @@ class PostProcessor:
             
             col = args[0]
             pairs = args[1:]
-            
-            # Build CASE expression
             case_parts = []
             i = 0
             while i < len(pairs) - 1:
                 case_parts.append(f"WHEN {col} = {pairs[i]} THEN {pairs[i+1]}")
                 i += 2
             
-            # Last argument is default if odd number of remaining args
             if len(pairs) % 2 == 1:
                 default = pairs[-1]
             else:
@@ -260,7 +231,6 @@ class PostProcessor:
             if len(fmt) < 2 or fmt[0] != "'" or fmt[-1] != "'":
                 return original
             fmt = fmt[1:-1]
-            # Convert MySQL format specifiers to PostgreSQL
             pg_fmt = fmt
             pg_fmt = pg_fmt.replace('%Y', 'YYYY')
             pg_fmt = pg_fmt.replace('%y', 'YY')
@@ -297,7 +267,6 @@ class PostProcessor:
             if len(fmt) < 2 or fmt[0] != "'" or fmt[-1] != "'":
                 return original
             fmt = fmt[1:-1]
-            # Convert PostgreSQL format specifiers to MySQL
             my_fmt = fmt
             my_fmt = my_fmt.replace('YYYY', '%Y')
             my_fmt = my_fmt.replace('YY', '%y')
@@ -331,7 +300,6 @@ class PostProcessor:
         n = match.group(1)
         result = re.sub(r"SELECT\s+TOP\s+\d+", "SELECT", sql, flags=re.IGNORECASE)
         
-        # Add LIMIT if not already present
         if "LIMIT" not in result.upper():
             result = result.rstrip(';').rstrip() + f" LIMIT {n}"
         
@@ -352,50 +320,86 @@ class PostProcessor:
         n = match.group(1)
         result = sql
         
-        # Remove ROWNUM condition
         result = re.sub(r"\s*AND\s+ROWNUM\s*<=?\s*\d+", "", result, flags=re.IGNORECASE)
         result = re.sub(r"\s*WHERE\s+ROWNUM\s*<=?\s*\d+", "", result, flags=re.IGNORECASE)
         
-        # Add LIMIT if not already present
         if "LIMIT" not in result.upper():
             result = result.rstrip(';').rstrip() + f" LIMIT {n}"
         
         notes.append(f"Converted ROWNUM to LIMIT {n}")
         return result, notes
-    
-    def _fix_group_concat_default_separator(self, sql: str) -> Tuple[str, List[str]]:
-        """Fix GROUP_CONCAT without separator for STRING_AGG conversion."""
+
+    def _convert_group_concat(self, sql: str) -> Tuple[str, List[str]]:
+        """Convert MySQL GROUP_CONCAT using a quote/parenthesis-aware scanner."""
         notes = []
-        
-        # Match GROUP_CONCAT without SEPARATOR clause
-        pattern = r"GROUP_CONCAT\s*\((\w+)\)(?!\s+SEPARATOR)"
-        
-        def add_default_separator(match):
-            col = match.group(1)
-            return f"STRING_AGG({col}::TEXT, ',')"
-        
-        result = re.sub(pattern, add_default_separator, sql, flags=re.IGNORECASE)
-        
+
+        def convert(args_str: str, original: str) -> str:
+            args = args_str.strip()
+            separator = ","
+            separator_match = re.search(r"\s+SEPARATOR\s+('(?:''|[^'])*')\s*$", args, re.IGNORECASE)
+            if separator_match:
+                separator = separator_match.group(1)[1:-1].replace("''", "'")
+                core = args[:separator_match.start()].rstrip()
+            else:
+                core = args
+
+            order_expr = None
+            depth = 0
+            quote = False
+            order_pos = None
+            i = 0
+            while i < len(core):
+                char = core[i]
+                if char == "'":
+                    if quote and i + 1 < len(core) and core[i + 1] == "'":
+                        i += 2
+                        continue
+                    quote = not quote
+                elif not quote:
+                    if char == '(':
+                        depth += 1
+                    elif char == ')':
+                        depth -= 1
+                    elif depth == 0 and core[i:i + 8].upper() == "ORDER BY":
+                        before = core[i - 1] if i else " "
+                        after = core[i + 8] if i + 8 < len(core) else " "
+                        if before.isspace() and after.isspace():
+                            order_pos = i
+                            break
+                i += 1
+
+            if order_pos is not None:
+                order_expr = core[order_pos + 8:].strip()
+                core = core[:order_pos].rstrip()
+
+            distinct = False
+            if core.upper().startswith("DISTINCT "):
+                distinct = True
+                core = core[9:].strip()
+
+            if not core:
+                return original
+
+            if distinct:
+                value_expr = f"DISTINCT ({core})::TEXT"
+            else:
+                value_expr = f"{core}::TEXT"
+
+            result = f"STRING_AGG({value_expr}, '{separator.replace(chr(39), chr(39) * 2)}'"
+            if order_expr:
+                result += f" ORDER BY {order_expr}"
+            return result + ")"
+
+        result = self._replace_function_calls(sql, "GROUP_CONCAT", convert)
         if result != sql:
-            notes.append("Converted GROUP_CONCAT to STRING_AGG with default separator")
-        
+            notes.append("Converted GROUP_CONCAT to STRING_AGG")
         return result, notes
     
     def _check_warnings(self, sql: str, source: str, target: str) -> List[str]:
-        """Check for constructs that may need manual attention.
-        
-        Args:
-            sql: Original SQL
-            source: Source dialect
-            target: Target dialect
-            
-        Returns:
-            List of warning messages
-        """
+        """Check for constructs that may need manual attention."""
         warnings = []
         sql_upper = sql.upper()
         
-        # Hive INSERT OVERWRITE
         if source == "hive" and "INSERT OVERWRITE" in sql_upper:
             if target in ("mysql", "postgres", "tsql", "oracle"):
                 warnings.append(
@@ -403,27 +407,23 @@ class PostProcessor:
                     "Use TRUNCATE + INSERT or MERGE instead."
                 )
         
-        # Oracle CONNECT BY
         if source == "oracle" and "CONNECT BY" in sql_upper:
             if target in ("hive", "postgres", "mysql"):
                 warnings.append(
                     "WARNING: CONNECT BY requires manual conversion to WITH RECURSIVE CTE"
                 )
         
-        # Hive DISTRIBUTE BY / CLUSTER BY
         if source == "hive" and target in ("mysql", "postgres", "oracle", "tsql"):
             if "DISTRIBUTE BY" in sql_upper or "CLUSTER BY" in sql_upper:
                 warnings.append(
                     "WARNING: DISTRIBUTE BY/CLUSTER BY are Hive-specific hints, removed in target"
                 )
         
-        # Stored procedures / PL/SQL
         if any(kw in sql_upper for kw in ["CREATE PROCEDURE", "CREATE FUNCTION", "BEGIN", "DECLARE"]):
             warnings.append(
                 "WARNING: Procedural code detected. Stored procedure syntax varies significantly between databases."
             )
         
-        # Materialized views
         if "MATERIALIZED VIEW" in sql_upper:
             warnings.append(
                 "WARNING: Materialized view syntax and refresh mechanisms vary by database."
@@ -432,11 +432,7 @@ class PostProcessor:
         return warnings
     
     def get_stats(self) -> dict:
-        """Get post-processor statistics.
-        
-        Returns:
-            Dictionary with stats
-        """
+        """Get post-processor statistics."""
         return {
             "rule_engine": self.engine.get_stats(),
             "custom_handlers": [
@@ -444,6 +440,6 @@ class PostProcessor:
                 "DATE_FORMAT conversion",
                 "TOP to LIMIT",
                 "ROWNUM to LIMIT",
-                "GROUP_CONCAT separator fix"
+                "GROUP_CONCAT to STRING_AGG"
             ]
         }
