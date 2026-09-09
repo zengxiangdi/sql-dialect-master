@@ -40,6 +40,13 @@ def install_compatibility_patches() -> None:
     for module_name in _PATCH_MODULES:
         import_module(f".{module_name}", package=__package__)
 
+    from .function_call_scanner import replace_function_calls
+    from .post_processor import PostProcessor
+
+    if not getattr(PostProcessor, "_sdm_function_scanner_installed", False):
+        PostProcessor._replace_function_calls = staticmethod(replace_function_calls)
+        PostProcessor._sdm_function_scanner_installed = True
+
     _installed = True
 
 
