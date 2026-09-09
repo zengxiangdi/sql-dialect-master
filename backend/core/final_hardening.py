@@ -1,9 +1,11 @@
 """Compatibility adapters for remaining NL2SQL semantic edge cases."""
 
 import re
+from typing import Callable
 
 from .config import SUPPORTED_DIALECTS
 from .nl2sql import NL2SQLGenerator
+from .p1_sql_scanner import executable_segments
 
 
 _original_extract_conditions = NL2SQLGenerator._extract_conditions_enhanced
@@ -33,22 +35,74 @@ NL2SQLGenerator._extract_conditions_enhanced = _extract_conditions_with_english_
 _original_apply_dialect_adjustments = NL2SQLGenerator._apply_dialect_adjustments
 
 
+def _replace_outside(
+    sql: str,
+    pattern: re.Pattern,
+    replacement: str | Callable[[re.Match[str]], str],
+) -> str:
+    """Apply a regex only to executable SQL regions."""
+    output = []
+    last = 0
+    for start, end in executable_segments(sql):
+        output.append(sql[last:start])
+        output.append(pattern.sub(replacement, sql[start:end]))
+        last = end
+    output.append(sql[last:])
+    return "".join(output)
+
+
 def _apply_dialect_adjustments_safe(self, sql: str, dialect: str):
-    """Apply date rewrites without destructive parenthesis/string replacement."""
+    """Apply dialect-specific date rewrites without crossing lexical boundaries."""
+    dialect = dialect.lower()
+    adjusted = sql
+
     if dialect == "oracle":
-        adjusted = sql.replace("CURRENT_DATE", "TRUNC(SYSDATE)")
-        adjusted = re.sub(r"DATE_SUB\(TRUNC\(SYSDATE\),\s*(\d+)\)", r"TRUNC(SYSDATE) - \1", adjusted)
-        return adjusted
+        replacements = [
+            (re.compile(r"\bDATE_SUB\(CURRENT_DATE\s*,\s*(\d+)\s*\)", re.IGNORECASE), r"TRUNC(SYSDATE) - \1"),
+            (re.compile(r"\bDATE_ADD\(CURRENT_DATE\s*,\s*(\d+)\s*\)", re.IGNORECASE), r"TRUNC(SYSDATE) + \1"),
+            (re.compile(r"\bADD_MONTHS\(CURRENT_DATE\s*,\s*([+-]?\d+)\s*\)", re.IGNORECASE), r"ADD_MONTHS(TRUNC(SYSDATE), \1)"),
+            (re.compile(r"\bCURRENT_TIMESTAMP\b", re.IGNORECASE), "SYSTIMESTAMP"),
+            (re.compile(r"\bCURRENT_DATE\b", re.IGNORECASE), "TRUNC(SYSDATE)"),
+        ]
+    elif dialect == "tsql":
+        replacements = [
+            (re.compile(r"\bDATE_SUB\(CURRENT_DATE\s*,\s*(\d+)\s*\)", re.IGNORECASE), r"DATEADD(DAY, -\1, CAST(GETDATE() AS DATE))"),
+            (re.compile(r"\bDATE_ADD\(CURRENT_DATE\s*,\s*(\d+)\s*\)", re.IGNORECASE), r"DATEADD(DAY, \1, CAST(GETDATE() AS DATE))"),
+            (re.compile(r"\bADD_MONTHS\(CURRENT_DATE\s*,\s*([+-]?\d+)\s*\)", re.IGNORECASE), r"DATEADD(MONTH, \1, CAST(GETDATE() AS DATE))"),
+            (re.compile(r"\bCURRENT_TIMESTAMP\b", re.IGNORECASE), "SYSDATETIME()"),
+            (re.compile(r"\bCURRENT_DATE\b", re.IGNORECASE), "CAST(GETDATE() AS DATE)"),
+        ]
+    elif dialect in {"postgres", "duckdb"}:
+        replacements = [
+            (re.compile(r"\bDATE_SUB\(CURRENT_DATE\s*,\s*(\d+)\s*\)", re.IGNORECASE), r"CURRENT_DATE - INTERVAL '\1 days'"),
+            (re.compile(r"\bDATE_ADD\(CURRENT_DATE\s*,\s*(\d+)\s*\)", re.IGNORECASE), r"CURRENT_DATE + INTERVAL '\1 days'"),
+            (re.compile(r"\bADD_MONTHS\(CURRENT_DATE\s*,\s*([+-]?\d+)\s*\)", re.IGNORECASE), r"CURRENT_DATE + INTERVAL '\1 month'"),
+        ]
+    elif dialect == "mysql":
+        replacements = [
+            (
+                re.compile(r"\bDATE_SUB\(CURRENT_DATE\s*,\s*(\d+)\s*\)", re.IGNORECASE),
+                r"DATE_SUB(CURRENT_DATE, INTERVAL \1 DAY)",
+            ),
+            (
+                re.compile(r"\bDATE_ADD\(CURRENT_DATE\s*,\s*(\d+)\s*\)", re.IGNORECASE),
+                r"DATE_ADD(CURRENT_DATE, INTERVAL \1 DAY)",
+            ),
+            (
+                re.compile(r"\bADD_MONTHS\(CURRENT_DATE\s*,\s*([+-]?\d+)\s*\)", re.IGNORECASE),
+                lambda match: (
+                    f"DATE_SUB(CURRENT_DATE, INTERVAL {abs(int(match.group(1)))} MONTH)"
+                    if int(match.group(1)) < 0
+                    else f"DATE_ADD(CURRENT_DATE, INTERVAL {match.group(1)} MONTH)"
+                ),
+            ),
+        ]
+    else:
+        return _original_apply_dialect_adjustments(self, sql, dialect)
 
-    if dialect == "tsql":
-        adjusted = sql.replace("CURRENT_DATE", "CAST(GETDATE() AS DATE)")
-        adjusted = re.sub(r"DATE_SUB\(CAST\(GETDATE\(\) AS DATE\),\s*(\d+)\)", r"DATEADD(DAY, -\1, CAST(GETDATE() AS DATE))", adjusted)
-        return adjusted
-
-    if dialect == "postgres":
-        return re.sub(r"DATE_SUB\(CURRENT_DATE,\s*(\d+)\)", r"CURRENT_DATE - INTERVAL '\1 days'", sql)
-
-    return _original_apply_dialect_adjustments(self, sql, dialect)
+    for pattern, replacement in replacements:
+        adjusted = _replace_outside(adjusted, pattern, replacement)
+    return adjusted
 
 
 NL2SQLGenerator._apply_dialect_adjustments = _apply_dialect_adjustments_safe
@@ -60,22 +114,65 @@ _original_template_generate = NL2SQLGenerator._generate_from_template
 def _generate_from_template_with_order_semantics(
     self, template, match_groups, analysis, dialect, table_hint, column_hints
 ):
-    """Flip top-N ordering for explicit bottom/lowest/smallest requests."""
+    """Generate a template query and normalize dialect-specific top-N semantics."""
     result = _original_template_generate(
         self, template, match_groups, analysis, dialect, table_hint, column_hints
     )
-    if not result.success or template.name != "top_n_query":
+    if not result.success or template.name != "top_n_query" or not result.sql:
         return result
 
     request_text = str((match_groups or {}).get("match", "")).lower()
     ascending_requested = bool(re.search(r"\b(bottom|lowest|smallest)\b|最低|最少", request_text))
-    if ascending_requested and result.sql:
-        result.sql = re.sub(r"(ORDER BY\s+[^\n]+?)\s+DESC\b", r"\1 ASC", result.sql, count=1, flags=re.IGNORECASE)
+    if ascending_requested:
+        result.sql = _replace_outside(
+            result.sql,
+            re.compile(r"(ORDER BY\s+[^\n]+?)\s+DESC\b", re.IGNORECASE),
+            r"\1 ASC",
+        )
         result.explanation = re.sub(r"查询前(\d+)条记录", r"查询最低/最少\1条记录", result.explanation)
+
+    if dialect == "oracle":
+        limit_match = re.search(r"\bLIMIT\s+(\d+)\s*$", result.sql, re.IGNORECASE)
+        if limit_match:
+            n = limit_match.group(1)
+            result.sql = _replace_outside(
+                result.sql,
+                re.compile(r"\s+LIMIT\s+\d+\s*$", re.IGNORECASE),
+                "",
+            ).rstrip()
+            result.sql += f"\nFETCH FIRST {n} ROWS ONLY"
+    elif dialect == "tsql":
+        limit_match = re.search(r"\bLIMIT\s+(\d+)\s*$", result.sql, re.IGNORECASE)
+        if limit_match:
+            n = limit_match.group(1)
+            result.sql = _replace_outside(
+                result.sql,
+                re.compile(r"\s+LIMIT\s+\d+\s*$", re.IGNORECASE),
+                "",
+            )
+            result.sql = _replace_outside(
+                result.sql,
+                re.compile(r"\bSELECT\s+", re.IGNORECASE),
+                f"SELECT TOP {n} ",
+            )
     return result
 
 
 NL2SQLGenerator._generate_from_template = _generate_from_template_with_order_semantics
+
+
+_original_match_templates = NL2SQLGenerator._match_templates
+
+
+def _match_templates_skip_dml(self, text: str):
+    """Route explicit INSERT/UPDATE/DELETE requests to the semantic builder."""
+    operation = self._detect_operation(text)
+    if operation in {"INSERT", "UPDATE", "DELETE"}:
+        return None, None
+    return _original_match_templates(self, text)
+
+
+NL2SQLGenerator._match_templates = _match_templates_skip_dml
 
 
 _original_generate = NL2SQLGenerator.generate
