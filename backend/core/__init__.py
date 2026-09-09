@@ -1,6 +1,4 @@
 # SQL Dialect Master - Core Module
-import os
-
 from .config import (
     setup_logging,
     SUPPORTED_DIALECTS,
@@ -27,11 +25,6 @@ from .exceptions import (
     ValidationError,
 )
 from .compatibility import install_compatibility_patches
-
-# Dangerous SQL is blocked by default at package runtime. Operators that need
-# the previous compatibility behavior must opt out explicitly via environment.
-if "SDM_SECURITY_BLOCK_DANGEROUS" not in os.environ:
-    settings.security_block_dangerous = True
 
 # Legacy compatibility adapters are installed through one explicit, idempotent entry point.
 install_compatibility_patches()

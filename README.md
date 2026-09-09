@@ -187,6 +187,12 @@ Security validation structurally detects stacked SQL statements using the parser
 
 The async batch API bounds concurrent work and preserves input order. A reproducible transpiler benchmark is available under `backend/benchmarks/` and is intentionally kept outside CI performance assertions.
 
+## ⚠️ Limitations
+
+SQL dialect conversion is not universally semantics-preserving. The engine validates generated SQL against the target parser, but parser acceptance does not prove equivalent runtime behavior. Database-specific differences in NULL handling, implicit casts, date/time semantics, collation, timezone behavior, JSON/array operations, and other vendor features may require manual review or execution against the target database.
+
+NL2SQL is heuristic/template-driven rather than a calibrated probabilistic model. The returned confidence score should be treated as a generation-quality signal, not as a statistical probability that the SQL is correct.
+
 ## ⚙️ Configuration
 
 The project uses `pydantic-settings` for robust configuration.

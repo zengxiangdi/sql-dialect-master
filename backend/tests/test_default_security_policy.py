@@ -2,6 +2,8 @@ import os
 import subprocess
 import sys
 
+import pytest
+
 from backend.core import settings
 from backend.core.transpiler import SQLTranspiler
 
@@ -48,3 +50,13 @@ def test_explicit_security_override_is_respected():
         env=env,
     )
     assert probe.stdout.strip() == "False"
+
+
+def test_security_bypass_parameter_is_not_supported():
+    with pytest.raises(TypeError):
+        SQLTranspiler().transpile(
+            "DROP TABLE users",
+            "mysql",
+            "postgres",
+            skip_security=True,
+        )

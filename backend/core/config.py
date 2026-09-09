@@ -235,7 +235,7 @@ class AppSettings(BaseSettings):
     
     # Security settings
     security_check_enabled: bool = True
-    security_block_dangerous: bool = False
+    security_block_dangerous: bool = True
     
     # Logging settings
     log_level: str = "INFO"
