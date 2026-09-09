@@ -14,7 +14,7 @@ def test_function_changes_are_reported_as_function_category():
     assert "function" in result.difference_categories
 
 
-def test_semantic_diff_reports_multiple_relevant_categories():
+def test_semantic_diff_reports_only_changed_relevant_categories():
     result = diff_sql_ast(
         "SELECT department, COUNT(*) FROM users WHERE active = 1 GROUP BY department ORDER BY COUNT(*) DESC LIMIT 10",
         "SELECT department, COUNT(*) FROM users WHERE active = 0 GROUP BY department ORDER BY COUNT(*) ASC LIMIT 20",
@@ -24,9 +24,12 @@ def test_semantic_diff_reports_multiple_relevant_categories():
 
     assert result.equivalent is False
     assert result.status == "different"
-    assert {"predicate", "aggregate", "ordering", "row_limit", "grouping"}.issubset(
-        set(result.difference_categories)
-    )
+    assert result.difference_categories == [
+        "literal_or_type",
+        "ordering",
+        "predicate",
+        "row_limit",
+    ]
 
 
 def test_predicate_only_change_does_not_report_projection_or_join():
