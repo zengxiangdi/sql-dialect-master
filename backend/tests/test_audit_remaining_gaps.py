@@ -72,6 +72,86 @@ def test_readiness_cache_is_shared_by_deep_health(monkeypatch):
     asyncio.run(exercise())
 
 
+def test_real_app_health_probes_are_publicly_denied():
+    from backend.api.main import app
+
+    client = TestClient(app)
+    assert client.get("/ready").status_code == 403
+    assert client.get("/health/deep").status_code == 403
+
+
+def test_real_app_health_probes_accept_authorized_token(monkeypatch):
+    from backend.api.main import app
+
+    monkeypatch.setenv("SDM_HEALTH_PROBE_TOKEN", "test-health-token")
+    client = TestClient(app)
+
+    ready = client.get("/ready", headers=PROBE_HEADERS)
+    deep = client.get("/health/deep", headers=PROBE_HEADERS)
+
+    assert ready.status_code == 200
+    assert ready.json()["probe"] == "readiness"
+    assert deep.status_code == 200
+    assert "checks" in deep.json()
+
+
+def test_real_app_ready_and_deep_health_share_probe_cache(monkeypatch):
+    from backend.api.main import app
+
+    calls = 0
+
+    def fake_probe():
+        nonlocal calls
+        calls += 1
+        return {
+            "transpiler": {"status": "ok"},
+            "functions": {"status": "ok"},
+            "types": {"status": "ok"},
+            "nl2sql": {"status": "ok"},
+        }
+
+    monkeypatch.setenv("SDM_HEALTH_PROBE_TOKEN", "test-health-token")
+    monkeypatch.setattr(readiness, "_run_checks", fake_probe)
+    readiness._cached_checks = None
+    readiness._cached_at = 0.0
+    original_ttl = readiness._READINESS_CACHE_TTL_SECONDS
+    readiness._READINESS_CACHE_TTL_SECONDS = 30.0
+    try:
+        client = TestClient(app)
+        assert client.get("/ready", headers=PROBE_HEADERS).status_code == 200
+        assert client.get("/health/deep", headers=PROBE_HEADERS).status_code == 200
+        assert calls == 1
+    finally:
+        readiness._READINESS_CACHE_TTL_SECONDS = original_ttl
+        readiness._cached_checks = None
+        readiness._cached_at = 0.0
+
+
+def test_real_app_health_probes_return_503_on_dependency_failure(monkeypatch):
+    from backend.api.main import app
+
+    monkeypatch.setenv("SDM_HEALTH_PROBE_TOKEN", "test-health-token")
+
+    def failed_probe():
+        return {
+            "transpiler": {"status": "error", "code": "probe_failed"},
+            "functions": {"status": "ok"},
+            "types": {"status": "ok"},
+            "nl2sql": {"status": "ok"},
+        }
+
+    monkeypatch.setattr(readiness, "_run_checks", failed_probe)
+    readiness._cached_checks = None
+    readiness._cached_at = 0.0
+    client = TestClient(app)
+
+    response = client.get("/ready", headers=PROBE_HEADERS)
+
+    assert response.status_code == 503
+    assert response.json()["status"] == "not_ready"
+    assert response.json()["checks"]["transpiler"]["code"] == "probe_failed"
+
+
 def test_health_deep_rejects_public_requests(monkeypatch):
     monkeypatch.setenv("SDM_HEALTH_PROBE_TOKEN", "test-health-token")
     app = FastAPI()
