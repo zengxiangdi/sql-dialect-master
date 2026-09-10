@@ -10,7 +10,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import List, Tuple
 
-from .p1_sql_scanner import executable_segments
+from .function_call_scanner import replace_function_calls
+from .p1_sql_scanner import executable_segments, mask_non_executable
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -32,7 +33,7 @@ class RuleCategory(Enum):
 @dataclass
 class TransformRule:
     """A single transformation rule.
-    
+
     Attributes:
         name: Unique rule identifier
         source: Source dialect(s) - can be "*" for any
@@ -43,6 +44,8 @@ class TransformRule:
         category: Rule category for organization
         priority: Higher priority rules are applied first (default 50)
         enabled: Whether the rule is active
+        function_name: Optional function name for scanner-backed structural rewrites
+        structured_replacement: Optional argument-aware replacement template
     """
     name: str
     source: str  # Can be "hive", "mysql,oracle", or "*"
@@ -53,7 +56,9 @@ class TransformRule:
     category: RuleCategory = RuleCategory.FUNCTION
     priority: int = 50
     enabled: bool = True
-    
+    function_name: str | None = None
+    structured_replacement: str | None = None
+
     def matches_dialects(self, source: str, target: str) -> bool:
         """Check if this rule applies to the given dialect pair."""
         source_values = {value.strip().lower() for value in self.source.split(",")}
@@ -61,16 +66,52 @@ class TransformRule:
         source_match = "*" in source_values or source.lower() in source_values
         target_match = "*" in target_values or target.lower() in target_values
         return source_match and target_match
-    
+
+    @staticmethod
+    def _split_top_level_args(args: str) -> List[str]:
+        """Split function arguments without crossing nested lexical structures."""
+        masked = mask_non_executable(args)
+        parts: List[str] = []
+        start = 0
+        depth = 0
+        for index, char in enumerate(masked):
+            if char == "(":
+                depth += 1
+            elif char == ")" and depth > 0:
+                depth -= 1
+            elif char == "," and depth == 0:
+                parts.append(args[start:index].strip())
+                start = index + 1
+        parts.append(args[start:].strip())
+        return parts
+
+    def _apply_structured(self, sql: str) -> Tuple[str, bool]:
+        """Apply an explicitly scanner-backed function rewrite."""
+        if not self.function_name or not self.structured_replacement:
+            return sql, False
+
+        applied = False
+
+        def replacer(args: str, _original_call: str) -> str:
+            nonlocal applied
+            values = self._split_top_level_args(args)
+            expected = self.structured_replacement.count("{")
+            if len(values) != expected:
+                return _original_call
+            applied = True
+            return self.structured_replacement.format(*values)
+
+        transformed = replace_function_calls(sql, self.function_name, replacer)
+        return transformed, applied
+
     def apply(self, sql: str) -> Tuple[str, bool]:
-        """Apply this rule only to executable SQL segments.
-        
-        Returns:
-            Tuple of (transformed_sql, was_applied)
-        """
+        """Apply this rule only to executable SQL segments."""
         if not self.enabled:
             return sql, False
-        
+
+        if self.function_name and self.structured_replacement:
+            return self._apply_structured(sql)
+
         pattern = getattr(self, "_compiled_pattern", None)
         if pattern is None:
             pattern = re.compile(self.pattern, re.IGNORECASE)
@@ -117,7 +158,9 @@ TRANSFORM_RULES: List[TransformRule] = [
         replacement=r'ARRAY_AGG(\1)',
         note="Converted COLLECT_LIST to ARRAY_AGG",
         category=RuleCategory.ARRAY,
-        priority=70
+        priority=70,
+        function_name="COLLECT_LIST",
+        structured_replacement="ARRAY_AGG({0})",
     ),
     TransformRule(
         name="postgres_array_agg_to_hive",
@@ -127,7 +170,9 @@ TRANSFORM_RULES: List[TransformRule] = [
         replacement=r'COLLECT_LIST(\1)',
         note="Converted ARRAY_AGG to COLLECT_LIST",
         category=RuleCategory.ARRAY,
-        priority=70
+        priority=70,
+        function_name="ARRAY_AGG",
+        structured_replacement="COLLECT_LIST({0})",
     ),
     TransformRule(
         name="snowflake_flatten_to_hive",
@@ -189,7 +234,7 @@ TRANSFORM_RULES: List[TransformRule] = [
         category=RuleCategory.ARRAY,
         priority=50
     ),
-    
+
     # =========================================================================
     # AGGREGATION Rules
     # =========================================================================
@@ -241,9 +286,11 @@ TRANSFORM_RULES: List[TransformRule] = [
         replacement=r'ARRAY_AGG(\1)',
         note="Converted groupArray to ARRAY_AGG",
         category=RuleCategory.AGGREGATION,
-        priority=60
+        priority=60,
+        function_name="groupArray",
+        structured_replacement="ARRAY_AGG({0})",
     ),
-    
+
     # =========================================================================
     # NULL HANDLING Rules
     # =========================================================================
@@ -255,7 +302,9 @@ TRANSFORM_RULES: List[TransformRule] = [
         replacement=r"COALESCE(\1, \2)",
         note="Converted IFNULL to COALESCE",
         category=RuleCategory.NULL_HANDLING,
-        priority=60
+        priority=60,
+        function_name="IFNULL",
+        structured_replacement="COALESCE({0}, {1})",
     ),
     TransformRule(
         name="oracle_nvl_to_coalesce",
@@ -265,7 +314,9 @@ TRANSFORM_RULES: List[TransformRule] = [
         replacement=r"COALESCE(\1, \2)",
         note="Converted NVL to COALESCE",
         category=RuleCategory.NULL_HANDLING,
-        priority=60
+        priority=60,
+        function_name="NVL",
+        structured_replacement="COALESCE({0}, {1})",
     ),
     TransformRule(
         name="tsql_isnull_to_coalesce",
@@ -275,9 +326,11 @@ TRANSFORM_RULES: List[TransformRule] = [
         replacement=r"COALESCE(\1, \2)",
         note="Converted ISNULL to COALESCE",
         category=RuleCategory.NULL_HANDLING,
-        priority=60
+        priority=60,
+        function_name="ISNULL",
+        structured_replacement="COALESCE({0}, {1})",
     ),
-    
+
     # =========================================================================
     # DATE/TIME Rules
     # =========================================================================
@@ -331,7 +384,7 @@ TRANSFORM_RULES: List[TransformRule] = [
         category=RuleCategory.DATE_TIME,
         priority=60
     ),
-    
+
     # =========================================================================
     # LIMIT/TOP Rules
     # =========================================================================
@@ -345,7 +398,7 @@ TRANSFORM_RULES: List[TransformRule] = [
         category=RuleCategory.LIMIT,
         priority=70
     ),
-    
+
     # =========================================================================
     # JSON Rules
     # =========================================================================
@@ -369,7 +422,7 @@ TRANSFORM_RULES: List[TransformRule] = [
         category=RuleCategory.JSON,
         priority=60
     ),
-    
+
     # =========================================================================
     # STRING Rules
     # =========================================================================
@@ -393,7 +446,7 @@ TRANSFORM_RULES: List[TransformRule] = [
         category=RuleCategory.FUNCTION,
         priority=40
     ),
-    
+
     # =========================================================================
     # TYPE Rules
     # =========================================================================
@@ -422,58 +475,58 @@ TRANSFORM_RULES: List[TransformRule] = [
 
 class RuleEngine:
     """Engine for applying transformation rules."""
-    
+
     def __init__(self, rules: List[TransformRule] = None):
         """Initialize with rules.
-        
+
         Args:
             rules: List of transformation rules. Uses default rules if None.
         """
         self.rules = list(TRANSFORM_RULES if rules is None else rules)
         self._sort_rules()
         self._compile_patterns()
-    
+
     def apply_rules(self, sql: str, source: str, target: str) -> Tuple[str, List[str]]:
         """Apply all matching rules to SQL.
-        
+
         Args:
             sql: SQL to transform
             source: Source dialect
             target: Target dialect
-            
+
         Returns:
             Tuple of (transformed_sql, list_of_notes)
         """
         result = sql
         notes = []
-        
+
         for rule in self.rules:
             if rule.matches_dialects(source, target):
                 new_result, applied = rule.apply(result)
                 if applied:
                     result = new_result
                     notes.append(rule.note)
-        
+
         return result, notes
-    
+
     def get_applicable_rules(self, source: str, target: str) -> List[TransformRule]:
         """Get all rules that apply to a dialect pair.
-        
+
         Args:
             source: Source dialect
             target: Target dialect
-            
+
         Returns:
             List of applicable rules
         """
         return [r for r in self.rules if r.matches_dialects(source, target)]
-    
+
     def add_rule(self, rule: TransformRule) -> None:
         """Add a new rule.
-        
+
         Args:
             rule: Rule to add
-        
+
         Raises:
             ValueError: If a rule with the same name already exists.
             re.error: If the rule pattern is invalid.
@@ -486,13 +539,13 @@ class RuleEngine:
             raise ValueError(f"Invalid pattern in rule {rule.name}: {exc}") from exc
         self.rules.append(rule)
         self._sort_rules()
-    
+
     def disable_rule(self, name: str) -> bool:
         """Disable a rule by name.
-        
+
         Args:
             name: Rule name to disable
-        
+
         Returns:
             True if rule was found and disabled
         """
@@ -501,13 +554,13 @@ class RuleEngine:
                 rule.enabled = False
                 return True
         return False
-    
+
     def enable_rule(self, name: str) -> bool:
         """Enable a rule by name.
-        
+
         Args:
             name: Rule name to enable
-        
+
         Returns:
             True if rule was found and enabled
         """
@@ -516,11 +569,11 @@ class RuleEngine:
                 rule.enabled = True
                 return True
         return False
-    
+
     def _sort_rules(self) -> None:
         """Sort rules deterministically: priority first, name as tie-breaker."""
         self.rules.sort(key=lambda rule: (-rule.priority, rule.name))
-    
+
     def _compile_patterns(self) -> None:
         """Pre-compile regex patterns for better performance."""
         for rule in self.rules:
@@ -530,30 +583,30 @@ class RuleEngine:
                 except re.error as e:
                     logger.warning(f"Failed to compile pattern for rule {rule.name}: {e}")
                     rule._compiled_pattern = None
-    
+
     def validate_rules(self) -> List[str]:
         """Validate rules for common conflicts and invalid configurations.
-        
+
         Returns:
             List of warning messages. Empty list means no issues found.
         """
         warnings = []
         names = set()
-        
+
         for rule in self.rules:
             if rule.name in names:
                 warnings.append(f"Duplicate rule name: {rule.name}")
             names.add(rule.name)
-            
+
             if not rule.pattern:
                 warnings.append(f"Empty pattern in rule: {rule.name}")
-            
+
             # Check for potentially conflicting rules with same dialect/category
             # Calculate intersection rather than requiring exact selector equality.
             for other in self.rules:
                 if rule.name >= other.name:
                     continue
-                if (rule.category == other.category and 
+                if (rule.category == other.category and
                     rule.priority == other.priority and
                     self._dialect_sets_intersect(rule.source, other.source) and
                     self._dialect_sets_intersect(rule.target, other.target)):
@@ -561,19 +614,19 @@ class RuleEngine:
                         f"Potential conflict: {rule.name} and {other.name} "
                         f"have same priority/category and overlapping dialects"
                     )
-        
+
         return warnings
-    
+
     @staticmethod
     def _dialect_sets_intersect(first: str, second: str) -> bool:
         """Return whether two comma-separated dialect selectors overlap."""
         first_values = {value.strip().lower() for value in first.split(",")}
         second_values = {value.strip().lower() for value in second.split(",")}
         return "*" in first_values or "*" in second_values or bool(first_values & second_values)
-    
+
     def get_stats(self) -> dict:
         """Get rule engine statistics.
-        
+
         Returns:
             Dictionary with statistics
         """
