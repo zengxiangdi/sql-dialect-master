@@ -234,6 +234,10 @@ class SQLTranspiler:
         """Return true when SQL contains more than one parsed statement."""
         if not isinstance(sql, str) or not sql.strip():
             return False
+        if ";" not in sql:
+            return False
+        if ";" not in mask_non_executable(sql):
+            return False
         try:
             return len(sqlglot.parse(sql)) > 1
         except Exception:
