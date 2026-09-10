@@ -69,11 +69,12 @@ def measure_sync(
     statements: List[str],
     source: str,
     target: str,
+    validate: bool = True,
 ) -> float:
     """Measure sequential transpilation wall-clock time."""
     start = time.perf_counter()
     for statement in statements:
-        transpiler.transpile(statement, source, target, pretty=False)
+        transpiler.transpile(statement, source, target, pretty=False, validate=validate)
     return time.perf_counter() - start
 
 
@@ -152,11 +153,13 @@ def _measure_sqlglot_and_postprocess(
     statements: List[str],
     source: str,
     target: str,
+    validate: bool,
     recorder: StageRecorder,
 ) -> float:
     """Measure the normal synchronous pipeline with SQLGlot/post-process hooks."""
     original_transpile = sqlglot.transpile
     original_process = transpiler.post_processor.process
+    original_mask = __import__("backend.core.transpiler", fromlist=["mask_non_executable"]).mask_non_executable
 
     def timed_transpile(*args, **kwargs):
         with recorder.time_call("sqlglot_transpile"):
@@ -166,9 +169,15 @@ def _measure_sqlglot_and_postprocess(
         with recorder.time_call("post_process"):
             return original_process(*args, **kwargs)
 
-    with patch("backend.core.transpiler.sqlglot.transpile", timed_transpile):
+    def timed_mask(*args, **kwargs):
+        with recorder.time_call("security_masking"):
+            return original_mask(*args, **kwargs)
+
+    with patch("backend.core.transpiler.sqlglot.transpile", timed_transpile), patch(
+        "backend.core.transpiler.mask_non_executable", timed_mask
+    ):
         transpiler.post_processor.process = timed_process
-        return measure_sync(transpiler, statements, source, target)
+        return measure_sync(transpiler, statements, source, target, validate=validate)
 
 
 def measure_input_validation(repeats: int) -> Dict[str, float]:
@@ -210,20 +219,27 @@ def profile_configuration(
             transpiler._cache_enabled = cache_enabled
             _instrument_transpiler(transpiler, aggregate)
             elapsed = _measure_sqlglot_and_postprocess(
-                transpiler, statements, source, target, aggregate
+                transpiler, statements, source, target, validate, aggregate
             )
             timings.append(elapsed)
 
         total_mean = mean(timings)
         stage_timings = aggregate.totals
-        per_statement = {name: value / len(statements) / repeats for name, value in stage_timings.items()}
+        per_statement = {
+            name: value / len(statements) / repeats for name, value in stage_timings.items()
+        }
         known_stage_total = sum(per_statement.values())
         residual = max(total_mean / len(statements) - known_stage_total, 0.0)
         per_statement["orchestration_and_inline_validation"] = residual
         percentages = {
-            name: (value / (total_mean / len(statements)) * 100.0) if total_mean else 0.0
+            name: (value / (total_mean / len(statements)) * 100.0)
+            if total_mean
+            else 0.0
             for name, value in per_statement.items()
         }
+        hotspots = sorted(
+            percentages.items(), key=lambda item: item[1], reverse=True
+        )[:2]
 
         return {
             "cache_enabled": cache_enabled,
@@ -236,6 +252,10 @@ def profile_configuration(
             "per_statement_seconds": per_statement,
             "stage_percent_of_mean": percentages,
             "stage_calls": aggregate.calls,
+            "top_hotspots": [
+                {"stage": name, "percent_of_mean": percent}
+                for name, percent in hotspots
+            ],
         }
     finally:
         settings.security_check_enabled = previous_security
@@ -326,6 +346,7 @@ def main() -> None:
                 "orchestration_and_inline_validation is residual wall time after instrumented stage calls.",
                 "validate is a function argument rather than an application settings switch.",
                 "Cache-enabled measurements use a new transpiler per repeat, so each run starts cold.",
+                "top_hotspots ranks the two largest measured contributors for each configuration.",
             ],
         },
     }, ensure_ascii=False, indent=2))
