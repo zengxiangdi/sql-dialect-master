@@ -103,6 +103,25 @@ def test_security_does_not_flag_update_with_where():
     assert not any("UPDATE without WHERE" in warning for warning in result["warnings"])
 
 
+def test_security_uses_one_ast_parse_for_multi_statement_and_dml_checks(monkeypatch):
+    import backend.core.audit_hardening as audit_hardening
+
+    original_parse = audit_hardening.sqlglot.parse
+    calls = 0
+
+    def counted_parse(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original_parse(*args, **kwargs)
+
+    monkeypatch.setattr(audit_hardening.sqlglot, "parse", counted_parse)
+    result = SQLTranspiler()._validate_security("UPDATE users SET name = 'x'")
+
+    assert result["blocked"] is False
+    assert any("UPDATE without WHERE" in warning for warning in result["warnings"])
+    assert calls == 1
+
+
 def test_warning_keywords_ignore_literals():
     warnings = SQLTranspiler()._generate_warnings(
         "SELECT 'SELECT * FROM users JOIN orders' AS message", "mysql", "postgres"
