@@ -234,6 +234,10 @@ class SQLTranspiler:
         """Return true when SQL contains more than one parsed statement."""
         if not isinstance(sql, str) or not sql.strip():
             return False
+        if ";" not in sql:
+            return False
+        if ";" not in mask_non_executable(sql):
+            return False
         try:
             return len(sqlglot.parse(sql)) > 1
         except Exception:
@@ -367,18 +371,21 @@ class SQLTranspiler:
                 result["reason"] = message
                 return result
             result["warnings"].append(f"🔒 Security: {message}")
-        try:
-            parsed_statements = sqlglot.parse(sql)
-            result["multiple_statements"] = len(parsed_statements) > 1
-            if result["multiple_statements"]:
-                message = "Multiple SQL statements detected"
-                if settings.security_block_dangerous:
-                    result["blocked"] = True
-                    result["reason"] = message
-                    return result
-                result["warnings"].append(f"🔒 Security: {message}")
-        except Exception as exc:
-            logger.debug("SQL statement parsing failed during security validation: %s", exc)
+        if ";" not in sql or ";" not in executable_sql:
+            result["multiple_statements"] = False
+        else:
+            try:
+                parsed_statements = sqlglot.parse(sql)
+                result["multiple_statements"] = len(parsed_statements) > 1
+                if result["multiple_statements"]:
+                    message = "Multiple SQL statements detected"
+                    if settings.security_block_dangerous:
+                        result["blocked"] = True
+                        result["reason"] = message
+                        return result
+                    result["warnings"].append(f"🔒 Security: {message}")
+            except Exception as exc:
+                logger.debug("SQL statement parsing failed during security validation: %s", exc)
         for pattern, message in DANGEROUS_SQL_PATTERNS:
             if pattern.search(executable_sql):
                 if settings.security_block_dangerous:

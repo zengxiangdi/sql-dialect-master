@@ -172,7 +172,13 @@ def _dml_without_where(sql: str, parsed_statements=None):
 
 def _validate_security(self, sql: str):
     masked = _mask_non_executable(sql)
-    result = {"blocked": False, "reason": None, "warnings": [], "executable_sql": masked}
+    result = {
+        "blocked": False,
+        "reason": None,
+        "warnings": [],
+        "executable_sql": masked,
+        "multiple_statements": False,
+    }
     dangerous_operation = _DANGEROUS_OPERATION_PATTERN.search(masked)
     if dangerous_operation:
         message = f"Dangerous SQL operation detected: {dangerous_operation.group(1).upper()}"
@@ -182,18 +188,30 @@ def _validate_security(self, sql: str):
             return result
         result["warnings"].append(f"🔒 Security: {message}")
 
+    has_executable_separator = ";" in sql and ";" in masked
     parsed_statements = None
-    try:
-        parsed_statements = sqlglot.parse(sql)
-        if len(parsed_statements) > 1:
-            message = "Multiple SQL statements detected"
-            if settings.security_block_dangerous:
-                result["blocked"] = True
-                result["reason"] = message
-                return result
-            result["warnings"].append(f"🔒 Security: {message}")
-    except Exception as exc:
-        logger.debug("Stacked-statement AST parse unavailable; using masked regex fallback: %s", exc)
+    if has_executable_separator:
+        try:
+            parsed_statements = sqlglot.parse(sql)
+            result["multiple_statements"] = len(parsed_statements) > 1
+            if result["multiple_statements"]:
+                message = "Multiple SQL statements detected"
+                if settings.security_block_dangerous:
+                    result["blocked"] = True
+                    result["reason"] = message
+                    return result
+                result["warnings"].append(f"🔒 Security: {message}")
+        except Exception as exc:
+            logger.debug("Stacked-statement AST parse unavailable; using masked regex fallback: %s", exc)
+
+    masked_upper = masked.upper()
+    needs_dml_ast = bool(re.search(r"\b(?:UPDATE|DELETE)\b", masked_upper))
+    if needs_dml_ast and parsed_statements is None:
+        try:
+            parsed_statements = sqlglot.parse(sql)
+        except Exception as exc:
+            logger.debug("DML security AST parse unavailable: %s", exc)
+            parsed_statements = None
 
     for pattern, message in DANGEROUS_SQL_PATTERNS:
         if pattern.search(masked):
@@ -202,9 +220,12 @@ def _validate_security(self, sql: str):
                 result["reason"] = message
                 return result
             result["warnings"].append(f"🔒 Security: {message}")
-    dml_without_where = set(_dml_without_where(sql, parsed_statements))
-    for op in sorted(dml_without_where):
-        result["warnings"].append(f"⚠️ {op} without WHERE clause - may affect all rows")
+
+    if parsed_statements is not None and needs_dml_ast:
+        dml_without_where = set(_dml_without_where(sql, parsed_statements))
+        for op in sorted(dml_without_where):
+            result["warnings"].append(f"⚠️ {op} without WHERE clause - may affect all rows")
+
     for pattern, message in WARNING_SQL_PATTERNS:
         if message in {
             "DELETE without WHERE clause - will affect all rows",
