@@ -4,26 +4,24 @@
 import argparse
 import json
 import platform
-import re
 import time
 from statistics import mean, median
 from typing import Callable, Dict, List
-from unittest.mock import patch
 
 import sqlglot
 
 from backend.benchmarks.transpiler_benchmark import DEFAULT_STATEMENTS
 from backend.core import transpiler as transpiler_module
-from backend.core.config import DANGEROUS_SQL_PATTERNS, WARNING_SQL_PATTERNS, settings
+from backend.core.config import DANGEROUS_SQL_PATTERNS, WARNING_SQL_PATTERNS
 from backend.core.transpiler import SQLTranspiler, _DANGEROUS_OPERATION_PATTERN
 
 
-EXECUTABLE_STATEMENTS = [statement for statement in DEFAULT_STATEMENTS if statement]
 SECURITY_CASES = [
     ("select", "SELECT id, name FROM users WHERE id > 100"),
     ("dangerous_operation", "DROP TABLE users"),
     ("dml_warning", "UPDATE users SET name = 'x'"),
     ("literal_keyword", "SELECT 'DROP TABLE users' AS text"),
+    ("comment_keyword", "SELECT 1 -- DROP TABLE users"),
 ]
 
 
@@ -44,7 +42,6 @@ def _pattern_scan(sql: str, patterns) -> None:
 def run(iterations: int, repeats: int) -> Dict[str, object]:
     statements = [DEFAULT_STATEMENTS[index % len(DEFAULT_STATEMENTS)] for index in range(iterations)]
     transpiler = SQLTranspiler()
-
     original_mask = transpiler_module.mask_non_executable
     masked = [original_mask(statement) for statement in statements]
 
@@ -92,6 +89,19 @@ def run(iterations: int, repeats: int) -> Dict[str, object]:
         if name != "validate_security"
     }
 
+    boundary_cases = []
+    for name, sql in SECURITY_CASES:
+        result = transpiler._validate_security(sql)
+        boundary_cases.append(
+            {
+                "name": name,
+                "sql": sql,
+                "blocked": result["blocked"],
+                "multiple_statements": result.get("multiple_statements", False),
+                "warning_count": len(result.get("warnings", [])),
+            }
+        )
+
     return {
         "environment": {
             "python": platform.python_version(),
@@ -121,20 +131,12 @@ def run(iterations: int, repeats: int) -> Dict[str, object]:
                 "warning_count": len(WARNING_SQL_PATTERNS),
             },
         },
-        "boundary_cases": [
-            {
-                "name": name,
-                "sql": sql,
-                "blocked": transpiler._validate_security(sql)["blocked"],
-                "multiple_statements": transpiler._validate_security(sql).get("multiple_statements"),
-            }
-            for name, sql in SECURITY_CASES
-        ],
+        "boundary_cases": boundary_cases,
         "notes": [
             "This profiler instruments only benchmark-process functions; production code is unchanged.",
             "Substage timings are isolated measurements and are not additive because they use separate runs.",
             "The full validation measurement uses SQLTranspiler._validate_security() with current repository behavior.",
-            "Boundary cases verify executable-vs-non-executable behavior alongside timing data.",
+            "Boundary cases include executable and masked keyword locations and record current blocking/warning behavior.",
         ],
     }
 
