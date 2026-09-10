@@ -69,6 +69,8 @@ class SQLTranspiler:
         self._cache_enabled = settings.cache_enabled
         self._cache = TTLCache(max_size=settings.cache_max_size, ttl=settings.cache_ttl)
         self._security_enabled = settings.security_check_enabled
+        self._rule_cache_snapshot_signature = None
+        self._rule_cache_snapshot_version = None
 
     def transpile(
         self,
@@ -237,15 +239,46 @@ class SQLTranspiler:
         except Exception:
             return False
 
-    def _cache_key(self, sql: str, source: str, target: str, pretty: bool, validate: bool = True,) -> str:
-        rule_payload = "\n".join(
+    def _rule_cache_state(self):
+        """Return a mutation-sensitive structural signature for the current rules."""
+        return tuple(
+            (
+                rule.name,
+                rule.source,
+                rule.target,
+                rule.pattern,
+                rule.replacement,
+                rule.note,
+                rule.category.value,
+                rule.priority,
+                rule.enabled,
+            )
+            for rule in self.post_processor.engine.rules
+        )
+
+    def _build_rule_cache_payload(self) -> str:
+        """Build the canonical rule payload used by the existing cache identity."""
+        return "\n".join(
             "|".join([
                 rule.name, rule.source, rule.target, rule.pattern, rule.replacement,
                 rule.note, rule.category.value, str(rule.priority), str(rule.enabled),
             ])
             for rule in self.post_processor.engine.rules
         )
-        rule_version = hashlib.sha256(rule_payload.encode("utf-8")).hexdigest()[:16]
+
+    def _rule_cache_version(self) -> str:
+        """Reuse the rule-version hash until the effective rule state changes."""
+        signature = self._rule_cache_state()
+        if signature != self._rule_cache_snapshot_signature:
+            payload = self._build_rule_cache_payload()
+            self._rule_cache_snapshot_signature = signature
+            self._rule_cache_snapshot_version = hashlib.sha256(
+                payload.encode("utf-8")
+            ).hexdigest()[:16]
+        return self._rule_cache_snapshot_version
+
+    def _cache_key(self, sql: str, source: str, target: str, pretty: bool, validate: bool = True,) -> str:
+        rule_version = self._rule_cache_version()
         security_version = f"{settings.security_check_enabled}|{settings.security_block_dangerous}"
         return f"v4|{rule_version}|{security_version}|{sql}|{source}|{target}|{pretty}|{validate}"
 
