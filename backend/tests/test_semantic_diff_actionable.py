@@ -19,6 +19,7 @@ def test_structured_difference_exposes_fields_for_predicate_change():
     assert difference.source_fragment
     assert difference.target_fragment
     assert difference.explanation
+    assert result.semantic_classification == "definitely_different"
 
 
 def test_textually_different_but_structurally_equivalent_sql_is_equivalent():
@@ -32,6 +33,7 @@ def test_textually_different_but_structurally_equivalent_sql_is_equivalent():
     assert result.status == "equivalent"
     assert result.equivalent is True
     assert result.structured_differences == []
+    assert result.semantic_classification == "structurally_equivalent"
 
 
 @pytest.mark.parametrize(
