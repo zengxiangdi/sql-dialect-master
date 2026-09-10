@@ -59,6 +59,19 @@ jobs:
           print(f"- Async mean: `{async_mean:.4f}s`")
           print(f"- Async speedup: `{speedup:.2f}x`")
           print()
+          print("### Profiling hotspots")
+          for config in payload["profiling"]["configurations"]:
+              label = (
+                  f"cache={config['cache_enabled']}, "
+                  f"security={config['security_enabled']}, "
+                  f"validate={config['validate']}"
+              )
+              hotspots = ", ".join(
+                  f"{item['stage']} ({item['percent_of_mean']:.1f}%)"
+                  for item in config["top_hotspots"]
+              )
+              print(f"- `{label}`: {hotspots}")
+          print()
           print("Benchmark is informational in CI; it does not enforce a fixed latency threshold.")
           PY
 
