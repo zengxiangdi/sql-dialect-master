@@ -211,7 +211,6 @@ class SQLTranspiler:
             )
 
             if self._cache_enabled:
-                cache_key = self._cache_key(sql, source, target, pretty, validate)
                 self._cache.set(cache_key, result.to_dict())
             return result
         except Exception as e:
