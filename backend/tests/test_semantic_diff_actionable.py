@@ -59,7 +59,7 @@ def test_textually_different_but_structurally_equivalent_sql_is_equivalent():
         ),
         (
             "SELECT id FROM users LIMIT 10",
-            "SELECT TOP 10 id FROM users",
+            "SELECT TOP 20 id FROM users",
             "different",
             "row_limit",
         ),
