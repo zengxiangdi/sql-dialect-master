@@ -144,18 +144,6 @@ class SQLTranspiler:
                     warnings=security_warnings
                 )
 
-        if multiple_statements is None:
-            multiple_statements = self._has_multiple_statements(sql)
-        if multiple_statements:
-            return TranspileResult(
-                success=False,
-                source_sql=sql,
-                source_dialect=source,
-                target_dialect=target,
-                error="Multiple SQL statements are not supported; submit one statement per request",
-                error_code=ErrorCode.VALIDATION_FAILED.value,
-            )
-
         if source not in SUPPORTED_DIALECTS:
             return TranspileResult(
                 success=False, source_sql=sql, source_dialect=source, target_dialect=target,
@@ -182,6 +170,18 @@ class SQLTranspiler:
             if cached:
                 logger.info("Returning cached result")
                 return TranspileResult(**cached)
+
+        if multiple_statements is None:
+            multiple_statements = self._has_multiple_statements(sql)
+        if multiple_statements:
+            return TranspileResult(
+                success=False,
+                source_sql=sql,
+                source_dialect=source,
+                target_dialect=target,
+                error="Multiple SQL statements are not supported; submit one statement per request",
+                error_code=ErrorCode.VALIDATION_FAILED.value,
+            )
 
         try:
             transpiled = sqlglot.transpile(sql, read=source, write=target, pretty=pretty)[0]
