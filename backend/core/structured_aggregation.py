@@ -192,14 +192,14 @@ def install_structured_aggregation_rules() -> None:
 
         return replace_function_calls(sql, "STRING_AGG", replacer), applied
 
-    def string_agg_postgres(self: TransformRule, sql: str) -> tuple[str, bool]:
+    def group_concat_postgres(self: TransformRule, sql: str) -> tuple[str, bool]:
         if not self.enabled:
             return sql, False
         applied = False
 
         def replacer(args: str, original: str) -> str:
             nonlocal applied
-            transformed = _replace_string_agg(args, original, "postgres")
+            transformed = _replace_group_concat(args, original)
             applied = applied or transformed != original
             return transformed
 
@@ -207,7 +207,7 @@ def install_structured_aggregation_rules() -> None:
 
     handlers["tsql_string_agg_to_mysql"] = string_agg_mysql
     handlers["postgres_string_agg_to_mysql"] = string_agg_mysql
-    handlers["mysql_group_concat_to_postgres"] = string_agg_postgres
+    handlers["mysql_group_concat_to_postgres"] = group_concat_postgres
 
     def listagg_handler(self: TransformRule, sql: str) -> tuple[str, bool]:
         if not self.enabled:
