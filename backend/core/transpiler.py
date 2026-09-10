@@ -124,12 +124,14 @@ class SQLTranspiler:
 
         security_warnings: List[str] = []
         multiple_statements: Optional[bool] = None
+        executable_sql: Optional[str] = None
         security_enabled = settings.security_check_enabled
         self._security_enabled = security_enabled
         if security_enabled:
             security_result = self._validate_security(sql)
             security_warnings = list(security_result["warnings"])
             multiple_statements = security_result.get("multiple_statements")
+            executable_sql = security_result.get("executable_sql")
             if security_result["blocked"]:
                 logger.warning(f"SQL blocked by security check: {security_result['reason']}")
                 return TranspileResult(
@@ -185,7 +187,12 @@ class SQLTranspiler:
             transpiled = sqlglot.transpile(sql, read=source, write=target, pretty=pretty)[0]
             final_sql, transformations = self.post_processor.process(transpiled, source, target)
             compat_notes = self._get_compatibility_notes(source, target, sql)
-            warnings = security_warnings + self._generate_warnings(sql, source, target)
+            if executable_sql is not None:
+                warnings = security_warnings + self._generate_warnings_masked(
+                    executable_sql, source, target
+                )
+            else:
+                warnings = security_warnings + self._generate_warnings(sql, source, target)
 
             if validate:
                 validation_error, validation_warning = self._validate_output_detailed(final_sql, target)
@@ -260,7 +267,11 @@ class SQLTranspiler:
         return notes
 
     def _generate_warnings(self, sql: str, source: str, target: str) -> List[str]:
-        sql_upper = mask_non_executable(sql).upper()
+        return self._generate_warnings_masked(mask_non_executable(sql), source, target)
+
+    @staticmethod
+    def _generate_warnings_masked(masked_sql: str, source: str, target: str) -> List[str]:
+        sql_upper = masked_sql.upper()
         warnings = []
         if "DROP TABLE" in sql_upper or "TRUNCATE" in sql_upper:
             warnings.append("⚠️ Dangerous operation detected: DROP/TRUNCATE")
@@ -312,8 +323,9 @@ class SQLTranspiler:
             return None, warning
 
     def _validate_security(self, sql: str) -> Dict[str, Any]:
-        result = {"blocked": False, "reason": None, "warnings": []}
+        result = {"blocked": False, "reason": None, "warnings": [], "executable_sql": None}
         executable_sql = mask_non_executable(sql)
+        result["executable_sql"] = executable_sql
         dangerous_operation = _DANGEROUS_OPERATION_PATTERN.search(executable_sql)
         if dangerous_operation:
             message = f"Dangerous SQL operation detected: {dangerous_operation.group(1).upper()}"

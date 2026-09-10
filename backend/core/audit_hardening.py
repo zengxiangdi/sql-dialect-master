@@ -169,8 +169,8 @@ def _dml_without_where(sql: str):
 
 
 def _validate_security(self, sql: str):
-    result = {"blocked": False, "reason": None, "warnings": []}
     masked = _mask_non_executable(sql)
+    result = {"blocked": False, "reason": None, "warnings": [], "executable_sql": masked}
     dangerous_operation = _DANGEROUS_OPERATION_PATTERN.search(masked)
     if dangerous_operation:
         message = f"Dangerous SQL operation detected: {dangerous_operation.group(1).upper()}"
