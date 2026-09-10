@@ -37,6 +37,13 @@ jobs:
             --concurrency 8 \
             > benchmark.json
 
+      - name: Run statement validation profiler
+        run: |
+          python backend/benchmarks/statement_validation_profile.py \
+            --iterations 100 \
+            --repeats 5 \
+            > statement-validation-profile.json
+
       - name: Publish benchmark summary
         run: |
           python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
@@ -44,6 +51,7 @@ jobs:
           from pathlib import Path
 
           payload = json.loads(Path("benchmark.json").read_text(encoding="utf-8"))
+          profile = json.loads(Path("statement-validation-profile.json").read_text(encoding="utf-8"))
           sync = payload["sync"]["mean_seconds"]
           async_mean = payload["async"]["mean_seconds"]
           speedup = payload["async_speedup"]
@@ -71,6 +79,26 @@ jobs:
                   for item in config["top_hotspots"]
               )
               print(f"- `{label}`: {hotspots}")
+
+          print()
+          print("### Statement validation breakdown")
+          measurements = profile["measurements"]
+          print(
+              f"- `_has_multiple_statements`: "
+              f"`{measurements['has_multiple_statements']['per_statement_ms']:.4f} ms/statement`"
+          )
+          print(
+              f"- `sqlglot.parse()`: "
+              f"`{measurements['sqlglot_parse_only']['per_statement_ms']:.4f} ms/statement`"
+          )
+          print(
+              f"- `parse() + count`: "
+              f"`{measurements['sqlglot_parse_and_count']['per_statement_ms']:.4f} ms/statement`"
+          )
+          print(
+              f"- Parse share of validation: "
+              f"`{profile['analysis']['parse_share_of_statement_validation_percent']:.1f}%`"
+          )
           print()
           print("Benchmark is informational in CI; it does not enforce a fixed latency threshold.")
           PY
@@ -79,6 +107,8 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: transpiler-benchmark-${{ github.sha }}
-          path: benchmark.json
+          path: |
+            benchmark.json
+            statement-validation-profile.json
           if-no-files-found: error
           retention-days: 14
