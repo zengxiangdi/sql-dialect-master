@@ -104,9 +104,10 @@ def test_security_does_not_flag_update_with_where():
 
 
 def test_security_uses_one_ast_parse_for_multi_statement_and_dml_checks(monkeypatch):
-    import backend.core.audit_hardening as audit_hardening
+    import backend.core.transpiler as transpiler_module
+    import sqlglot
 
-    original_parse = audit_hardening.sqlglot.parse
+    original_parse = sqlglot.parse
     calls = 0
 
     def counted_parse(*args, **kwargs):
@@ -114,7 +115,7 @@ def test_security_uses_one_ast_parse_for_multi_statement_and_dml_checks(monkeypa
         calls += 1
         return original_parse(*args, **kwargs)
 
-    monkeypatch.setattr(audit_hardening.sqlglot, "parse", counted_parse)
+    monkeypatch.setattr(sqlglot, "parse", counted_parse)
     result = SQLTranspiler()._validate_security("UPDATE users SET name = 'x'")
 
     assert result["blocked"] is False
@@ -146,7 +147,7 @@ def test_group_concat_distinct_and_order_by_are_preserved():
         "mysql",
         "postgres",
     )
-    assert "STRING_AGG(DISTINCT (name)::TEXT, ',' ORDER BY name)" in processed
+    assert "STRING_AGG(DISTINCT name::TEXT, ',' ORDER BY name)" in processed
 
 
 def test_nl2sql_date_rewrite_does_not_modify_string_literal():

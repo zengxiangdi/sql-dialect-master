@@ -11,7 +11,7 @@ from enum import Enum
 from typing import List, Tuple
 
 from .function_call_scanner import replace_function_calls
-from .p1_sql_scanner import executable_segments, mask_non_executable
+from .p1_sql_scanner import executable_segments, mask_non_executable, split_top_level_args
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -28,6 +28,13 @@ class RuleCategory(Enum):
     ARRAY = "array"
     LIMIT = "limit"
     NULL_HANDLING = "null_handling"
+
+
+class RuleSafety(Enum):
+    """Safety classification for transformation rules."""
+    STRUCTURED = "structured"           # scanner-backed function rewrites
+    BOUNDED_REGEX = "bounded_regex"      # regex with explicit lexical boundaries
+    LEGACY_REGEX = "legacy_regex"        # plain regex, potentially unsafe
 
 
 @dataclass
@@ -59,6 +66,19 @@ class TransformRule:
     function_name: str | None = None
     structured_replacement: str | None = None
 
+    @property
+    def safety(self) -> RuleSafety:
+        """Return the safety classification for this rule."""
+        if self.function_name and self.structured_replacement:
+            return RuleSafety.STRUCTURED
+        # Bounded regex rules use word boundaries and explicit patterns
+        if self.pattern and (self.pattern.startswith(r"\b") or
+                             self.pattern.startswith(r"(?<!)") or
+                             "WITHIN GROUP" in self.pattern.upper() or
+                             "LATERAL" in self.pattern.upper()):
+            return RuleSafety.BOUNDED_REGEX
+        return RuleSafety.LEGACY_REGEX
+
     def matches_dialects(self, source: str, target: str) -> bool:
         """Check if this rule applies to the given dialect pair."""
         source_values = {value.strip().lower() for value in self.source.split(",")}
@@ -66,24 +86,6 @@ class TransformRule:
         source_match = "*" in source_values or source.lower() in source_values
         target_match = "*" in target_values or target.lower() in target_values
         return source_match and target_match
-
-    @staticmethod
-    def _split_top_level_args(args: str) -> List[str]:
-        """Split function arguments without crossing nested lexical structures."""
-        masked = mask_non_executable(args)
-        parts: List[str] = []
-        start = 0
-        depth = 0
-        for index, char in enumerate(masked):
-            if char == "(":
-                depth += 1
-            elif char == ")" and depth > 0:
-                depth -= 1
-            elif char == "," and depth == 0:
-                parts.append(args[start:index].strip())
-                start = index + 1
-        parts.append(args[start:].strip())
-        return parts
 
     def _apply_structured(self, sql: str) -> Tuple[str, bool]:
         """Apply an explicitly scanner-backed function rewrite."""
@@ -94,7 +96,7 @@ class TransformRule:
 
         def replacer(args: str, _original_call: str) -> str:
             nonlocal applied
-            values = self._split_top_level_args(args)
+            values = split_top_level_args(args)
             expected = self.structured_replacement.count("{")
             if len(values) != expected:
                 return _original_call

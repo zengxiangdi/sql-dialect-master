@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 import sqlglot
+from sqlglot import exp
 
 from .cache import TTLCache
 from .config import (
@@ -30,6 +31,26 @@ _DANGEROUS_OPERATION_PATTERN = re.compile(
 def _contains_sql_keyword(sql: str, keyword: str) -> bool:
     """Return true when a keyword appears as a standalone SQL token."""
     return re.search(rf"\b{re.escape(keyword)}\b", sql, re.IGNORECASE) is not None
+
+
+def _dml_without_where(sql: str, parsed_statements=None):
+    """Return DML operations without WHERE, reusing parsed statements when provided."""
+    if parsed_statements is None:
+        try:
+            parsed_statements = sqlglot.parse(sql)
+        except Exception as exc:
+            logger.debug("Security AST parse fallback: %s", exc)
+            return []
+    result = []
+    for tree in parsed_statements:
+        if tree is None:
+            continue
+        for node in tree.walk():
+            if isinstance(node, exp.Update) and node.args.get("where") is None:
+                result.append("UPDATE")
+            elif isinstance(node, exp.Delete) and node.args.get("where") is None:
+                result.append("DELETE")
+    return result
 
 
 @dataclass
@@ -313,9 +334,9 @@ class SQLTranspiler:
         if "DROP TABLE" in sql_upper or "TRUNCATE" in sql_upper:
             warnings.append("⚠️ Dangerous operation detected: DROP/TRUNCATE")
         if _contains_sql_keyword(sql_upper, "DELETE") and not _contains_sql_keyword(sql_upper, "WHERE"):
-            warnings.append("⚠️ DELETE without WHERE clause - will delete all rows")
+            warnings.append("⚠️ DELETE without WHERE clause - will affect all rows")
         if _contains_sql_keyword(sql_upper, "UPDATE") and not _contains_sql_keyword(sql_upper, "WHERE"):
-            warnings.append("⚠️ UPDATE without WHERE clause - will update all rows")
+            warnings.append("⚠️ UPDATE without WHERE clause - will affect all rows")
         if "SELECT *" in sql_upper:
             warnings.append("💡 Consider specifying columns instead of SELECT *")
         if "CROSS JOIN" in sql_upper:
@@ -393,7 +414,25 @@ class SQLTranspiler:
                     result["reason"] = message
                     return result
                 result["warnings"].append(f"🔒 Security: {message}")
+        masked_upper = executable_sql.upper()
+        needs_dml_ast = bool(re.search(r"\b(?:UPDATE|DELETE)\b", masked_upper))
+        dml_parsed = None
+        if needs_dml_ast and result.get("multiple_statements") is False:
+            try:
+                dml_parsed = sqlglot.parse(sql)
+            except Exception as exc:
+                logger.debug("DML security AST parse unavailable: %s", exc)
+                dml_parsed = None
+        if dml_parsed is not None:
+            dml_without_where = set(_dml_without_where(sql, dml_parsed))
+            for op in sorted(dml_without_where):
+                result["warnings"].append(f"⚠️ {op} without WHERE clause - may affect all rows")
         for pattern, message in WARNING_SQL_PATTERNS:
+            if message in {
+                "DELETE without WHERE clause - will affect all rows",
+                "UPDATE without WHERE clause - will affect all rows",
+            }:
+                continue
             if pattern.search(executable_sql):
                 result["warnings"].append(f"⚠️ {message}")
         return result

@@ -508,7 +508,7 @@ class TypeMapper:
         
         for type_name, mapping in self.mappings.items():
             dialect_syntax = mapping.get(target_dialect, "")
-            if dialect_syntax and target_syntax_upper in dialect_syntax.upper():
+            if dialect_syntax and dialect_syntax.upper().strip() == target_syntax_upper:
                 matches.append({
                     "type_name": type_name,
                     "target_syntax": dialect_syntax,

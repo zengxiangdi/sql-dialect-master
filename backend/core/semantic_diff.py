@@ -49,6 +49,8 @@ class StructuredSemanticDifference:
     source_fragment: str
     target_fragment: str
     explanation: str
+    confidence: float = 1.0
+    evidence: Optional[str] = None
 
 
 @dataclass
@@ -64,6 +66,8 @@ class SemanticDiff:
     difference_categories: List[str] = field(default_factory=list)
     structured_differences: List[StructuredSemanticDifference] = field(default_factory=list)
     semantic_classification: str = "definitely_different"
+    confidence: float = 1.0
+    evidence: Optional[str] = None
 
 
 def _strip_redundant_parentheses(node: exp.Expression) -> exp.Expression:
@@ -348,6 +352,8 @@ def diff_sql_ast(
                     "The query contains context-sensitive functions whose values can vary by execution time or environment; "
                     "AST equality alone cannot prove runtime equivalence."
                 ),
+                confidence=0.3,
+                evidence=", ".join(context_sensitive),
             )
         ]
 
@@ -360,6 +366,8 @@ def diff_sql_ast(
         difference_categories=categories,
         structured_differences=structured,
         semantic_classification=semantic_classification,
+        confidence=0.95 if status == "equivalent" else (0.3 if status == "unknown" else 0.7),
+        evidence=None if status != "unknown" else "context-sensitive functions: " + ", ".join(context_sensitive),
     )
 
 

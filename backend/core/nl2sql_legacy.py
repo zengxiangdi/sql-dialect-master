@@ -71,7 +71,14 @@ class NL2SQLGenerator:
     def _match_templates(
         self, text: str
     ) -> Tuple[Optional[QueryTemplate], Optional[Dict[str, Any]]]:
-        """Try to match input text against query templates."""
+        """Try to match input text against query templates.
+
+        Explicit INSERT/UPDATE/DELETE requests bypass template matching and
+        flow through the enhanced semantic builder instead.
+        """
+        operation = self._detect_operation(text)
+        if operation in {"INSERT", "UPDATE", "DELETE"}:
+            return None, None
         for template in self.query_templates:
             match_result = template.match(text)
             if match_result:
@@ -140,11 +147,21 @@ class NL2SQLGenerator:
             if template.name == "top_n_query":
                 n = numbers[0] if numbers else "10"
                 order_col = analysis["columns"][0] if analysis["columns"] else "id"
-                sql = (
-                    f"SELECT *\nFROM {table}\n"
-                    f"ORDER BY {order_col} DESC\nLIMIT {n}"
+                # Determine ordering direction based on request text
+                request_text = str((match_groups or {}).get("match", "")).lower()
+                ascending_requested = bool(
+                    re.search(r"\b(bottom|lowest|smallest)\b|最低|最少", request_text)
                 )
-                explanation_parts.append(f"查询前{n}条记录")
+                order_dir = "ASC" if ascending_requested else "DESC"
+                if ascending_requested:
+                    explanation_parts.append(f"查询最低/最少{n}条记录")
+                else:
+                    explanation_parts.append(f"查询前{n}条记录")
+                base_sql = (
+                    f"SELECT *\nFROM {table}\n"
+                    f"ORDER BY {order_col} {order_dir}"
+                )
+                sql = self._add_limit(base_sql, int(n), dialect)
                 confidence += 0.1
             elif template.name == "count_by_group":
                 group_col = (
@@ -279,8 +296,40 @@ class NL2SQLGenerator:
         column_hints: List[str] = None,
     ) -> NL2SQLResult:
         """Generate SQL from natural language text."""
-        dialect = dialect or self.default_dialect
+        # Validate inputs
+        if not isinstance(text, str):
+            raise TypeError("text must be a string")
+        normalized_dialect = (dialect or self.default_dialect).strip().lower()
+        from .config import SUPPORTED_DIALECTS
+        if normalized_dialect not in SUPPORTED_DIALECTS:
+            raise ValueError(f"Unsupported dialect: {dialect}. Supported: {', '.join(SUPPORTED_DIALECTS)}")
+        import re
+        _SAFE_TABLE_HINT = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)*")
+        normalized_table_hint = table_hint.strip() if isinstance(table_hint, str) else table_hint
+        if normalized_table_hint and not _SAFE_TABLE_HINT.fullmatch(normalized_table_hint):
+            raise ValueError("table_hint must be a simple SQL identifier or dotted identifier")
         column_hints_error = validate_column_hints(column_hints)
+        if column_hints_error:
+            return NL2SQLResult(
+                success=False,
+                input_text=text,
+                dialect=normalized_dialect,
+                explanation=column_hints_error,
+                confidence=0.0,
+            )
+        # Length guard (from production_hardening)
+        from .config import settings
+        max_input_length = getattr(settings, "nl2sql_max_input_length", 8192)
+        if len(text) > max_input_length:
+            return NL2SQLResult(
+                success=False,
+                input_text=text[:200] + "...",
+                dialect=normalized_dialect,
+                explanation=f"Input text exceeds maximum length of {max_input_length} characters",
+                suggestions=["Please shorten the natural-language query and try again."],
+            )
+        dialect = normalized_dialect
+        table_hint = normalized_table_hint
         if column_hints_error:
             return NL2SQLResult(
                 success=False,
@@ -468,12 +517,12 @@ class NL2SQLGenerator:
                 break
 
         comparisons = [
+            (["大于等于", "不小于", "至少", "greater than or equal to", "larger than or equal to"], ">="),
+            (["小于等于", "不大于", "最多", "less than or equal to", "smaller than or equal to"], "<="),
+            (["不等于", "不是", "不为", "not equal", "isn't", "doesn't equal"], "!="),
             (["大于", "超过", "高于", "多于", "greater", "more than", "above", "over", ">"], ">"),
             (["小于", "低于", "少于", "不足", "less", "less than", "below", "under", "<"], "<"),
             (["等于", "是", "为", "equals", "equal", "="], "="),
-            (["不等于", "不是", "不为", "not equal", "!="], "!="),
-            (["大于等于", "不小于", "至少", ">=", "at least"], ">="),
-            (["小于等于", "不大于", "最多", "<=", "at most"], "<="),
         ]
         for keywords, op in comparisons:
             if any(keyword in text for keyword in keywords) and numbers:
@@ -807,24 +856,129 @@ class NL2SQLGenerator:
         return f"{sql}\nLIMIT {limit}"
 
     def _apply_dialect_adjustments(self, sql: str, dialect: str) -> str:
-        """Apply dialect-specific syntax adjustments."""
+        """Apply dialect-specific syntax adjustments.
+
+        Uses executable-region-aware replacement so literals, comments, and
+        quoted identifiers are never modified.
+        """
+        from .p1_sql_scanner import executable_segments
+
+        dialect = dialect.lower()
+
         if dialect == "hive":
             return sql
+
+        replacements: list[tuple[re.Pattern, str | Callable[[re.Match[str]], str]]] = []
+
         if dialect == "oracle":
-            sql = sql.replace("CURRENT_DATE", "TRUNC(SYSDATE)")
-            sql = sql.replace("DATE_SUB(TRUNC(SYSDATE), ", "TRUNC(SYSDATE) - ")
-            return sql.replace(")", "")
-        if dialect == "tsql":
-            sql = sql.replace("CURRENT_DATE", "CAST(GETDATE() AS DATE)")
-            return sql.replace("DATE_SUB(", "DATEADD(DAY, -")
-        if dialect == "mysql":
+            # Handle DATE_SUB/DATE_ADD/ADD_MONTHS with CURRENT_DATE first,
+            # then handle the already-converted forms (TRUNC(SYSDATE)).
+            replacements = [
+                (
+                    re.compile(
+                        r"\bDATE_SUB\(\s*(?:TRUNC\(SYSDATE\)|CURRENT_DATE)\s*,\s*(\d+)\s*\)",
+                        re.IGNORECASE,
+                    ),
+                    r"TRUNC(SYSDATE) - \1",
+                ),
+                (
+                    re.compile(
+                        r"\bDATE_ADD\(\s*(?:TRUNC\(SYSDATE\)|CURRENT_DATE)\s*,\s*(\d+)\s*\)",
+                        re.IGNORECASE,
+                    ),
+                    r"TRUNC(SYSDATE) + \1",
+                ),
+                (
+                    re.compile(
+                        r"\bADD_MONTHS\(\s*(?:TRUNC\(SYSDATE\)|CURRENT_DATE)\s*,\s*([+-]?\d+)\s*\)",
+                        re.IGNORECASE,
+                    ),
+                    r"ADD_MONTHS(TRUNC(SYSDATE), \1)",
+                ),
+                (re.compile(r"\bCURRENT_TIMESTAMP\b", re.IGNORECASE), "SYSTIMESTAMP"),
+                (re.compile(r"\bCURRENT_DATE\b", re.IGNORECASE), "TRUNC(SYSDATE)"),
+            ]
+        elif dialect == "tsql":
+            replacements = [
+                (
+                    re.compile(
+                        r"\bDATE_SUB\(\s*(?:CAST\(GETDATE\(\)\s+AS\s+DATE\)|CURRENT_DATE)\s*,\s*(\d+)\s*\)",
+                        re.IGNORECASE,
+                    ),
+                    r"DATEADD(DAY, -\1, CAST(GETDATE() AS DATE))",
+                ),
+                (
+                    re.compile(
+                        r"\bDATE_ADD\(\s*(?:CAST\(GETDATE\(\)\s+AS\s+DATE\)|CURRENT_DATE)\s*,\s*(\d+)\s*\)",
+                        re.IGNORECASE,
+                    ),
+                    r"DATEADD(DAY, \1, CAST(GETDATE() AS DATE))",
+                ),
+                (
+                    re.compile(
+                        r"\bADD_MONTHS\(\s*(?:CAST\(GETDATE\(\)\s+AS\s+DATE\)|CURRENT_DATE)\s*,\s*([+-]?\d+)\s*\)",
+                        re.IGNORECASE,
+                    ),
+                    r"DATEADD(MONTH, \1, CAST(GETDATE() AS DATE))",
+                ),
+                (re.compile(r"\bCURRENT_TIMESTAMP\b", re.IGNORECASE), "SYSDATETIME()"),
+                (re.compile(r"\bCURRENT_DATE\b", re.IGNORECASE), "CAST(GETDATE() AS DATE)"),
+            ]
+        elif dialect == "mysql":
+            replacements = [
+                (
+                    re.compile(r"\bDATE_SUB\(\s*CURRENT_DATE\s*,\s*(\d+)\s*\)", re.IGNORECASE),
+                    r"DATE_SUB(CURRENT_DATE, INTERVAL \1 DAY)",
+                ),
+                (
+                    re.compile(r"\bDATE_ADD\(\s*CURRENT_DATE\s*,\s*(\d+)\s*\)", re.IGNORECASE),
+                    r"DATE_ADD(CURRENT_DATE, INTERVAL \1 DAY)",
+                ),
+                (
+                    re.compile(
+                        r"\bADD_MONTHS\(\s*CURRENT_DATE\s*,\s*([+-]?\d+)\s*\)",
+                        re.IGNORECASE,
+                    ),
+                    lambda match: (
+                        f"DATE_SUB(CURRENT_DATE, INTERVAL {abs(int(match.group(1)))} MONTH)"
+                        if int(match.group(1)) < 0
+                        else f"DATE_ADD(CURRENT_DATE, INTERVAL {match.group(1)} MONTH)"
+                    ),
+                ),
+            ]
+        elif dialect in ("postgres", "duckdb"):
+            replacements = [
+                (
+                    re.compile(r"\bDATE_SUB\(\s*CURRENT_DATE\s*,\s*(\d+)\s*\)", re.IGNORECASE),
+                    r"CURRENT_DATE - INTERVAL '\1 days'",
+                ),
+                (
+                    re.compile(r"\bDATE_ADD\(\s*CURRENT_DATE\s*,\s*(\d+)\s*\)", re.IGNORECASE),
+                    r"CURRENT_DATE + INTERVAL '\1 days'",
+                ),
+                (
+                    re.compile(
+                        r"\bADD_MONTHS\(\s*CURRENT_DATE\s*,\s*([+-]?\d+)\s*\)",
+                        re.IGNORECASE,
+                    ),
+                    r"CURRENT_DATE + INTERVAL '\1 month'",
+                ),
+            ]
+        else:
             return sql
-        if dialect == "postgres":
-            return re.sub(
-                r"DATE_SUB\(CURRENT_DATE,\s*(\d+)\)",
-                r"CURRENT_DATE - INTERVAL '\\1 days'",
-                sql,
-            )
+
+        for pattern, replacement in replacements:
+            parts = []
+            cursor = 0
+            for start, end in executable_segments(sql):
+                parts.append(sql[cursor:start])
+                segment = sql[start:end]
+                segment = pattern.sub(replacement, segment)
+                parts.append(segment)
+                cursor = end
+            parts.append(sql[cursor:])
+            sql = "".join(parts)
+
         return sql
 
     def _generate_suggestions(self, text: str, sql: str, dialect: str) -> list:

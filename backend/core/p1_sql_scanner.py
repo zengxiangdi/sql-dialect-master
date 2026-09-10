@@ -173,3 +173,24 @@ def _non_executable_ranges(sql: str):
     if cursor < len(sql):
         covered.append((cursor, len(sql)))
     return covered
+
+
+def split_top_level_args(args: str) -> list[str]:
+    """Split function arguments by top-level commas without crossing nested parens.
+
+    Uses mask_non_executable to skip commas inside quoted strings and comments.
+    """
+    masked = mask_non_executable(args)
+    parts: list[str] = []
+    start = 0
+    depth = 0
+    for index, char in enumerate(masked):
+        if char == "(":
+            depth += 1
+        elif char == ")" and depth > 0:
+            depth -= 1
+        elif char == "," and depth == 0:
+            parts.append(args[start:index].strip())
+            start = index + 1
+    parts.append(args[start:].strip())
+    return parts

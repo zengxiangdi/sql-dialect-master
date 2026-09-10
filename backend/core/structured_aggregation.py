@@ -5,25 +5,8 @@ import re
 from typing import Callable
 
 from .function_call_scanner import replace_function_calls
-from .p1_sql_scanner import mask_non_executable
+from .p1_sql_scanner import mask_non_executable, split_top_level_args
 from .rules import TransformRule
-
-
-def _split_top_level_args(args: str) -> list[str]:
-    masked = mask_non_executable(args)
-    parts: list[str] = []
-    start = 0
-    depth = 0
-    for index, char in enumerate(masked):
-        if char == "(":
-            depth += 1
-        elif char == ")" and depth:
-            depth -= 1
-        elif char == "," and depth == 0:
-            parts.append(args[start:index].strip())
-            start = index + 1
-    parts.append(args[start:].strip())
-    return parts
 
 
 def _top_level_keyword(text: str, keyword: str) -> int:
@@ -47,7 +30,7 @@ def _top_level_keyword(text: str, keyword: str) -> int:
 
 
 def _replace_string_agg(args: str, original: str, target: str) -> str:
-    values = _split_top_level_args(args)
+    values = split_top_level_args(args)
     if len(values) != 2 or not all(values):
         return original
     expression, separator = values
@@ -154,7 +137,7 @@ def _replace_listagg(sql: str) -> tuple[str, bool]:
             index += 1
             continue
 
-        values = _split_top_level_args(args)
+        values = split_top_level_args(args)
         if len(values) != 2 or not all(values):
             index += 1
             continue
