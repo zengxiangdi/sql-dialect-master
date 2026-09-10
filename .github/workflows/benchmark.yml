@@ -44,6 +44,12 @@ jobs:
             --repeats 5 \
             > statement-validation-profile.json
 
+      - name: Run cache-key profiler
+        run: |
+          python backend/benchmarks/cache_key_profile.py \
+            --repeats 1000 \
+            > cache-key-profile.json
+
       - name: Publish benchmark summary
         run: |
           python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
@@ -52,6 +58,7 @@ jobs:
 
           payload = json.loads(Path("benchmark.json").read_text(encoding="utf-8"))
           profile = json.loads(Path("statement-validation-profile.json").read_text(encoding="utf-8"))
+          cache_profile = json.loads(Path("cache-key-profile.json").read_text(encoding="utf-8"))
           sync = payload["sync"]["mean_seconds"]
           async_mean = payload["async"]["mean_seconds"]
           speedup = payload["async_speedup"]
@@ -99,6 +106,29 @@ jobs:
               f"- Parse share of validation: "
               f"`{profile['analysis']['parse_share_of_statement_validation_percent']:.1f}%`"
           )
+
+          cache_measurements = cache_profile["measurements"]
+          cache_analysis = cache_profile["analysis"]
+          print()
+          print("### Cache-key breakdown")
+          print(
+              f"- `_cache_key()`: `" 
+              f"{cache_measurements['cache_key']['per_call_us']:.2f} µs/call`"
+          )
+          print(
+              f"- Rule payload build: `"
+              f"{cache_measurements['rule_payload_build']['per_call_us']:.2f} µs/call` "
+              f"({cache_analysis['payload_share_of_cache_key_percent']:.1f}% of end-to-end)"
+          )
+          print(
+              f"- Rule-version hash: `"
+              f"{cache_measurements['rule_version_hash']['per_call_us']:.2f} µs/call` "
+              f"({cache_analysis['hash_share_of_cache_key_percent']:.1f}% of end-to-end)"
+          )
+          print(
+              f"- Rules: `{cache_profile['workload']['rule_count']}`, "
+              f"payload: `{cache_profile['workload']['rule_payload_bytes']} bytes`"
+          )
           print()
           print("Benchmark is informational in CI; it does not enforce a fixed latency threshold.")
           PY
@@ -110,5 +140,6 @@ jobs:
           path: |
             benchmark.json
             statement-validation-profile.json
+            cache-key-profile.json
           if-no-files-found: error
           retention-days: 14
