@@ -14,7 +14,7 @@ The implementation delegates tokenization, templates, and language mappings to
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import sqlglot
 
