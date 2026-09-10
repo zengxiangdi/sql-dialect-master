@@ -66,10 +66,17 @@ class SemanticDiff:
     semantic_classification: str = "definitely_different"
 
 
+def _strip_redundant_parentheses(node: exp.Expression) -> exp.Expression:
+    """Remove redundant Paren nodes while preserving operator nesting."""
+    if isinstance(node, exp.Paren):
+        return node.this.copy()
+    return node.copy()
+
+
 def _parse_and_normalize(sql: str, dialect: str) -> exp.Expression:
     if not isinstance(sql, str) or not sql.strip():
         raise ValueError("SQL must be a non-empty string")
-    return sqlglot.parse_one(sql, read=dialect).transform(lambda node: node.copy())
+    return sqlglot.parse_one(sql, read=dialect).transform(_strip_redundant_parentheses)
 
 
 def _canonical_sql(tree: exp.Expression) -> str:
@@ -140,8 +147,7 @@ def _difference_categories(
             if any("NULL" in fragment.upper() for fragment in (source_where, target_where)):
                 categories.add("null_semantics")
         if _fragment_sql(source_select.args.get("having")) != _fragment_sql(target_select.args.get("having")):
-            categories.add("predicate")
-            categories.add("grouping")
+            categories.update({"predicate", "grouping"})
         if _fragment_sql(source_select.args.get("group")) != _fragment_sql(target_select.args.get("group")):
             categories.add("grouping")
         if _fragment_sql(source_select.args.get("order")) != _fragment_sql(target_select.args.get("order")):
@@ -150,10 +156,6 @@ def _difference_categories(
             categories.add("row_limit")
         if _fragment_sql(source_select.args.get("offset")) != _fragment_sql(target_select.args.get("offset")):
             categories.add("row_limit")
-
-        predicate_pair = (source_where, target_where)
-        if all(" AND " in fragment.upper() or " OR " in fragment.upper() for fragment in predicate_pair if fragment):
-            categories.add("predicate")
 
     source_joins = list(source_tree.find_all(exp.Join))
     target_joins = list(target_tree.find_all(exp.Join))
