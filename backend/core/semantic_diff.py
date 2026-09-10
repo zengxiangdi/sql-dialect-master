@@ -33,11 +33,22 @@ _CATEGORY_NODE_NAMES = {
     "projection": {"Alias", "Column", "Select", "Star"},
     "grouping": {"Group", "Having"},
     "ordering": {"Order", "Ordered"},
-    "row_limit": {"Fetch", "Limit", "Offset"},
+    "row_limit": {"Fetch", "Limit", "Offset", "Top"},
     "join": {"Join"},
     "aggregate": {"AggFunc", "Count", "Sum", "Avg", "Min", "Max"},
     "literal_or_type": {"Boolean", "DataType", "Date", "Interval", "Literal", "Null"},
 }
+
+
+@dataclass(frozen=True)
+class StructuredSemanticDifference:
+    """Actionable description of one semantic difference category."""
+
+    category: str
+    severity: str
+    source_fragment: str
+    target_fragment: str
+    explanation: str
 
 
 @dataclass
@@ -51,6 +62,8 @@ class SemanticDiff:
     parse_error: Optional[str] = None
     status: str = "different"
     difference_categories: List[str] = field(default_factory=list)
+    structured_differences: List[StructuredSemanticDifference] = field(default_factory=list)
+    semantic_classification: str = "definitely_different"
 
 
 def _parse_and_normalize(sql: str, dialect: str) -> exp.Expression:
@@ -120,8 +133,12 @@ def _difference_categories(
     if source_select is not None and target_select is not None:
         if _list_fragment_sql(source_select.expressions) != _list_fragment_sql(target_select.expressions):
             categories.add("projection")
-        if _fragment_sql(source_select.args.get("where")) != _fragment_sql(target_select.args.get("where")):
+        source_where = _fragment_sql(source_select.args.get("where"))
+        target_where = _fragment_sql(target_select.args.get("where"))
+        if source_where != target_where:
             categories.add("predicate")
+            if any("NULL" in fragment.upper() for fragment in (source_where, target_where)):
+                categories.add("null_semantics")
         if _fragment_sql(source_select.args.get("having")) != _fragment_sql(target_select.args.get("having")):
             categories.add("predicate")
             categories.add("grouping")
@@ -133,6 +150,10 @@ def _difference_categories(
             categories.add("row_limit")
         if _fragment_sql(source_select.args.get("offset")) != _fragment_sql(target_select.args.get("offset")):
             categories.add("row_limit")
+
+        predicate_pair = (source_where, target_where)
+        if all(" AND " in fragment.upper() or " OR " in fragment.upper() for fragment in predicate_pair if fragment):
+            categories.add("predicate")
 
     source_joins = list(source_tree.find_all(exp.Join))
     target_joins = list(target_tree.find_all(exp.Join))
@@ -155,6 +176,69 @@ def _difference_categories(
     return sorted(categories) or ["structure"]
 
 
+def _category_fragments(
+    category: str,
+    source_tree: exp.Expression,
+    target_tree: exp.Expression,
+) -> tuple[str, str]:
+    source_select = source_tree if isinstance(source_tree, exp.Select) else source_tree.find(exp.Select)
+    target_select = target_tree if isinstance(target_tree, exp.Select) else target_tree.find(exp.Select)
+    if category in {"predicate", "null_semantics"} and source_select is not None and target_select is not None:
+        return (
+            _fragment_sql(source_select.args.get("where")),
+            _fragment_sql(target_select.args.get("where")),
+        )
+    if category == "projection" and source_select is not None and target_select is not None:
+        return _list_fragment_sql(source_select.expressions), _list_fragment_sql(target_select.expressions)
+    if category == "grouping" and source_select is not None and target_select is not None:
+        return _fragment_sql(source_select.args.get("group")), _fragment_sql(target_select.args.get("group"))
+    if category == "ordering" and source_select is not None and target_select is not None:
+        return _fragment_sql(source_select.args.get("order")), _fragment_sql(target_select.args.get("order"))
+    if category == "row_limit" and source_select is not None and target_select is not None:
+        source = _fragment_sql(source_select.args.get("limit")) or _fragment_sql(source_select.args.get("offset"))
+        target = _fragment_sql(target_select.args.get("limit")) or _fragment_sql(target_select.args.get("offset"))
+        return source, target
+    if category == "join":
+        return _list_fragment_sql(source_tree.find_all(exp.Join)), _list_fragment_sql(target_tree.find_all(exp.Join))
+    if category == "aggregate":
+        return _list_fragment_sql(source_tree.find_all(exp.AggFunc)), _list_fragment_sql(target_tree.find_all(exp.AggFunc))
+    return _canonical_sql(source_tree), _canonical_sql(target_tree)
+
+
+def _structured_explanations(
+    categories: List[str],
+    source_tree: exp.Expression,
+    target_tree: exp.Expression,
+) -> List[StructuredSemanticDifference]:
+    explanations = {
+        "predicate": ("error", "Predicate logic changed; boolean precedence or filtering behavior may differ."),
+        "null_semantics": ("error", "NULL comparison semantics changed; SQL three-valued logic may produce different rows."),
+        "projection": ("warning", "Projected expressions changed, which can alter returned values or columns."),
+        "grouping": ("error", "Grouping or HAVING structure changed, which can alter row cardinality and aggregates."),
+        "ordering": ("warning", "Ordering changed; result sequence is not preserved."),
+        "row_limit": ("error", "Row limiting changed; the returned row set or pagination semantics may differ."),
+        "join": ("error", "JOIN structure changed; matching rows or row cardinality may differ."),
+        "aggregate": ("error", "Aggregate expressions changed; computed results may differ."),
+        "function": ("warning", "Function expressions differ and require dialect-specific semantic review."),
+        "literal_or_type": ("warning", "Literal or type representation changed and may affect coercion or comparison semantics."),
+        "structure": ("error", "AST structure changed outside a more specific semantic category."),
+    }
+    records: List[StructuredSemanticDifference] = []
+    for category in categories:
+        severity, explanation = explanations.get(category, ("warning", "The SQL structure differs and requires semantic review."))
+        source_fragment, target_fragment = _category_fragments(category, source_tree, target_tree)
+        records.append(
+            StructuredSemanticDifference(
+                category=category,
+                severity=severity,
+                source_fragment=source_fragment,
+                target_fragment=target_fragment,
+                explanation=explanation,
+            )
+        )
+    return records
+
+
 def diff_sql_ast(
     source_sql: str,
     target_sql: str,
@@ -166,7 +250,8 @@ def diff_sql_ast(
     ``equivalent`` remains backward-compatible: it is true only when the ASTs
     match and no known context-sensitive construct prevents a safe conclusion.
     ``status`` is one of ``equivalent``, ``different``, ``unknown``, or
-    ``parse_error``.
+    ``parse_error``. ``semantic_classification`` refines the result without
+    changing those existing status values.
     """
     try:
         source_tree = _parse_and_normalize(source_sql, source_dialect)
@@ -179,6 +264,7 @@ def diff_sql_ast(
             differences=["Unable to parse one or both SQL statements"],
             parse_error=str(exc),
             status="parse_error",
+            semantic_classification="parse_error",
         )
 
     source_normalized = _canonical_sql(source_tree)
@@ -232,10 +318,30 @@ def diff_sql_ast(
 
     if context_sensitive:
         status = "unknown"
+        semantic_classification = "potentially_different"
     elif differences:
         status = "different"
+        semantic_classification = "definitely_different"
     else:
         status = "equivalent"
+        semantic_classification = "structurally_equivalent" if source_sql.strip() != target_sql.strip() else "equivalent"
+
+    structured = []
+    if categories and status != "unknown":
+        structured = _structured_explanations(categories, source_tree, target_tree)
+    elif status == "unknown":
+        structured = [
+            StructuredSemanticDifference(
+                category="context_sensitive",
+                severity="warning",
+                source_fragment=source_normalized,
+                target_fragment=target_normalized,
+                explanation=(
+                    "The query contains context-sensitive functions whose values can vary by execution time or environment; "
+                    "AST equality alone cannot prove runtime equivalence."
+                ),
+            )
+        ]
 
     return SemanticDiff(
         equivalent=status == "equivalent",
@@ -244,6 +350,8 @@ def diff_sql_ast(
         differences=differences,
         status=status,
         difference_categories=categories,
+        structured_differences=structured,
+        semantic_classification=semantic_classification,
     )
 
 
