@@ -52,12 +52,6 @@ class StageRecorder:
             self.totals[name] = self.totals.get(name, 0.0) + elapsed
             self.calls[name] = self.calls.get(name, 0) + 1
 
-    def snapshot(self) -> Dict[str, object]:
-        return {
-            "timings_seconds": dict(self.totals),
-            "calls": dict(self.calls),
-        }
-
 
 def build_statements(iterations: int) -> List[str]:
     """Create a stable workload without depending on external data."""
@@ -119,14 +113,13 @@ def _wrap_instance_method(
 
 
 def _instrument_transpiler(transpiler: SQLTranspiler, recorder: StageRecorder) -> None:
-    """Instrument stage boundaries that already exist in the transpiler."""
+    """Instrument existing transpiler stage boundaries from the benchmark process."""
     method_stages = {
         "_validate_security": "security_checks",
         "_has_multiple_statements": "statement_validation",
         "_cache_key": "cache_key",
         "_get_compatibility_notes": "compatibility_notes",
         "_generate_warnings_masked": "warnings",
-        "_generate_warnings": "warnings",
         "_validate_output_detailed": "output_validation",
     }
     for name, stage in method_stages.items():
@@ -156,10 +149,11 @@ def _measure_sqlglot_and_postprocess(
     validate: bool,
     recorder: StageRecorder,
 ) -> float:
-    """Measure the normal synchronous pipeline with SQLGlot/post-process hooks."""
+    """Measure the synchronous pipeline with SQLGlot/post-process hooks."""
     original_transpile = sqlglot.transpile
     original_process = transpiler.post_processor.process
-    original_mask = __import__("backend.core.transpiler", fromlist=["mask_non_executable"]).mask_non_executable
+    transpiler_module = __import__("backend.core.transpiler", fromlist=["mask_non_executable"])
+    original_mask = transpiler_module.mask_non_executable
 
     def timed_transpile(*args, **kwargs):
         with recorder.time_call("sqlglot_transpile"):
@@ -180,7 +174,7 @@ def _measure_sqlglot_and_postprocess(
         return measure_sync(transpiler, statements, source, target, validate=validate)
 
 
-def measure_input_validation(repeats: int) -> Dict[str, float]:
+def measure_input_validation(repeats: int) -> Dict[str, object]:
     """Measure the public type-validation fast path without changing behavior."""
     timings: List[float] = []
     transpiler = SQLTranspiler()
@@ -224,21 +218,18 @@ def profile_configuration(
             timings.append(elapsed)
 
         total_mean = mean(timings)
-        stage_timings = aggregate.totals
         per_statement = {
-            name: value / len(statements) / repeats for name, value in stage_timings.items()
+            name: value / len(statements) / repeats
+            for name, value in aggregate.totals.items()
         }
-        known_stage_total = sum(per_statement.values())
-        residual = max(total_mean / len(statements) - known_stage_total, 0.0)
-        per_statement["orchestration_and_inline_validation"] = residual
-        percentages = {
+        per_statement_percent = {
             name: (value / (total_mean / len(statements)) * 100.0)
             if total_mean
             else 0.0
             for name, value in per_statement.items()
         }
         hotspots = sorted(
-            percentages.items(), key=lambda item: item[1], reverse=True
+            per_statement_percent.items(), key=lambda item: item[1], reverse=True
         )[:2]
 
         return {
@@ -250,7 +241,7 @@ def profile_configuration(
             "mean_seconds": total_mean,
             "median_seconds": median(timings),
             "per_statement_seconds": per_statement,
-            "stage_percent_of_mean": percentages,
+            "stage_percent_of_mean": per_statement_percent,
             "stage_calls": aggregate.calls,
             "top_hotspots": [
                 {"stage": name, "percent_of_mean": percent}
@@ -320,7 +311,7 @@ def main() -> None:
         "environment": {
             "python": platform.python_version(),
             "platform": platform.platform(),
-            "sqlglot": sqlglot.__version__,
+            "sqlglot": getattr(sqlglot, "__version__", "unknown"),
         },
         "workload": {
             "iterations": args.iterations,
@@ -340,13 +331,15 @@ def main() -> None:
         },
         "async_speedup": speedup,
         "profiling": {
+            "stage_timing_model": "inclusive",
             "configurations": configurations,
             "notes": [
                 "Stage timings are benchmark-process instrumentation, not production telemetry.",
-                "orchestration_and_inline_validation is residual wall time after instrumented stage calls.",
+                "Stage percentages are inclusive and can overlap when one measured call invokes another.",
+                "Input validation is measured separately on invalid public inputs because successful-path type checks are inline.",
                 "validate is a function argument rather than an application settings switch.",
                 "Cache-enabled measurements use a new transpiler per repeat, so each run starts cold.",
-                "top_hotspots ranks the two largest measured contributors for each configuration.",
+                "top_hotspots ranks the two largest inclusive contributors for each configuration.",
             ],
         },
     }, ensure_ascii=False, indent=2))
