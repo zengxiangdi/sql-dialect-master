@@ -150,14 +150,16 @@ def _top_level_keyword(text: str, keyword: str) -> int:
     return -1
 
 
-def _dml_without_where(sql: str):
-    try:
-        trees = sqlglot.parse(sql)
-    except Exception as exc:
-        logger.debug("Security AST parse fallback: %s", exc)
-        return []
+def _dml_without_where(sql: str, parsed_statements=None):
+    """Return DML operations without WHERE, reusing parsed statements when provided."""
+    if parsed_statements is None:
+        try:
+            parsed_statements = sqlglot.parse(sql)
+        except Exception as exc:
+            logger.debug("Security AST parse fallback: %s", exc)
+            return []
     result = []
-    for tree in trees:
+    for tree in parsed_statements:
         if tree is None:
             continue
         for node in tree.walk():
@@ -179,8 +181,11 @@ def _validate_security(self, sql: str):
             result["reason"] = message
             return result
         result["warnings"].append(f"🔒 Security: {message}")
+
+    parsed_statements = None
     try:
-        if len(sqlglot.parse(sql)) > 1:
+        parsed_statements = sqlglot.parse(sql)
+        if len(parsed_statements) > 1:
             message = "Multiple SQL statements detected"
             if settings.security_block_dangerous:
                 result["blocked"] = True
@@ -189,6 +194,7 @@ def _validate_security(self, sql: str):
             result["warnings"].append(f"🔒 Security: {message}")
     except Exception as exc:
         logger.debug("Stacked-statement AST parse unavailable; using masked regex fallback: %s", exc)
+
     for pattern, message in DANGEROUS_SQL_PATTERNS:
         if pattern.search(masked):
             if settings.security_block_dangerous:
@@ -196,7 +202,7 @@ def _validate_security(self, sql: str):
                 result["reason"] = message
                 return result
             result["warnings"].append(f"🔒 Security: {message}")
-    dml_without_where = set(_dml_without_where(sql))
+    dml_without_where = set(_dml_without_where(sql, parsed_statements))
     for op in sorted(dml_without_where):
         result["warnings"].append(f"⚠️ {op} without WHERE clause - may affect all rows")
     for pattern, message in WARNING_SQL_PATTERNS:
