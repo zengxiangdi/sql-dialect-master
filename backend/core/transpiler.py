@@ -123,11 +123,13 @@ class SQLTranspiler:
         logger.debug(f"Input SQL: {sql[:200]}{'...' if len(sql) > 200 else ''}")
 
         security_warnings: List[str] = []
+        multiple_statements: Optional[bool] = None
         security_enabled = settings.security_check_enabled
         self._security_enabled = security_enabled
         if security_enabled:
             security_result = self._validate_security(sql)
             security_warnings = list(security_result["warnings"])
+            multiple_statements = security_result.get("multiple_statements")
             if security_result["blocked"]:
                 logger.warning(f"SQL blocked by security check: {security_result['reason']}")
                 return TranspileResult(
@@ -140,7 +142,9 @@ class SQLTranspiler:
                     warnings=security_warnings
                 )
 
-        if self._has_multiple_statements(sql):
+        if multiple_statements is None:
+            multiple_statements = self._has_multiple_statements(sql)
+        if multiple_statements:
             return TranspileResult(
                 success=False,
                 source_sql=sql,
@@ -321,7 +325,8 @@ class SQLTranspiler:
             result["warnings"].append(f"🔒 Security: {message}")
         try:
             parsed_statements = sqlglot.parse(sql)
-            if len(parsed_statements) > 1:
+            result["multiple_statements"] = len(parsed_statements) > 1
+            if result["multiple_statements"]:
                 message = "Multiple SQL statements detected"
                 if settings.security_block_dangerous:
                     result["blocked"] = True
