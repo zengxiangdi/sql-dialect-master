@@ -67,8 +67,8 @@ class SemanticDiff:
 
 
 def _strip_redundant_parentheses(node: exp.Expression) -> exp.Expression:
-    """Remove redundant Paren nodes while preserving operator nesting."""
-    if isinstance(node, exp.Paren):
+    """Remove grouping around a single predicate without changing boolean precedence."""
+    if isinstance(node, exp.Paren) and not isinstance(node.this, (exp.And, exp.Or)):
         return node.this.copy()
     return node.copy()
 
@@ -76,7 +76,13 @@ def _strip_redundant_parentheses(node: exp.Expression) -> exp.Expression:
 def _parse_and_normalize(sql: str, dialect: str) -> exp.Expression:
     if not isinstance(sql, str) or not sql.strip():
         raise ValueError("SQL must be a non-empty string")
-    return sqlglot.parse_one(sql, read=dialect).transform(_strip_redundant_parentheses)
+
+    tree = sqlglot.parse_one(sql, read=dialect)
+    for node in list(tree.find_all(exp.Paren)):
+        if isinstance(node.this, (exp.And, exp.Or)):
+            continue
+        node.replace(node.this.copy())
+    return tree
 
 
 def _canonical_sql(tree: exp.Expression) -> str:
