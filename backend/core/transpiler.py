@@ -128,10 +128,10 @@ class SQLTranspiler:
         security_enabled = settings.security_check_enabled
         self._security_enabled = security_enabled
         if security_enabled:
-            executable_sql = mask_non_executable(sql)
-            security_result = self._validate_security_masked(sql, executable_sql)
+            security_result = self._validate_security(sql)
             security_warnings = list(security_result["warnings"])
             multiple_statements = security_result.get("multiple_statements")
+            executable_sql = security_result.get("executable_sql")
             if security_result["blocked"]:
                 logger.warning(f"SQL blocked by security check: {security_result['reason']}")
                 return TranspileResult(
@@ -323,10 +323,9 @@ class SQLTranspiler:
             return None, warning
 
     def _validate_security(self, sql: str) -> Dict[str, Any]:
-        return self._validate_security_masked(sql, mask_non_executable(sql))
-
-    def _validate_security_masked(self, sql: str, executable_sql: str) -> Dict[str, Any]:
-        result = {"blocked": False, "reason": None, "warnings": []}
+        result = {"blocked": False, "reason": None, "warnings": [], "executable_sql": None}
+        executable_sql = mask_non_executable(sql)
+        result["executable_sql"] = executable_sql
         dangerous_operation = _DANGEROUS_OPERATION_PATTERN.search(executable_sql)
         if dangerous_operation:
             message = f"Dangerous SQL operation detected: {dangerous_operation.group(1).upper()}"
