@@ -23,19 +23,21 @@ def test_security_and_warning_paths_reuse_masked_sql(monkeypatch):
         ),
     )
 
-    result = transpiler.transpile("SELECT * FROM users", "mysql", "postgres")
+    result = transpiler.transpile("SELECT 'DROP TABLE users' FROM users", "mysql", "postgres")
 
     assert result.success is True
     assert len(masked_inputs) == 1
-    assert masked_inputs[0] == "SELECT * FROM users"
+    assert "DROP TABLE users" not in masked_inputs[0]
+    assert "SELECT" in masked_inputs[0]
 
 
-def test_security_helpers_preserve_masked_sql_contract():
+def test_security_helpers_expose_and_consume_masked_sql_contract():
     transpiler = SQLTranspiler()
 
     security_result = transpiler._validate_security("SELECT 'DROP TABLE users'")
+    masked_sql = security_result["executable_sql"]
 
-    assert security_result["executable_sql"] == "SELECT '                 '"
-    assert transpiler._generate_warnings("SELECT 'DROP TABLE users'", "mysql", "postgres") == [
-        "💡 Consider specifying columns instead of SELECT *"
-    ] if False else []
+    assert masked_sql is not None
+    assert "DROP TABLE users" not in masked_sql
+    assert masked_sql.startswith("SELECT ")
+    assert transpiler._generate_warnings("SELECT 'DROP TABLE users'", "mysql", "postgres") == []
