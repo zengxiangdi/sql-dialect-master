@@ -19,6 +19,7 @@ def test_has_multiple_statements_preserves_semicolon_boundaries(sql, expected):
 
 
 def test_has_multiple_statements_skips_parser_without_semicolon(monkeypatch):
+    """A statement with no separator must not invoke the SQL parser."""
     parse_calls = 0
 
     def spy_parse(*args, **kwargs):
@@ -42,6 +43,7 @@ def test_has_multiple_statements_skips_parser_without_semicolon(monkeypatch):
     ],
 )
 def test_validate_security_skips_parser_without_executable_separator(monkeypatch, sql):
+    """Security validation must reuse scanner boundaries before parsing."""
     parse_calls = 0
 
     def spy_parse(*args, **kwargs):
@@ -58,6 +60,7 @@ def test_validate_security_skips_parser_without_executable_separator(monkeypatch
 
 
 def test_validate_security_still_parses_executable_multi_statement(monkeypatch):
+    """Executable separators retain parser-backed multi-statement detection."""
     parse_calls = 0
 
     def spy_parse(*args, **kwargs):
