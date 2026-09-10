@@ -50,6 +50,13 @@ jobs:
             --repeats 1000 \
             > cache-key-profile.json
 
+      - name: Run security validation profiler
+        run: |
+          python backend/benchmarks/security_validation_profile.py \
+            --iterations 100 \
+            --repeats 5 \
+            > security-validation-profile.json
+
       - name: Publish benchmark summary
         run: |
           python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
@@ -59,6 +66,7 @@ jobs:
           payload = json.loads(Path("benchmark.json").read_text(encoding="utf-8"))
           profile = json.loads(Path("statement-validation-profile.json").read_text(encoding="utf-8"))
           cache_profile = json.loads(Path("cache-key-profile.json").read_text(encoding="utf-8"))
+          security_profile = json.loads(Path("security-validation-profile.json").read_text(encoding="utf-8"))
           sync = payload["sync"]["mean_seconds"]
           async_mean = payload["async"]["mean_seconds"]
           speedup = payload["async_speedup"]
@@ -129,6 +137,28 @@ jobs:
               f"- Rules: `{cache_profile['workload']['rule_count']}`, "
               f"payload: `{cache_profile['workload']['rule_payload_bytes']} bytes`"
           )
+
+          print()
+          print("### Security validation breakdown")
+          security_measurements = security_profile["measurements"]
+          security_shares = security_profile["analysis"]["substage_share_of_full_validation_percent"]
+          for stage in (
+              "mask_non_executable",
+              "dangerous_operation_regex",
+              "sqlglot_parse",
+              "dangerous_pattern_scan",
+              "warning_pattern_scan",
+          ):
+              measurement = security_measurements[stage]
+              print(
+                  f"- `{stage}`: `{measurement['per_statement_ms']:.4f} ms/statement` "
+                  f"({security_shares[stage]:.1f}% of full validation)"
+              )
+          print(
+              f"- `_validate_security()`: "
+              f"`{security_measurements['validate_security']['per_statement_ms']:.4f} ms/statement`"
+          )
+
           print()
           print("Benchmark is informational in CI; it does not enforce a fixed latency threshold.")
           PY
@@ -141,5 +171,6 @@ jobs:
             benchmark.json
             statement-validation-profile.json
             cache-key-profile.json
+            security-validation-profile.json
           if-no-files-found: error
           retention-days: 14
