@@ -15,7 +15,6 @@ def install_compatibility_patches() -> None:
     """Install remaining legacy compatibility adapters in deterministic order."""
     from .nl2sql import NL2SQLGenerator
     from .nl2sql_components.boolean_conditions import extract_boolean_conditions
-    from .rules import TransformRule
 
     if not getattr(NL2SQLGenerator, "_sdm_boolean_patch_installed", False):
         original_extract = NL2SQLGenerator._extract_conditions_enhanced
@@ -29,16 +28,8 @@ def install_compatibility_patches() -> None:
         NL2SQLGenerator._extract_conditions_enhanced = extract_conditions_with_boolean
         NL2SQLGenerator._sdm_boolean_patch_installed = True
 
-    # Capture canonical RuleEngine behavior before importing legacy adapters.
-    # audit_hardening historically replaces TransformRule.apply; restoring the
-    # canonical implementation here keeps compatibility modules from overriding
-    # the structural-rewrite contract.
-    canonical_transform_rule_apply = TransformRule.apply
-
     for module_name in _PATCH_MODULES:
         import_module(f".{module_name}", package=__package__)
-
-    TransformRule.apply = canonical_transform_rule_apply
 
 
 __all__ = ["install_compatibility_patches"]
