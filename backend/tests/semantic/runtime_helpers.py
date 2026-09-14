@@ -11,12 +11,20 @@ report the semantic classification from AST-level diffing.
 import datetime
 from typing import Any, List, Optional, Tuple
 
-import duckdb
+
+def _get_duckdb():
+    """Return the duckdb module or raise ImportError."""
+    import duckdb
+    return duckdb
 
 
-def create_employees_connection() -> duckdb.DuckDBPyConnection:
-    """Create an in-memory DuckDB connection populated with test data."""
-    conn = duckdb.connect(":memory:")
+def create_employees_connection():
+    """Create an in-memory DuckDB connection populated with test data.
+
+    Raises ImportError if duckdb is not available.
+    """
+    db = _get_duckdb()
+    conn = db.connect(":memory:")
     conn.execute(
         """
         CREATE TABLE employees (
@@ -93,6 +101,7 @@ def normalize_for_set(rows: List[Tuple]) -> set:
 
 def execute_or_skip(conn, sql: str) -> Tuple[Optional[List], Optional[str]]:
     """Execute SQL, returning (rows, None) on success or (None, error) on failure."""
+    db = _get_duckdb()
     try:
         result = conn.execute(sql).fetchall()
         return result, None
