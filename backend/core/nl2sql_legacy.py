@@ -522,6 +522,46 @@ class NL2SQLGenerator:
                 condition_column = column
                 break
 
+        # Handle IN/NOT IN predicate (must come before generic comparison handling)
+        in_matched_columns: set = set()
+        in_match = re.search(
+            r"\b(\w+)\s+(not\s+)?in\s*\(([^)]+)\)",
+            text,
+            re.IGNORECASE,
+        )
+        if in_match:
+            col = in_match.group(1)
+            negation = in_match.group(2) is not None
+            raw_values = in_match.group(3).strip()
+            # Parse comma-separated values, preserving quoted strings
+            values = []
+            current = ""
+            quote_char = None
+            for char in raw_values:
+                if char in ("'", '"'):
+                    if quote_char and quote_char == char:
+                        quote_char = None
+                    elif not quote_char:
+                        quote_char = char
+                    current += char
+                elif char == "," and not quote_char:
+                    if current.strip():
+                        values.append(current.strip())
+                    current = ""
+                else:
+                    current += char
+            if current.strip():
+                values.append(current.strip())
+
+            if values:
+                formatted_values = ", ".join(
+                    f"'{v}'" if v.startswith(("'", '"')) or not re.match(r"^-?\d+(\.\d+)?$", v) else v
+                    for v in values
+                )
+                operator = "NOT IN" if negation else "IN"
+                conditions.append(f"{col} {operator} ({formatted_values})")
+                in_matched_columns.add(col.lower())
+
         comparisons = [
             (["大于等于", "不小于", "至少", "greater than or equal to", "larger than or equal to"], ">="),
             (["小于等于", "不大于", "最多", "less than or equal to", "smaller than or equal to"], "<="),
@@ -604,6 +644,11 @@ class NL2SQLGenerator:
             (["未支付", "unpaid"], "status = 'unpaid'"),
         ]
         for keywords, condition in status_patterns:
+            # Skip status pattern if the column was already matched via IN predicate
+            col_match = re.match(r"^(\w+)\s*=", condition)
+            col_name = col_match.group(1).lower() if col_match else None
+            if col_name and col_name in in_matched_columns:
+                continue
             if any(keyword in text for keyword in keywords):
                 conditions.append(condition)
                 break
@@ -672,16 +717,17 @@ class NL2SQLGenerator:
             if pattern in text:
                 order_col = column
                 break
-        if any(k in text for k in ["排序", "排列", "sort", "order", "sorted"]):
+        # Use word-boundary matching to avoid false positives (e.g., "orders" contains "order")
+        if any(re.search(rf'\b{k}\b', text, re.IGNORECASE) for k in ["排序", "排列", "sort", "order", "sorted"]):
             return (
                 order_col or "id",
                 "DESC"
-                if any(k in text for k in ["降序", "从大到小", "递减", "desc", "descending", "decreasing"])
+                if any(re.search(rf'\b{k}\b', text, re.IGNORECASE) for k in ["降序", "从大到小", "递减", "desc", "descending", "decreasing"])
                 else "ASC",
             )
-        if any(k in text for k in ["最大", "最高", "最多", "max", "highest", "top"]):
+        if any(re.search(rf'\b{k}\b', text, re.IGNORECASE) for k in ["最大", "最高", "最多", "max", "highest", "top"]):
             return (order_col or "amount", "DESC")
-        if any(k in text for k in ["最小", "最低", "最少", "min", "lowest"]):
+        if any(re.search(rf'\b{k}\b', text, re.IGNORECASE) for k in ["最小", "最低", "最少", "min", "lowest"]):
             return (order_col or "amount", "ASC")
         return None
 

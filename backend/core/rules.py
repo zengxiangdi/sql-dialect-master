@@ -74,14 +74,14 @@ def _top_level_keyword(text: str, keyword: str) -> int:
 
 
 def _replace_listagg_to_collect_list_wrapper(sql: str, _original_call: str = "") -> str:
-    """Wrapper for LISTAGG conversion that works with the structured replacer interface."""
-    # The structured replacer interface passes (args, original_call), but
-    # _replace_listagg_to_collect_list needs the full SQL context to find
-    # WITHIN GROUP. We reconstruct the SQL by replacing the original_call
-    # portion with a placeholder, running the conversion, then restoring.
-    # Actually, the simplest approach: the full_sql_rewriter path handles this.
-    # This wrapper is a fallback for cases where replace_function_calls matches
-    # but the full-conversion logic can't run.
+    """Wrapper for LISTAGG conversion that works with the structured replacer interface.
+
+    NOTE: This wrapper is intentionally a no-op. The LISTAGG conversion is handled
+    by the full_sql_rewriter (_replace_listagg_to_collect_list) which operates on
+    the full SQL before sqlglot processes it. By the time this wrapper would be
+    called, the rule engine has already run and sqlglot may have transformed
+    LISTAGG into another function (e.g., GROUP_CONCAT for oracle→hive).
+    """
     return sql
 
 
@@ -176,27 +176,6 @@ def _replace_listagg_to_collect_list(sql: str) -> tuple[str, bool]:
         return sql, False
     result.append(sql[cursor:])
     return "".join(result), True
-
-
-def _top_level_keyword(text: str, keyword: str) -> int:
-    """Return the position of a keyword at top-level parentheses depth, or -1."""
-    masked = mask_non_executable(text)
-    wanted = keyword.upper()
-    depth = 0
-    for index, char in enumerate(masked):
-        if char == "(":
-            depth += 1
-            continue
-        if char == ")" and depth:
-            depth -= 1
-            continue
-        if depth == 0 and masked[index:index + len(wanted)].upper() == wanted:
-            before = masked[index - 1] if index else " "
-            after_index = index + len(wanted)
-            after = masked[after_index] if after_index < len(masked) else " "
-            if not (before.isalnum() or before == "_") and not (after.isalnum() or after == "_"):
-                return index
-    return -1
 
 
 class RuleCategory(Enum):

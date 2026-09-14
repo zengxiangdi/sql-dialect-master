@@ -1,5 +1,18 @@
 {
-  "dialects": ["hive", "mysql", "oracle", "tsql", "postgres", "spark", "trino", "snowflake", "redshift", "clickhouse", "duckdb", "databricks"],
+  "dialects": [
+    "hive",
+    "mysql",
+    "oracle",
+    "tsql",
+    "postgres",
+    "spark",
+    "trino",
+    "snowflake",
+    "redshift",
+    "clickhouse",
+    "duckdb",
+    "databricks"
+  ],
   "mappings": {
     "STRING": {
       "hive": "STRING",
@@ -524,6 +537,21 @@
       "duckdb": "SMALLINT",
       "databricks": "INT",
       "notes": "MySQL-specific YEAR type - use SMALLINT/INT elsewhere"
+    },
+    "DATETIME": {
+      "hive": "TIMESTAMP",
+      "mysql": "DATETIME",
+      "oracle": "TIMESTAMP(6)",
+      "tsql": "DATETIME2",
+      "postgres": "TIMESTAMP",
+      "spark": "TIMESTAMP",
+      "trino": "TIMESTAMP",
+      "snowflake": "TIMESTAMP_NTZ",
+      "redshift": "TIMESTAMP",
+      "clickhouse": "DateTime",
+      "duckdb": "TIMESTAMP",
+      "databricks": "TIMESTAMP",
+      "notes": "MySQL DATETIME maps to TIMESTAMP in most dialects; precision varies"
     }
   },
   "precision_warnings": {

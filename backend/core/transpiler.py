@@ -309,7 +309,29 @@ class SQLTranspiler:
 
     def _get_compatibility_notes(self, source: str, target: str, sql: str = "") -> List[str]:
         notes = list(get_compatibility_notes(source, target))
+        if not sql:
+            return notes
+
+        # Filter out notes for transformations that were NOT actually applied.
+        # sqlglot may have handled the conversion natively, or may have left
+        # the source construct unchanged. Only emit notes when the target SQL
+        # actually contains the expected transformed output.
         sql_upper = sql.upper()
+        filtered = []
+        for note in notes:
+            upper_note = note.upper()
+            if "LISTAGG" in upper_note and "ARRAY_JOIN" not in upper_note:
+                # Note claims ARRAY_JOIN conversion but we don't see it in output
+                continue
+            if "ARRAY_JOIN" in upper_note and "ARRAY_JOIN" not in sql_upper:
+                continue
+            if "CONNECT BY" in upper_note and "WITH RECURSIVE" not in sql_upper:
+                continue
+            if "LATERAL VIEW" in upper_note and ("UNNEST" not in sql_upper and "JSON_TABLE" not in sql_upper):
+                continue
+            filtered.append(note)
+        notes = filtered
+
         if "LIMIT" in sql_upper and target == "oracle":
             notes.append("Oracle uses FETCH FIRST n ROWS ONLY (12c+) or ROWNUM for LIMIT")
         if "AUTO_INCREMENT" in sql_upper and target != "mysql":
