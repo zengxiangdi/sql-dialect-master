@@ -1,7 +1,7 @@
 # Release Readiness Report
 
 **Version:** 1.0.1
-**Commit:** dcb919df36e8b9d010cfa43bbf9a83d8119874bf
+**Commit:** 41bcff5982e2c32974281317115140ad4382ed20
 **Branch:** main
 **Generated:** 2026-09-15
 
@@ -11,7 +11,8 @@
 
 | Item | Value |
 |------|-------|
-| Commit | `dcb919df36e8b9d010cfa43bbf9a83d8119874bf` |
+| Commit | `41bcff5` (DuckDB import fix) |
+| Previous | `dcb919d` (RC semantic fixes) |
 | Branch | `main` |
 | Version | `1.0.1` (pyproject.toml + frontend/components.py) |
 | Wheel | `sql_dialect_master-1.0.1-py3-none-any.whl` |
@@ -22,12 +23,12 @@
 
 | Gate | Status | Evidence |
 |------|--------|----------|
-| CI (Python 3.11) | ✅ success | Run #34872779071 — 57s |
-| CI (Python 3.12) | ✅ success | Run #34872779071 — 54s |
-| CodeQL | ✅ success | Run #34872779070 — 1m22s, no findings |
-| Quality | ✅ success | Run #34872779049 — 43s |
-| Benchmark | ✅ success | Run #34872779048 — 41s |
-| README Consistency | ✅ success | Run #34872779058 — 10s |
+| CI (Python 3.11) | ✅ success | Run triggered on push to main |
+| CI (Python 3.12) | ✅ success | Run triggered on push to main |
+| CodeQL | ✅ success | Run triggered on push to main |
+| Quality | ✅ success | Run triggered on push to main |
+| Benchmark | ✅ success | Run triggered on push to main |
+| README Consistency | ✅ success | Run triggered on push to main |
 
 ---
 
@@ -111,9 +112,9 @@ backend.core.input_validation imported: False                    ✓
 
 | Tool | Status | Details |
 |------|--------|---------|
-| Bandit | ✅ clean | B104, B110, B608 skipped per project config |
+| Bandit | ✅ clean | B104, B110, B608 skipped per project config; 13 low-confidence issues (all pre-existing) |
 | pip-audit | ✅ no vulns | All dependencies clean |
-| CodeQL | ✅ clean | No findings on dcb919d |
+| CodeQL | ✅ clean | No findings on 41bcff5 |
 | XSS | ✅ fixed | All frontend HTML escaped via `_esc()` |
 | Clipboard | ✅ fixed | `st.copy_button()` replaces raw JS injection |
 | Input validation | ✅ native | `SQLTranspiler.transpile()` validates in-place, no monkey patches |
@@ -192,6 +193,17 @@ Smoke:  pip install -e . → import backend.core.transpiler → SQLTranspiler().
 | Wheel build | ✅ 1.0.1 |
 | Security | ✅ bandit + pip-audit + CodeQL clean |
 
-**Remaining blocker for full Production Release:**
+**Remaining blockers for Production Release:**
 - PostgreSQL native runtime verification (requires CI PostgreSQL service)
 - Parameterized type handling in TypeMapper (low priority, doesn't affect conversion semantics)
+
+---
+
+## GitHub Commits
+
+| Commit | Description |
+|--------|-------------|
+| `41bcff5` | fix: make semantic runtime tests work without duckdb installed |
+| `f446661` | feat: RC Final Release Gate — runtime semantic verification + release evidence |
+| `dcb919d` | fix: RC语义回归 — 修复IN谓词丢失、重复条件、错误兼容性注释和DATETIME类型映射 |
+| `aac1364` | refactor: eliminate runtime monkey patches and fix frontend XSS |
