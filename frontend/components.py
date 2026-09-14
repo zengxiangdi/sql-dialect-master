@@ -110,7 +110,7 @@ def render_main_header(theme: Dict[str, str], subtitle: str = "") -> str:
     """
 
 
-def render_sidebar_branding(theme: Dict[str, str], version: str = "1.0") -> str:
+def render_sidebar_branding(theme: Dict[str, str], version: str = "1.0.1") -> str:
     """Render sidebar branding section.
     
     Args:

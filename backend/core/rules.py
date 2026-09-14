@@ -8,13 +8,195 @@ import logging
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import List, Tuple
+from typing import Callable, List, Tuple
 
 from .function_call_scanner import replace_function_calls
 from .p1_sql_scanner import executable_segments, mask_non_executable, split_top_level_args
 
 # Configure module logger
 logger = logging.getLogger(__name__)
+
+
+def _replace_string_agg_to_group_concat(args: str, original: str) -> str:
+    """Convert STRING_AGG to GROUP_CONCAT preserving nested expressions."""
+    values = split_top_level_args(args)
+    if len(values) != 2 or not all(values):
+        return original
+    expression, separator = values
+    # Strip surrounding quotes from separator if present
+    sep_stripped = separator.strip("'\"")
+    return f"GROUP_CONCAT({expression} SEPARATOR '{sep_stripped}')"
+
+
+def _replace_group_concat_to_string_agg(args: str, original: str) -> str:
+    """Convert GROUP_CONCAT to STRING_AGG preserving DISTINCT, ORDER BY, SEPARATOR."""
+    separator_position = _top_level_keyword(args, "SEPARATOR")
+    before_separator = args if separator_position < 0 else args[:separator_position].rstrip()
+    separator = "','" if separator_position < 0 else args[separator_position + len("SEPARATOR"):].strip()
+    if not separator:
+        return original
+
+    order_position = _top_level_keyword(before_separator, "ORDER BY")
+    expression = before_separator if order_position < 0 else before_separator[:order_position].rstrip()
+    order_by = None if order_position < 0 else before_separator[order_position + len("ORDER BY"):].strip()
+    distinct = bool(re.match(r"^DISTINCT\b", expression, re.IGNORECASE))
+    if distinct:
+        expression = re.sub(r"^DISTINCT\s+", "", expression, count=1, flags=re.IGNORECASE).strip()
+    if not expression:
+        return original
+
+    prefix = "DISTINCT " if distinct else ""
+    result = f"STRING_AGG({prefix}{expression}::TEXT, {separator}"
+    if order_by:
+        result += f" ORDER BY {order_by}"
+    return result + ")"
+
+
+def _top_level_keyword(text: str, keyword: str) -> int:
+    """Return the position of a keyword at top-level parentheses depth, or -1."""
+    masked = mask_non_executable(text)
+    wanted = keyword.upper()
+    depth = 0
+    for index, char in enumerate(masked):
+        if char == "(":
+            depth += 1
+            continue
+        if char == ")" and depth:
+            depth -= 1
+            continue
+        if depth == 0 and masked[index:index + len(wanted)].upper() == wanted:
+            before = masked[index - 1] if index else " "
+            after_index = index + len(wanted)
+            after = masked[after_index] if after_index < len(masked) else " "
+            if not (before.isalnum() or before == "_") and not (after.isalnum() or after == "_"):
+                return index
+    return -1
+
+
+def _replace_listagg_to_collect_list_wrapper(sql: str, _original_call: str = "") -> str:
+    """Wrapper for LISTAGG conversion that works with the structured replacer interface."""
+    # The structured replacer interface passes (args, original_call), but
+    # _replace_listagg_to_collect_list needs the full SQL context to find
+    # WITHIN GROUP. We reconstruct the SQL by replacing the original_call
+    # portion with a placeholder, running the conversion, then restoring.
+    # Actually, the simplest approach: the full_sql_rewriter path handles this.
+    # This wrapper is a fallback for cases where replace_function_calls matches
+    # but the full-conversion logic can't run.
+    return sql
+
+
+def _replace_listagg_to_collect_list(sql: str) -> tuple[str, bool]:
+    """Convert Oracle LISTAGG to Hive ARRAY_JOIN(COLLECT_LIST(...))."""
+    function_name = "LISTAGG"
+    masked = mask_non_executable(sql)
+    name_upper = function_name.upper()
+    length = len(sql)
+    result: list[str] = []
+    cursor = 0
+    index = 0
+    applied = False
+
+    while index < length:
+        if masked[index:index + len(function_name)].upper() != name_upper:
+            index += 1
+            continue
+        if index > 0 and (masked[index - 1].isalnum() or masked[index - 1] == "_"):
+            index += 1
+            continue
+
+        open_index = index + len(function_name)
+        while open_index < length and masked[open_index].isspace():
+            open_index += 1
+        if open_index >= length or masked[open_index] != "(":
+            index += 1
+            continue
+
+        depth = 0
+        close_index = open_index
+        while close_index < length:
+            char = masked[close_index]
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            close_index += 1
+        if close_index >= length or depth != 0:
+            index += 1
+            continue
+
+        suffix_index = close_index + 1
+        while suffix_index < length and masked[suffix_index].isspace():
+            suffix_index += 1
+        within_group = "WITHIN" + " " + "GROUP"
+        if masked[suffix_index:suffix_index + len(within_group)].upper() != within_group:
+            index += 1
+            continue
+        suffix_index += len(within_group)
+        while suffix_index < length and masked[suffix_index].isspace():
+            suffix_index += 1
+        if suffix_index >= length or masked[suffix_index] != "(":
+            index += 1
+            continue
+
+        order_depth = 0
+        order_close = suffix_index
+        while order_close < length:
+            char = masked[order_close]
+            if char == "(":
+                order_depth += 1
+            elif char == ")":
+                order_depth -= 1
+                if order_depth == 0:
+                    break
+            order_close += 1
+        if order_close >= length or order_depth != 0:
+            index += 1
+            continue
+
+        args = sql[open_index + 1:close_index]
+        order_clause = sql[suffix_index + 1:order_close].strip()
+        if not re.match(r"^ORDER\s+BY\b", order_clause, re.IGNORECASE):
+            index += 1
+            continue
+
+        values = split_top_level_args(args)
+        if len(values) != 2 or not all(values):
+            index += 1
+            continue
+
+        result.append(sql[cursor:index])
+        result.append(f"ARRAY_JOIN(COLLECT_LIST({values[0]}), {values[1]})")
+        cursor = order_close + 1
+        index = cursor
+        applied = True
+
+    if not applied:
+        return sql, False
+    result.append(sql[cursor:])
+    return "".join(result), True
+
+
+def _top_level_keyword(text: str, keyword: str) -> int:
+    """Return the position of a keyword at top-level parentheses depth, or -1."""
+    masked = mask_non_executable(text)
+    wanted = keyword.upper()
+    depth = 0
+    for index, char in enumerate(masked):
+        if char == "(":
+            depth += 1
+            continue
+        if char == ")" and depth:
+            depth -= 1
+            continue
+        if depth == 0 and masked[index:index + len(wanted)].upper() == wanted:
+            before = masked[index - 1] if index else " "
+            after_index = index + len(wanted)
+            after = masked[after_index] if after_index < len(masked) else " "
+            if not (before.isalnum() or before == "_") and not (after.isalnum() or after == "_"):
+                return index
+    return -1
 
 
 class RuleCategory(Enum):
@@ -65,6 +247,13 @@ class TransformRule:
     enabled: bool = True
     function_name: str | None = None
     structured_replacement: str | None = None
+    # Custom callable replacer for complex structured rewrites that can't
+    # be expressed as a simple format string. Receives (args_str, original_call)
+    # and returns the replacement string.
+    structured_replacer: Callable[[str, str], str] | None = None
+    # For rules that need the full SQL context (e.g., LISTAGG with WITHIN GROUP).
+    # Receives (sql,) and returns (transformed_sql, applied_bool).
+    full_sql_rewriter: Callable[[str], tuple[str, bool]] | None = None
 
     @property
     def safety(self) -> RuleSafety:
@@ -89,17 +278,25 @@ class TransformRule:
 
     def _apply_structured(self, sql: str) -> Tuple[str, bool]:
         """Apply an explicitly scanner-backed function rewrite."""
-        if not self.function_name or not self.structured_replacement:
+        if not self.function_name:
             return sql, False
+
+        # If a full-SQL rewriter is provided, use it directly.
+        if self.full_sql_rewriter is not None:
+            return self.full_sql_rewriter(sql)
 
         applied = False
 
-        def replacer(args: str, _original_call: str) -> str:
+        def replacer(args: str, original_call: str) -> str:
             nonlocal applied
+            if self.structured_replacer is not None:
+                transformed = self.structured_replacer(args, original_call)
+                applied = applied or transformed != original_call
+                return transformed
             values = split_top_level_args(args)
             expected = self.structured_replacement.count("{")
             if len(values) != expected:
-                return _original_call
+                return original_call
             applied = True
             return self.structured_replacement.format(*values)
 
@@ -111,7 +308,7 @@ class TransformRule:
         if not self.enabled:
             return sql, False
 
-        if self.function_name and self.structured_replacement:
+        if self.function_name and (self.structured_replacement or self.structured_replacer or self.full_sql_rewriter):
             return self._apply_structured(sql)
 
         pattern = getattr(self, "_compiled_pattern", None)
@@ -248,7 +445,9 @@ TRANSFORM_RULES: List[TransformRule] = [
         replacement=r"ARRAY_JOIN(COLLECT_LIST(\1), '\2')",
         note="Converted LISTAGG to ARRAY_JOIN(COLLECT_LIST()). ORDER BY not preserved",
         category=RuleCategory.AGGREGATION,
-        priority=80
+        priority=80,
+        function_name="LISTAGG",
+        full_sql_rewriter=_replace_listagg_to_collect_list,
     ),
     TransformRule(
         name="tsql_string_agg_to_mysql",
@@ -258,7 +457,9 @@ TRANSFORM_RULES: List[TransformRule] = [
         replacement=r"GROUP_CONCAT(\1 SEPARATOR '\2')",
         note="Converted STRING_AGG to GROUP_CONCAT",
         category=RuleCategory.AGGREGATION,
-        priority=70
+        priority=70,
+        function_name="STRING_AGG",
+        structured_replacer=_replace_string_agg_to_group_concat,
     ),
     TransformRule(
         name="mysql_group_concat_to_postgres",
@@ -268,7 +469,9 @@ TRANSFORM_RULES: List[TransformRule] = [
         replacement=r"STRING_AGG(\1::TEXT, '\2')",
         note="Converted GROUP_CONCAT to STRING_AGG",
         category=RuleCategory.AGGREGATION,
-        priority=70
+        priority=70,
+        function_name="GROUP_CONCAT",
+        structured_replacer=_replace_group_concat_to_string_agg,
     ),
     TransformRule(
         name="postgres_string_agg_to_mysql",
@@ -278,7 +481,9 @@ TRANSFORM_RULES: List[TransformRule] = [
         replacement=r"GROUP_CONCAT(\1 SEPARATOR '\2')",
         note="Converted STRING_AGG to GROUP_CONCAT",
         category=RuleCategory.AGGREGATION,
-        priority=70
+        priority=70,
+        function_name="STRING_AGG",
+        structured_replacer=_replace_string_agg_to_group_concat,
     ),
     TransformRule(
         name="clickhouse_group_array_to_postgres",

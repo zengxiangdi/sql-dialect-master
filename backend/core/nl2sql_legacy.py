@@ -507,7 +507,13 @@ class NL2SQLGenerator:
         return columns if columns else ["*"]
 
     def _extract_conditions_enhanced(self, text: str, original: str) -> list:
-        """Extract WHERE conditions with enhanced parsing."""
+        """Extract WHERE conditions with enhanced parsing including boolean expressions."""
+        # Use the structured boolean extractor first — it correctly handles
+        # multiple predicates connected by AND/OR while preserving precedence.
+        boolean_conditions = extract_boolean_conditions(text)
+        if boolean_conditions:
+            return boolean_conditions
+
         conditions = []
         numbers = re.findall(r"\d+\.?\d*", original)
         condition_column = None

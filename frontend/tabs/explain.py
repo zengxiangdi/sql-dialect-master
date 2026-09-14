@@ -6,12 +6,12 @@ across different database dialects.
 """
 import streamlit as st
 import sqlglot
-from frontend.app_context import DIALECTS, DIALECT_INFO, get_dialect_label
+from frontend.app_context import DIALECTS, DIALECT_INFO, get_dialect_label, _esc
 
 
 def render_explain_tab(current_theme):
     """Render the Execution Plan Comparison tab content."""
-    
+
     st.markdown("#### 📊 Execution Plan Comparison")
     st.caption("Compare how different databases would execute the same query")
     
@@ -82,36 +82,36 @@ def render_explain_tab(current_theme):
             if "error" not in plan1:
                 st.markdown(f"""
                 <div style="background: {current_theme['secondary']}; padding: 1.5rem; border-radius: 12px; border-left: 4px solid {current_theme['accent']};">
-                    <h3 style="margin: 0 0 1rem 0;">{plan1['icon']} {plan1['dialect']}</h3>
+                    <h3 style="margin: 0 0 1rem 0;">{_esc(plan1['icon'])} {_esc(plan1['dialect'])}</h3>
                     <div style="display: grid; gap: 0.5rem;">
-                        <div><strong>Query Type:</strong> {plan1['query_type']}</div>
-                        <div><strong>Tables:</strong> {', '.join(plan1['tables'])}</div>
-                        <div><strong>Joins:</strong> {plan1['joins']}</div>
+                        <div><strong>Query Type:</strong> {_esc(plan1['query_type'])}</div>
+                        <div><strong>Tables:</strong> {_esc(', '.join(plan1['tables']))}</div>
+                        <div><strong>Joins:</strong> {_esc(str(plan1['joins']))}</div>
                         <div><strong>Aggregation:</strong> {'Yes' if plan1['aggregation'] else 'No'}</div>
                         <div><strong>Sorting:</strong> {'Yes' if plan1['sorting'] else 'No'}</div>
-                        <div><strong>Limit:</strong> {plan1['limit']}</div>
+                        <div><strong>Limit:</strong> {_esc(str(plan1['limit']))}</div>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
-                
+
                 st.markdown("**Execution Hints:**")
                 for hint in plan1['hints']:
-                    st.info(f"💡 {hint}")
+                    st.info(f"💡 {_esc(hint)}")
             else:
-                st.error(f"Error: {plan1['error']}")
-        
+                st.error(f"Error: {_esc(plan1['error'])}")
+
         with col_exp2:
             if "error" not in plan2:
                 st.markdown(f"""
                 <div style="background: {current_theme['secondary']}; padding: 1.5rem; border-radius: 12px; border-left: 4px solid {current_theme['success']};">
-                    <h3 style="margin: 0 0 1rem 0;">{plan2['icon']} {plan2['dialect']}</h3>
+                    <h3 style="margin: 0 0 1rem 0;">{_esc(plan2['icon'])} {_esc(plan2['dialect'])}</h3>
                     <div style="display: grid; gap: 0.5rem;">
-                        <div><strong>Query Type:</strong> {plan2['query_type']}</div>
-                        <div><strong>Tables:</strong> {', '.join(plan2['tables'])}</div>
-                        <div><strong>Joins:</strong> {plan2['joins']}</div>
+                        <div><strong>Query Type:</strong> {_esc(plan2['query_type'])}</div>
+                        <div><strong>Tables:</strong> {_esc(', '.join(plan2['tables']))}</div>
+                        <div><strong>Joins:</strong> {_esc(str(plan2['joins']))}</div>
                         <div><strong>Aggregation:</strong> {'Yes' if plan2['aggregation'] else 'No'}</div>
                         <div><strong>Sorting:</strong> {'Yes' if plan2['sorting'] else 'No'}</div>
-                        <div><strong>Limit:</strong> {plan2['limit']}</div>
+                        <div><strong>Limit:</strong> {_esc(str(plan2['limit']))}</div>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
@@ -120,6 +120,6 @@ def render_explain_tab(current_theme):
                 for hint in plan2['hints']:
                     st.info(f"💡 {hint}")
             else:
-                st.error(f"Error: {plan2['error']}")
+                st.error(f"Error: {_esc(plan2['error'])}")
         
         st.caption("💡 This is a simulated execution plan. Connect to real databases for actual EXPLAIN output.")

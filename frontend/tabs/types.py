@@ -7,7 +7,7 @@ Displays the Data Type Mapping Matrix, allowing users to:
 - View detailed type support across all dialects
 """
 import streamlit as st
-from frontend.app_context import DIALECTS, DIALECT_INFO, get_dialect_label
+from frontend.app_context import DIALECTS, DIALECT_INFO, get_dialect_label, _esc
 
 
 def render_types_tab(types_data, current_theme):
@@ -90,9 +90,9 @@ def render_types_tab(types_data, current_theme):
                 with cols[col_idx]:
                     st.markdown(f"""
                     <div style="background: {current_theme['secondary']}; padding: 10px; border-radius: 8px; text-align: center;">
-                        <div style="font-size: 1.2rem;">{info.get('icon', '📄')}</div>
-                        <div style="font-weight: 600; font-size: 0.85rem;">{dialect.upper()}</div>
-                        <code style="font-size: 0.75rem;">{typ}</code>
+                        <div style="font-size: 1.2rem;">{_esc(info.get('icon', '📄'))}</div>
+                        <div style="font-weight: 600; font-size: 0.85rem;">{_esc(dialect.upper())}</div>
+                        <code style="font-size: 0.75rem;">{_esc(typ)}</code>
                         <div>{status}</div>
                     </div>
                     """, unsafe_allow_html=True)

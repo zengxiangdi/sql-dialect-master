@@ -28,10 +28,8 @@ from .exceptions import (
 from .compatibility import install_compatibility_patches
 from .structured_aggregation import install_structured_aggregation_rules
 
-# Legacy compatibility adapters are installed through one explicit, idempotent entry point.
+# Explicit compatibility entry points are no-ops; kept for import stability.
 install_compatibility_patches()
-# Install the scanner-backed aggregation handlers after legacy patches so the
-# structural rewrite contract remains the effective runtime implementation.
 install_structured_aggregation_rules()
 
 __all__ = [

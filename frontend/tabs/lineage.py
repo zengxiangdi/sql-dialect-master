@@ -6,7 +6,7 @@ Handles SQL Lineage visualization using Mermaid diagrams.
 import sqlglot
 import streamlit as st
 
-from frontend.app_context import DIALECTS, get_dialect_label
+from frontend.app_context import DIALECTS, get_dialect_label, _esc
 
 
 def render_lineage_tab(current_theme):
@@ -106,8 +106,8 @@ GROUP BY u.name, u.email""",
                 for t in tables:
                     st.markdown(f"""
                     <div style="background: {current_theme['secondary']}; padding: 8px 12px; border-radius: 8px; margin-bottom: 4px;">
-                        <code>{t['name']}</code>
-                        {f"<span style='opacity: 0.6;'> as {t['alias']}</span>" if t['alias'] != t['name'] else ""}
+                        <code>{_esc(t['name'])}</code>
+                        {f"<span style='opacity: 0.6;'> as {_esc(t['alias'])}</span>" if t['alias'] != t['name'] else ""}
                     </div>
                     """, unsafe_allow_html=True)
                 

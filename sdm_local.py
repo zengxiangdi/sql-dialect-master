@@ -152,7 +152,7 @@ with st.sidebar:
                     st.rerun()
             with cols[1]:
                 if st.button("Copy", key=f"copy_{i}"):
-                    st.markdown(f'<textarea id="c_{i}" style="position:absolute;left:-9999px">{h["sql"]}</textarea><script>navigator.clipboard.writeText(document.getElementById("c_{i}").value)</script>', unsafe_allow_html=True)
+                    st.copy_button("Copy to clipboard", key=f"copy_sql_{i}", data=h["sql"])
                     st.toast("📋 Copied to clipboard!")
             with cols[2]:
                 if h not in st.session_state.favorites:
