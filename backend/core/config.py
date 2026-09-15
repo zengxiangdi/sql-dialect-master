@@ -430,7 +430,8 @@ COMPATIBILITY_NOTES: Dict[tuple, List[str]] = {
     ("postgres", "mysql"): [
         "STRING_AGG → GROUP_CONCAT transformation",
         "ARRAY types → JSON transformation",
-        "SERIAL → AUTO_INCREMENT"
+        "SERIAL → AUTO_INCREMENT",
+        "CONCAT NULL semantics differ: PostgreSQL ignores NULL args (returns non-NULL), MySQL propagates NULL (returns NULL if any arg is NULL)"
     ],
     ("postgres", "oracle"): [
         "ARRAY_AGG → LISTAGG",
