@@ -2,20 +2,19 @@
 """Frontend viewmodel tests."""
 from __future__ import annotations
 
-import pytest
-
-from backend.core.semantic_diff import SemanticDiff, StructuredSemanticDifference, diff_sql_ast
 from backend.core.nl2sql_legacy import NL2SQLResult
+from backend.core.semantic_diff import (
+    SemanticDiff,
+    diff_sql_ast,
+)
 from frontend.core.viewmodels import (
-    ConversionViewModel,
     BatchConversionViewModel,
-    BatchResultItem,
-    NL2SQLViewModel,
-    LineageViewModel,
+    ConversionViewModel,
     LineageTable,
-    LineageOutputColumn,
-    sanitize_mermaid_label,
+    LineageViewModel,
+    NL2SQLViewModel,
     sanitize_mermaid_id,
+    sanitize_mermaid_label,
 )
 
 

@@ -196,6 +196,124 @@ class NL2SQLViewModel:
         )
 
 
+# ── Semantic Diff ViewModel ────────────────────────────────────────────
+
+FindingSeverity = Literal["error", "warning"]
+
+
+@dataclass
+class SemanticFindingViewModel:
+    """Presentation model for one structured semantic difference finding."""
+
+    index: int
+    category: str
+    severity: FindingSeverity
+    source_fragment: str
+    target_fragment: str
+    explanation: str
+    confidence: float
+    evidence: str | None
+
+    @classmethod
+    def from_backend(cls, index: int, diff: StructuredSemanticDifference) -> SemanticFindingViewModel:
+        return cls(
+            index=index,
+            category=diff.category,
+            severity=diff.severity,  # type: ignore[arg-type]
+            source_fragment=diff.source_fragment or "",
+            target_fragment=diff.target_fragment or "",
+            explanation=diff.explanation or "",
+            confidence=diff.confidence,
+            evidence=diff.evidence,
+        )
+
+    @property
+    def severity_label(self) -> str:
+        return "HIGH" if self.severity == "error" else "MEDIUM"
+
+    @property
+    def category_label(self) -> str:
+        return self.category.replace("_", " ").title()
+
+
+SemanticClassification = Literal[
+    "equivalent",
+    "structurally_equivalent",
+    "potentially_different",
+    "definitely_different",
+    "unknown",
+    "parse_error",
+]
+
+
+@dataclass
+class SemanticDiffViewModel:
+    """Presentation model for a full semantic diff comparison."""
+
+    classification: SemanticClassification
+    classification_label: str
+    overall_status: StatusKind
+    confidence: float
+    source_sql: str
+    target_sql: str
+    source_dialect: str
+    target_dialect: str
+    parse_error: str | None
+    differences: list[str]
+    findings: list[SemanticFindingViewModel]
+    evidence: str | None
+
+    @classmethod
+    def from_backend(
+        cls,
+        source_sql: str,
+        target_sql: str,
+        source_dialect: str,
+        target_dialect: str,
+        diff: SemanticDiff,
+    ) -> SemanticDiffViewModel:
+        from frontend.core.design_tokens import (
+            SEMANTIC_STATUS_COLOR,
+            SEMANTIC_STATUS_LABELS,
+        )
+
+        label = SEMANTIC_STATUS_LABELS.get(diff.semantic_classification, diff.semantic_classification)
+        color_key = SEMANTIC_STATUS_COLOR.get(diff.semantic_classification, "neutral")
+        status: StatusKind = color_key  # type: ignore[assignment]
+
+        findings = [
+            SemanticFindingViewModel.from_backend(i, sd)
+            for i, sd in enumerate(diff.structured_differences)
+        ]
+
+        return cls(
+            classification=diff.semantic_classification,  # type: ignore[arg-type]
+            classification_label=label,
+            overall_status=status,
+            confidence=diff.confidence,
+            source_sql=source_sql,
+            target_sql=target_sql,
+            source_dialect=source_dialect,
+            target_dialect=target_dialect,
+            parse_error=diff.parse_error,
+            differences=list(diff.differences),
+            findings=findings,
+            evidence=diff.evidence,
+        )
+
+    @property
+    def finding_count(self) -> int:
+        return len(self.findings)
+
+    @property
+    def error_count(self) -> int:
+        return sum(1 for f in self.findings if f.severity == "error")
+
+    @property
+    def warning_count(self) -> int:
+        return sum(1 for f in self.findings if f.severity == "warning")
+
+
 # ── Lineage ViewModel ──────────────────────────────────────────────────
 
 @dataclass

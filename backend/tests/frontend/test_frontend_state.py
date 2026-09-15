@@ -7,13 +7,8 @@ import pytest
 from frontend.core.state import (
     AppState,
     ConversionState,
-    NL2SQLState,
-    LineageState,
-    ExplainState,
-    FunctionsState,
-    TypesState,
-    SettingsState,
     HistoryEntry,
+    NL2SQLState,
 )
 
 

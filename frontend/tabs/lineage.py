@@ -6,7 +6,7 @@ Handles SQL Lineage visualization using Mermaid diagrams.
 import sqlglot
 import streamlit as st
 
-from frontend.app_context import DIALECTS, get_dialect_label, _esc
+from frontend.app_context import DIALECTS, _esc, get_dialect_label
 
 
 def render_lineage_tab(current_theme):

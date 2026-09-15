@@ -7,7 +7,8 @@ Displays the Data Type Mapping Matrix, allowing users to:
 - View detailed type support across all dialects
 """
 import streamlit as st
-from frontend.app_context import DIALECTS, DIALECT_INFO, get_dialect_label, _esc
+
+from frontend.app_context import DIALECT_INFO, DIALECTS, _esc, get_dialect_label
 
 
 def render_types_tab(types_data, current_theme):

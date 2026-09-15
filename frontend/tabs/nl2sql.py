@@ -9,6 +9,7 @@ Handles Natural Language to SQL generation, including:
 - Confidence scoring
 """
 import streamlit as st
+
 from frontend.app_context import DIALECTS, get_dialect_label
 
 
@@ -118,6 +119,6 @@ def render_nl2sql_tab():
                         st.warning(result.explanation)
                         
             except Exception as e:
-                st.error(f"Error generating SQL: {str(e)}")
+                st.error(f"Error generating SQL: {e!s}")
                 import traceback
                 st.code(traceback.format_exc())

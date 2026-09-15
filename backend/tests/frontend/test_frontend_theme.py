@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 
 from frontend.core.design_tokens import DARK, LIGHT, THEMES, ColorTokens
-from frontend.core.themes import get_theme, list_themes, validate_theme_json
 from frontend.core.styles import generate_css
+from frontend.core.themes import get_theme, list_themes, validate_theme_json
 
 
 class TestDesignTokens:

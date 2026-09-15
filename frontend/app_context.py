@@ -8,13 +8,14 @@ All SQL conversion goes through the canonical SQLTranspiler to ensure
 consistent security validation, stacked-statement detection, and
 post-processing behavior.
 """
-import streamlit as st
 import json
 import logging
 from pathlib import Path
-from typing import Dict, Any, List, Tuple
+from typing import Any
 
-from backend.core.config import SUPPORTED_DIALECTS, get_dialect_ui_info, settings
+import streamlit as st
+
+from backend.core.config import SUPPORTED_DIALECTS, get_dialect_ui_info
 from backend.core.transpiler import SQLTranspiler
 
 # Singleton transpiler instance for performance and consistency
@@ -28,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 
 @st.cache_data
-def load_data() -> Tuple[dict, dict]:
+def load_data() -> tuple[dict, dict]:
     """Load static data (types, functions) with caching."""
     base = Path(__file__).parent.parent / "backend" / "core"
     types_path = base / "type_mapping.json"
@@ -44,7 +45,7 @@ def load_data() -> Tuple[dict, dict]:
     return types, funcs
 
 
-def post_process(sql: str, src: str, tgt: str) -> Tuple[str, List[str]]:
+def post_process(sql: str, src: str, tgt: str) -> tuple[str, list[str]]:
     """Apply post-processing rules using the singleton PostProcessor.
 
     Delegates to backend.core.post_processor.PostProcessor.
@@ -72,7 +73,7 @@ def post_process(sql: str, src: str, tgt: str) -> Tuple[str, List[str]]:
     return processed_sql, formatted_notes
 
 
-def convert(sql: str, src: str, tgt: str) -> Dict[str, Any]:
+def convert(sql: str, src: str, tgt: str) -> dict[str, Any]:
     """Convert SQL from source to target dialect via the canonical SQLTranspiler.
 
     Args:
@@ -97,8 +98,8 @@ def convert(sql: str, src: str, tgt: str) -> Dict[str, Any]:
 
 
 def batch_convert(
-    statements: List[str], src: str, tgt: str, pretty: bool = True
-) -> List[Dict[str, Any]]:
+    statements: list[str], src: str, tgt: str, pretty: bool = True
+) -> list[dict[str, Any]]:
     """Batch convert multiple SQL statements using the canonical SQLTranspiler.
 
     Uses the unified batch API to properly handle semicolons in strings,

@@ -5,8 +5,7 @@ from __future__ import annotations
 import pytest
 
 from frontend.core.escaping import esc
-from frontend.core.viewmodels import sanitize_mermaid_label, sanitize_mermaid_id
-
+from frontend.core.viewmodels import sanitize_mermaid_id, sanitize_mermaid_label
 
 # ── HTML escaping tests ────────────────────────────────────────────────
 
@@ -109,8 +108,9 @@ class TestCustomThemeInjection:
 
     def test_theme_json_validation_rejects_missing_keys(self) -> None:
         """Theme validation requires all required keys."""
-        from frontend.core.themes import validate_theme_json
         import json
+
+        from frontend.core.themes import validate_theme_json
 
         incomplete_theme = {"bg": "#000000"}
         with pytest.raises(ValueError, match="Missing required theme keys"):
@@ -118,8 +118,9 @@ class TestCustomThemeInjection:
 
     def test_theme_json_validation_accepts_complete(self) -> None:
         """Valid theme JSON with all keys is accepted."""
-        from frontend.core.themes import validate_theme_json
         import json
+
+        from frontend.core.themes import validate_theme_json
 
         valid_theme = {
             "bg": "#000000",

@@ -2,8 +2,6 @@
 """Frontend batch conversion tests — specifically testing the batch split bug fix."""
 from __future__ import annotations
 
-import pytest
-
 from frontend.pages.convert import _split_statements
 
 
@@ -71,7 +69,6 @@ class TestBatchWithCanonicalAPI:
     def test_batch_uses_canonical_api(self) -> None:
         """batch_convert_sql should delegate to SQLTranspiler.batch_transpile."""
         from frontend.app_context_v2 import batch_convert_sql
-        from backend.core.transpiler import SQLTranspiler
 
         # Verify the function exists and is callable
         assert callable(batch_convert_sql)

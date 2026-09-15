@@ -3,12 +3,11 @@
 
 Provides helper functions to render common UI elements consistently.
 """
-from typing import Dict
 
 from backend.core.config import DIALECT_METADATA
 
 
-def render_dialect_chip(dialect: str, theme: Dict[str, str]) -> str:
+def render_dialect_chip(dialect: str, theme: dict[str, str]) -> str:
     """Render a styled dialect chip/badge.
     
     Args:
@@ -31,8 +30,8 @@ def render_dialect_chip(dialect: str, theme: Dict[str, str]) -> str:
 
 
 def render_history_card(
-    history_item: Dict[str, str], 
-    theme: Dict[str, str],
+    history_item: dict[str, str], 
+    theme: dict[str, str],
     preview_length: int = 40
 ) -> str:
     """Render a history entry card.
@@ -71,7 +70,7 @@ def render_history_card(
     """
 
 
-def render_sql_output(sql: str, theme: Dict[str, str], label: str = "SQL") -> str:
+def render_sql_output(sql: str, theme: dict[str, str], label: str = "SQL") -> str:
     """Render styled SQL output container.
     
     Args:
@@ -89,7 +88,7 @@ def render_sql_output(sql: str, theme: Dict[str, str], label: str = "SQL") -> st
     """
 
 
-def render_main_header(theme: Dict[str, str], subtitle: str = "") -> str:
+def render_main_header(theme: dict[str, str], subtitle: str = "") -> str:
     """Render the main application header.
     
     Args:
@@ -110,7 +109,7 @@ def render_main_header(theme: Dict[str, str], subtitle: str = "") -> str:
     """
 
 
-def render_sidebar_branding(theme: Dict[str, str], version: str = "1.0.1") -> str:
+def render_sidebar_branding(theme: dict[str, str], version: str = "1.0.1") -> str:
     """Render sidebar branding section.
     
     Args:
@@ -129,7 +128,7 @@ def render_sidebar_branding(theme: Dict[str, str], version: str = "1.0.1") -> st
     """
 
 
-def render_conversion_arrow(theme: Dict[str, str]) -> str:
+def render_conversion_arrow(theme: dict[str, str]) -> str:
     """Render the conversion arrow between source and target.
     
     Args:
@@ -148,7 +147,7 @@ def render_conversion_arrow(theme: Dict[str, str]) -> str:
 def render_dialect_grid_item(
     dialect: str, 
     syntax: str, 
-    theme: Dict[str, str],
+    theme: dict[str, str],
     show_status: bool = False
 ) -> str:
     """Render a dialect item for grid display.
@@ -183,7 +182,7 @@ def render_dialect_grid_item(
 def render_lineage_result(
     tables: list, 
     output_cols: list, 
-    theme: Dict[str, str]
+    theme: dict[str, str]
 ) -> str:
     """Render SQL lineage diagram header.
     

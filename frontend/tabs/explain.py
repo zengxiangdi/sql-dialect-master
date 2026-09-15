@@ -4,9 +4,10 @@
 Displays simulated execution plans for comparing query performance
 across different database dialects.
 """
-import streamlit as st
 import sqlglot
-from frontend.app_context import DIALECTS, DIALECT_INFO, get_dialect_label, _esc
+import streamlit as st
+
+from frontend.app_context import DIALECT_INFO, DIALECTS, _esc, get_dialect_label
 
 
 def render_explain_tab(current_theme):

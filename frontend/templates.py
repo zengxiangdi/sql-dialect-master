@@ -3,13 +3,12 @@
 
 Centralizes all SQL templates, examples, and category definitions.
 """
-from typing import Dict
 
 # =============================================================================
 # SQL Templates for Quick Start
 # =============================================================================
 
-TEMPLATES: Dict[str, str] = {
+TEMPLATES: dict[str, str] = {
     "-- Select a template --": "",
     # Basic queries
     "📅 Last 7 days data": "SELECT * FROM orders WHERE created_at >= DATE_SUB(CURRENT_DATE, 7)",
@@ -70,7 +69,7 @@ TEMPLATES: Dict[str, str] = {
 # Category Emoji Mapping
 # =============================================================================
 
-CATEGORY_EMOJI: Dict[str, str] = {
+CATEGORY_EMOJI: dict[str, str] = {
     "string": "📝 String",
     "date": "📅 Date/Time",
     "math": "🔢 Math",
@@ -88,7 +87,7 @@ CATEGORY_EMOJI: Dict[str, str] = {
 # NL2SQL Examples
 # =============================================================================
 
-NL_EXAMPLES: Dict[str, str] = {
+NL_EXAMPLES: dict[str, str] = {
     "-- 选择示例 / Select Example --": "",
     "📊 统计类 / Aggregation": "统计所有用户的数量",
     "📅 时间筛选 / Date Filter": "查询最近7天的订单",
@@ -106,7 +105,7 @@ NL_EXAMPLES: Dict[str, str] = {
 # Type Categories for Type Mapping UI
 # =============================================================================
 
-TYPE_CATEGORIES: Dict[str, list] = {
+TYPE_CATEGORIES: dict[str, list] = {
     "String Types": ["STRING", "VARCHAR", "CHAR", "TEXT", "MEDIUMTEXT", "LONGTEXT"],
     "Numeric Types": ["BIGINT", "INT", "SMALLINT", "TINYINT", "DOUBLE", "FLOAT", "DECIMAL", "MONEY", "SERIAL"],
     "Boolean & Bit": ["BOOLEAN", "BIT"],

@@ -24,7 +24,6 @@ from frontend.core.viewmodels import (
     BatchConversionViewModel,
     ConversionViewModel,
 )
-from frontend.ui.diff import render_semantic_diff_view
 from frontend.ui.status import render_batch_result, render_result_panel
 
 
@@ -146,28 +145,19 @@ def render_convert_page(theme: ColorTokens) -> None:
             theme=theme,
         )
 
-        # Semantic diff button
+        # Navigate to Diff workspace
         if vm.target_sql and vm.success:
-            if st.button("Run Semantic Diff", key="run_semantic_diff", type="secondary"):
-                from backend.core.semantic_diff import diff_sql_ast
-                diff_result = diff_sql_ast(vm.source_sql, vm.target_sql, vm.source_dialect, vm.target_dialect)
-                st.session_state.convert_last_diff = diff_result
-                st.rerun()
-
-            diff_result = st.session_state.get("convert_last_diff")
-            if diff_result is not None:
-                st.markdown("---")
-                render_semantic_diff_view(
-                    source_sql=vm.source_sql,
-                    target_sql=vm.target_sql,
-                    source_dialect=vm.source_dialect,
-                    target_dialect=vm.target_dialect,
-                    semantic_classification=diff_result.semantic_classification,
-                    structured_differences=diff_result.structured_differences,
-                    differences=diff_result.differences,
-                    confidence=diff_result.confidence,
-                    theme=theme,
-                )
+            col_diff, _ = st.columns([1, 3])
+            with col_diff:
+                if st.button("Semantic Diff →", key="run_semantic_diff", type="secondary", use_container_width=True):
+                    st.session_state.sdm_pending_diff = {
+                        "source": vm.source_sql,
+                        "src_dialect": vm.source_dialect,
+                        "target": vm.target_sql,
+                        "tgt_dialect": vm.target_dialect,
+                    }
+                    st.query_params["page"] = "diff"
+                    st.rerun()
 
     # ── Batch conversion ───────────────────────────────────────────
     with st.expander("Batch Conversion", expanded=False):

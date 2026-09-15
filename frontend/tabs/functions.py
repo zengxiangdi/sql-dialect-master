@@ -7,7 +7,8 @@ Displays the SQL function encyclopedia, allowing users to:
 - View function descriptions and categories
 """
 import streamlit as st
-from frontend.app_context import DIALECT_INFO, _esc
+
+from frontend.app_context import DIALECT_INFO
 
 
 def render_functions_tab(funcs_data, current_theme):

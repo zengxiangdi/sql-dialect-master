@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from backend.core.transpiler import SQLTranspiler, TranspileResult
-from frontend.app_context_v2 import convert_sql, batch_convert_sql, format_sql_local
-from frontend.core.viewmodels import ConversionViewModel, BatchConversionViewModel
+from backend.core.transpiler import SQLTranspiler
+from frontend.app_context_v2 import format_sql_local
+from frontend.core.viewmodels import BatchConversionViewModel, ConversionViewModel
 
 
 @pytest.fixture

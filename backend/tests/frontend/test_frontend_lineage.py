@@ -4,10 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-import sqlglot
-
 from frontend.pages.lineage import _build_lineage, _build_mermaid
-from frontend.core.viewmodels import LineageViewModel
 
 
 class TestLineageBuilding:

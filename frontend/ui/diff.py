@@ -1,165 +1,275 @@
-"""Semantic diff display component for SQL Dialect Master v2."""
-from __future__ import annotations
+"""Semantic Diff UI components for SQL Dialect Master v2.
 
-import difflib
+Renders the finding list, finding detail/inspector, and text diff view.
+All data comes from SemanticDiffViewModel — no direct backend access.
+"""
+from __future__ import annotations
 
 import streamlit as st
 
-from frontend.core.design_tokens import SEMANTIC_STATUS_COLOR, ColorTokens
+from frontend.core.design_tokens import ColorTokens
 from frontend.core.escaping import esc
+from frontend.core.viewmodels import (
+    SemanticDiffViewModel,
+    SemanticFindingViewModel,
+)
 
 
-def render_semantic_diff_view(
+def render_semantic_diff_workspace(
+    vm: SemanticDiffViewModel,
     source_sql: str,
     target_sql: str,
-    source_dialect: str,
-    target_dialect: str,
-    semantic_classification: str,
-    structured_differences: list,
-    differences: list[str],
-    confidence: float,
-    theme: ColorTokens | None = None,
+    theme: ColorTokens,
+    selected_finding_index: int | None = None,
 ) -> None:
-    """Render the semantic diff workspace.
+    """Render the full Semantic Diff workspace with finding list and inspector.
 
     Args:
-        source_sql: Original SQL
-        target_sql: Converted SQL
-        source_dialect: Source dialect
-        target_dialect: Target dialect
-        semantic_classification: One of the semantic classification strings
-        structured_differences: List of StructuredSemanticDifference objects
-        differences: List of diff detail strings
-        confidence: Confidence score 0-1
+        vm: SemanticDiffViewModel from backend
+        source_sql: Raw source SQL for display
+        target_sql: Raw target SQL for display
         theme: Current theme tokens
+        selected_finding_index: Index of selected finding (for inspector)
     """
-    if theme is None:
-        from frontend.core.design_tokens import DARK
-        theme = DARK
+    _render_overall_status(vm, theme)
 
-    color_key = SEMANTIC_STATUS_COLOR.get(semantic_classification, "neutral")
-    color = getattr(theme, color_key, theme.text_muted)
+    if vm.parse_error:
+        st.error(f"Parse error: {esc(vm.parse_error)}")
+        return
 
-    # Classification header
+    col_findings, col_inspector = st.columns([2, 1])
+
+    with col_findings:
+        _render_finding_list(vm, selected_finding_index, theme)
+
+    with col_inspector:
+        if selected_finding_index is not None and 0 <= selected_finding_index < len(vm.findings):
+            _render_finding_inspector(vm.findings[selected_finding_index], theme)
+        else:
+            _render_inspector_placeholder(theme)
+
+    # Tabs for Semantic vs Text diff
+    st.markdown("---")
+    _render_diff_tabs(vm, source_sql, target_sql, theme)
+
+
+def _render_overall_status(vm: SemanticDiffViewModel, theme: ColorTokens) -> None:
+    """Render the overall semantic classification banner."""
+    severity_colors = {
+        "valid": theme.success,
+        "warning": theme.warning,
+        "error": theme.danger,
+        "info": theme.info,
+        "neutral": theme.text_muted,
+    }
+    color = severity_colors.get(vm.overall_status, theme.text_muted)
+
+    # Finding summary
+    summary_parts = []
+    if vm.error_count:
+        summary_parts.append(f"{vm.error_count} error{'s' if vm.error_count > 1 else ''}")
+    if vm.warning_count:
+        summary_parts.append(f"{vm.warning_count} warning{'s' if vm.warning_count > 1 else ''}")
+    summary = " · ".join(summary_parts) if summary_parts else "No findings"
+
     st.markdown(
         f"""
-        <div style="display:flex; align-items:center; gap:12px; margin-bottom:20px;">
-            <div style="font-size:20px; font-weight:700; color:{color};">
-                {esc(semantic_classification.replace('_', ' ').title())}
+        <div style="display:flex; align-items:center; justify-content:space-between;
+                    padding:12px 16px; background:{color}12; border:1px solid {color}30;
+                    border-radius:6px; margin-bottom:16px;">
+            <div>
+                <div style="font-size:11px; font-weight:600; letter-spacing:0.06em;
+                            text-transform:uppercase; color:{color};">
+                    {esc(vm.classification_label)}
+                </div>
+                <div style="font-size:12px; color:{theme.text_secondary}; margin-top:2px;">
+                    {esc(vm.source_dialect)} → {esc(vm.target_dialect)} · {summary}
+                </div>
             </div>
-            <div style="font-size:12px; color:{theme.text_muted}; font-family:monospace;">
-                confidence: {confidence:.0%}
+            <div style="text-align:right;">
+                <div style="font-size:11px; color:{theme.text_muted};">confidence</div>
+                <div style="font-size:18px; font-weight:700; color:{color}; font-family:monospace;">
+                    {vm.confidence:.0%}
+                </div>
             </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    # Structured findings
-    if structured_differences:
-        st.markdown(
-            '<div style="font-size:11px; font-weight:600; letter-spacing:0.06em; '
-            'text-transform:uppercase; color:' + theme.text_muted + '; margin-bottom:8px;">'
-            'Findings</div>',
-            unsafe_allow_html=True,
-        )
-        for diff in structured_differences:
-            _render_finding(diff, theme)
 
-    # Text diff fallback
-    if differences:
+def _render_finding_list(vm: SemanticDiffViewModel, selected_idx: int | None, theme: ColorTokens) -> None:
+    """Render the findings list."""
+    st.markdown(
+        f'<div style="font-size:11px; font-weight:600; letter-spacing:0.06em; '
+        f'text-transform:uppercase; color:{theme.text_muted}; margin-bottom:8px;">'
+        f'Findings ({vm.finding_count})</div>',
+        unsafe_allow_html=True,
+    )
+
+    if not vm.findings:
+        st.info("No semantic differences detected.")
+        return
+
+    for i, finding in enumerate(vm.findings):
+        is_selected = i == selected_idx
+        bg = theme.selected_bg if is_selected else theme.surface
+        border_color = theme.accent if is_selected else theme.border
+        icon = "●" if finding.severity == "error" else "○"
+        icon_color = theme.danger if finding.severity == "error" else theme.warning
+
         st.markdown(
-            '<div style="font-size:11px; font-weight:600; letter-spacing:0.06em; '
-            'text-transform:uppercase; color:' + theme.text_muted + '; margin:16px 0 8px;">'
-            'Canonical SQL Diff</div>',
+            f"""
+            <div class="sdm-finding-item" data-index="{i}"
+                 style="padding:10px 12px; margin-bottom:4px; background:{bg};
+                        border:1px solid {border_color}; border-radius:6px;
+                        cursor:pointer; transition:all 0.15s;"
+                 onmouseover="this.style.background='{theme.hover}'"
+                 onmouseout="this.style.background='{bg}'">
+                <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
+                    <span style="color:{icon_color}; font-size:10px;">{icon}</span>
+                    <span style="font-size:12px; font-weight:600; color:{theme.text_primary};">
+                        {esc(finding.category_label)}
+                    </span>
+                    <span style="margin-left:auto; font-size:10px; font-weight:600;
+                                 padding:2px 6px; border-radius:3px;
+                                 background:{theme.danger}15; color:{theme.danger};">
+                        {esc(finding.severity_label)}
+                    </span>
+                </div>
+                <div style="font-size:11px; color:{theme.text_secondary}; line-height:1.4;">
+                    {esc(finding.explanation[:100])}
+                    {'...' if len(finding.explanation) > 100 else ''}
+                </div>
+            </div>
+            """,
             unsafe_allow_html=True,
         )
-        diff_lines = [line for diff in differences for line in diff.splitlines() if line.startswith(("+", "-", " "))]
+
+        if st.button("Select", key=f"find_{i}", help=f"View {finding.category} finding details"):
+            st.session_state.sdm_selected_finding = i
+            st.rerun()
+
+
+def _render_finding_inspector(finding: SemanticFindingViewModel, theme: ColorTokens) -> None:
+    """Render the detail inspector for a selected finding."""
+    st.markdown(
+        f'<div style="font-size:11px; font-weight:600; letter-spacing:0.06em; '
+        f'text-transform:uppercase; color:{theme.text_muted}; margin-bottom:12px;">'
+        f'Finding #{finding.index + 1} · {esc(finding.category_label)}</div>',
+        unsafe_allow_html=True,
+    )
+
+    # Severity badge
+    sev_color = theme.danger if finding.severity == "error" else theme.warning
+    st.markdown(
+        f'<div style="display:inline-block; padding:3px 8px; border-radius:3px; '
+        f'background:{sev_color}15; color:{sev_color}; font-size:11px; font-weight:600; '
+        f'letter-spacing:0.05em; margin-bottom:12px;">'
+        f'{esc(finding.severity_label)}</div>',
+        unsafe_allow_html=True,
+    )
+
+    # Explanation
+    st.markdown(
+        '<div style="font-size:11px; font-weight:600; letter-spacing:0.06em; '
+        'text-transform:uppercase; color:' + theme.text_muted + '; margin:12px 0 6px;">'
+        'Explanation</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(f'<div style="font-size:12px; color:{theme.text_primary}; line-height:1.6;">'
+                f'{esc(finding.explanation)}</div>', unsafe_allow_html=True)
+
+    # Source fragment
+    st.markdown(
+        '<div style="font-size:11px; font-weight:600; letter-spacing:0.06em; '
+        'text-transform:uppercase; color:' + theme.text_muted + '; margin:12px 0 6px;">'
+        'Source Fragment</div>',
+        unsafe_allow_html=True,
+    )
+    if finding.source_fragment:
+        st.code(finding.source_fragment, language="sql")
+    else:
+        st.caption("Not available")
+
+    # Target fragment
+    st.markdown(
+        '<div style="font-size:11px; font-weight:600; letter-spacing:0.06em; '
+        'text-transform:uppercase; color:' + theme.text_muted + '; margin:12px 0 6px;">'
+        'Target Fragment</div>',
+        unsafe_allow_html=True,
+    )
+    if finding.target_fragment:
+        st.code(finding.target_fragment, language="sql")
+    else:
+        st.caption("Not available")
+
+    # Evidence
+    if finding.evidence:
+        st.markdown(
+            '<div style="font-size:11px; font-weight:600; letter-spacing:0.06em; '
+            'text-transform:uppercase; color:' + theme.text_muted + '; margin:12px 0 6px;">'
+            'Evidence</div>',
+            unsafe_allow_html=True,
+        )
+        st.caption(f"`{esc(finding.evidence)}`")
+
+
+def _render_inspector_placeholder(theme: ColorTokens) -> None:
+    """Render the empty inspector state."""
+    st.markdown(
+        f"""
+        <div style="padding:24px; border:1px dashed {theme.border}; border-radius:6px;
+                    text-align:center; color:{theme.text_muted};">
+            <div style="font-size:12px;">Select a finding to inspect details</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_diff_tabs(
+    vm: SemanticDiffViewModel,
+    source_sql: str,
+    target_sql: str,
+    theme: ColorTokens,
+) -> None:
+    """Render Semantic / Text diff tab switcher."""
+    tab_sem, tab_txt = st.tabs(["Semantic", "Text"])
+
+    with tab_sem:
+        # Already rendered above — show source/target side by side
+        col_s, col_t = st.columns(2)
+        with col_s:
+            st.markdown(
+                '<div style="font-size:11px; font-weight:600; letter-spacing:0.06em; '
+                'text-transform:uppercase; color:#' + theme.text_muted[1:] + '; margin-bottom:6px;">'
+                'Source</div>',
+                unsafe_allow_html=True,
+            )
+            st.code(source_sql, language="sql")
+        with col_t:
+            st.markdown(
+                '<div style="font-size:11px; font-weight:600; letter-spacing:0.06em; '
+                'text-transform:uppercase; color:#' + theme.text_muted[1:] + '; margin-bottom:6px;">'
+                'Target</div>',
+                unsafe_allow_html=True,
+            )
+            st.code(target_sql, language="sql")
+
+    with tab_txt:
+        import difflib
+        diff_lines = list(
+            difflib.unified_diff(
+                source_sql.splitlines(),
+                target_sql.splitlines(),
+                fromfile=f"Source ({esc(vm.source_dialect)})",
+                tofile=f"Target ({esc(vm.target_dialect)})",
+                lineterm="",
+            )
+        )
         if diff_lines:
             diff_text = "\n".join(diff_lines)
             st.code(diff_text, language="diff")
-
-
-def _render_finding(diff, theme: ColorTokens) -> None:
-    """Render a single structured semantic difference."""
-    severity_colors = {
-        "error": theme.danger,
-        "warning": theme.warning,
-    }
-    sev = getattr(diff, 'severity', 'warning')
-    sev_color = severity_colors.get(sev, theme.warning)
-    sev_label = sev.upper()
-
-    st.markdown(
-        f"""
-        <div style="border:1px solid {sev_color}40; border-radius:6px; padding:12px;
-                    margin-bottom:8px; background:{sev_color}08;">
-            <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
-                <span style="font-size:11px; font-weight:700; color:{sev_color};
-                             text-transform:uppercase; letter-spacing:0.05em;">
-                    {esc(sev_label)}
-                </span>
-                <span style="font-size:11px; font-weight:600; letter-spacing:0.06em;
-                             text-transform:uppercase; color:{theme.text_muted};">
-                    {esc(getattr(diff, 'category', 'unknown'))}
-                </span>
-            </div>
-            <div style="font-size:12px; color:{theme.text_primary}; margin-bottom:8px;">
-                {esc(getattr(diff, 'explanation', ''))}
-            </div>
-            <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
-                <div>
-                    <div style="font-size:10px; font-weight:600; text-transform:uppercase;
-                                letter-spacing:0.06em; color:{theme.text_muted}; margin-bottom:4px;">
-                        Source
-                    </div>
-                    <code style="font-size:11px; color:{theme.text_secondary};
-                                 font-family:monospace; background:{theme.input_bg};
-                                 padding:4px 6px; border-radius:3px; display:block;
-                                 white-space:pre-wrap; word-break:break-all;">
-                        {esc(getattr(diff, 'source_fragment', ''))}
-                    </code>
-                </div>
-                <div>
-                    <div style="font-size:10px; font-weight:600; text-transform:uppercase;
-                                letter-spacing:0.06em; color:{theme.text_muted}; margin-bottom:4px;">
-                        Target
-                    </div>
-                    <code style="font-size:11px; color:{theme.text_secondary};
-                                 font-family:monospace; background:{theme.input_bg};
-                                 padding:4px 6px; border-radius:3px; display:block;
-                                 white-space:pre-wrap; word-break:break-all;">
-                        {esc(getattr(diff, 'target_fragment', ''))}
-                    </code>
-                </div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def render_text_diff(
-    source_sql: str,
-    target_sql: str,
-    source_label: str,
-    target_label: str,
-    theme: ColorTokens | None = None,
-) -> None:
-    """Render a simple text-level diff between two SQL strings."""
-    if theme is None:
-        from frontend.core.design_tokens import DARK
-        theme = DARK
-
-    diff = difflib.unified_diff(
-        source_sql.splitlines(),
-        target_sql.splitlines(),
-        fromfile=f"Source ({esc(source_label)})",
-        tofile=f"Target ({esc(target_label)})",
-        lineterm="",
-    )
-    diff_text = "\n".join(diff)
-    if diff_text:
-        st.code(diff_text, language="diff")
-    else:
-        st.success("No differences found — SQL is textually identical.")
+        else:
+            st.success("No textual differences found.")

@@ -8,13 +8,12 @@ Provides centralized theme management with:
 - Import/Export functionality for custom themes
 """
 import json
-from typing import Dict
 
 # =============================================================================
 # Theme Definitions
 # =============================================================================
 
-THEMES: Dict[str, Dict[str, str]] = {
+THEMES: dict[str, dict[str, str]] = {
     "🌙 Dark": {
         "bg": "#0e1117", 
         "fg": "#fafafa", 
@@ -80,7 +79,7 @@ THEMES: Dict[str, Dict[str, str]] = {
 DEFAULT_THEME = "🌊 Ocean"
 
 
-def get_theme(theme_name: str) -> Dict[str, str]:
+def get_theme(theme_name: str) -> dict[str, str]:
     """Get theme by name with fallback to default.
     
     Args:
@@ -92,7 +91,7 @@ def get_theme(theme_name: str) -> Dict[str, str]:
     return THEMES.get(theme_name, THEMES[DEFAULT_THEME])
 
 
-def export_theme_to_json(theme: Dict[str, str]) -> str:
+def export_theme_to_json(theme: dict[str, str]) -> str:
     """Export theme to JSON string.
     
     Args:
@@ -104,7 +103,7 @@ def export_theme_to_json(theme: Dict[str, str]) -> str:
     return json.dumps(theme, indent=2)
 
 
-def import_theme_from_json(json_str: str) -> Dict[str, str]:
+def import_theme_from_json(json_str: str) -> dict[str, str]:
     """Import theme from JSON string.
     
     Args:
@@ -125,10 +124,10 @@ def import_theme_from_json(json_str: str) -> Dict[str, str]:
             raise ValueError(f"Missing required theme keys: {', '.join(missing)}")
         return theme
     except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid JSON: {str(e)}")
+        raise ValueError(f"Invalid JSON: {e!s}")
 
 
-def generate_theme_css(theme: Dict[str, str]) -> str:
+def generate_theme_css(theme: dict[str, str]) -> str:
     """Generate complete CSS stylesheet for a theme.
     
     Args:
