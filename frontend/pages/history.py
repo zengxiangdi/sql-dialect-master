@@ -32,6 +32,12 @@ def render_history_page(theme: ColorTokens) -> None:
         st.info("No conversion history yet.")
         return
 
+    # Ensure each entry has a stable identity key
+    for entry in history:
+        if "identity" not in entry:
+            import uuid
+            entry["identity"] = str(uuid.uuid4())[:8]
+
     # Search and filter controls
     col_search, col_filter = st.columns([2, 1])
     with col_search:
@@ -52,11 +58,11 @@ def render_history_page(theme: ColorTokens) -> None:
     st.caption(f"{len(filtered)} entries")
 
     # Render entries
-    for i, entry in enumerate(filtered):
-        _render_history_entry(entry, i, theme)
+    for entry in filtered:
+        _render_history_entry(entry, theme)
 
 
-def _render_history_entry(entry: dict, idx: int, theme: ColorTokens) -> None:
+def _render_history_entry(entry: dict, theme: ColorTokens) -> None:
     """Render a single history entry."""
     src = esc(entry.get("src", "unknown"))
     tgt = esc(entry.get("tgt", "unknown"))
@@ -65,6 +71,7 @@ def _render_history_entry(entry: dict, idx: int, theme: ColorTokens) -> None:
         sql_preview += "..."
     status = entry.get("status", "neutral")
     created_at = entry.get("created_at", "")
+    identity = entry.get("identity", "")
 
     # Status badge color
     if status == "valid":
@@ -91,7 +98,7 @@ def _render_history_entry(entry: dict, idx: int, theme: ColorTokens) -> None:
 
         col_load, col_copy, col_fav, col_del = st.columns([1, 1, 1, 1])
         with col_load:
-            if st.button("Load", key=f"hist_load_{idx}"):
+            if st.button("Load", key=f"hist_load_{identity}"):
                 from frontend.core.navigation import create_navigation_intent
                 intent = create_navigation_intent(
                     target_page="convert",
@@ -103,21 +110,20 @@ def _render_history_entry(entry: dict, idx: int, theme: ColorTokens) -> None:
                 st.session_state.sdm_navigation_intent = intent
                 st.rerun()
         with col_copy:
-            if st.button("Copy", key=f"hist_copy_{idx}"):
+            if st.button("Copy", key=f"hist_copy_{identity}"):
                 st.copy_button("Copy SQL", data=entry.get("sql", ""))
         with col_fav:
-            favs: list[int] = st.session_state.get("sdm_favorites", [])
-            if idx not in favs:
-                if st.button("☆", key=f"hist_fav_{idx}"):
-                    st.session_state.sdm_favorites.append(idx)
+            favs: list[str] = st.session_state.get("sdm_favorites", [])
+            if identity not in favs:
+                if st.button("☆", key=f"hist_fav_{identity}"):
+                    st.session_state.sdm_favorites.append(identity)
                     st.rerun()
             else:
-                st.button("★", key=f"hist_fav_{idx}", disabled=True)
+                st.button("★", key=f"hist_fav_{identity}", disabled=True)
         with col_del:
-            if st.button("Del", key=f"hist_del_{idx}"):
+            if st.button("Del", key=f"hist_del_{identity}"):
                 history = st.session_state.sdm_history
-                history.pop(idx)
-                st.session_state.sdm_history = history
+                st.session_state.sdm_history = [h for h in history if h.get("identity") != identity]
                 st.rerun()
 
 

@@ -15,6 +15,7 @@ from frontend.app_context_v2 import (
     batch_convert_sql,
     convert_sql,
     format_sql_local,
+    split_sql_statements,
 )
 from frontend.core.design_tokens import (
     ColorTokens,
@@ -54,8 +55,7 @@ def render_convert_page(theme: ColorTokens) -> None:
     col_swap, _ = st.columns([1, 10])
     with col_swap:
         if st.button("⇄", key="swap_dialects", help="Swap source and target dialects"):
-            st.session_state.convert_src = st.session_state.convert_tgt
-            st.session_state.convert_tgt = st.session_state.convert_src
+            st.session_state.convert_src, st.session_state.convert_tgt = st.session_state.convert_tgt, st.session_state.convert_src
             st.rerun()
 
     # ── SQL editors (two-panel) ────────────────────────────────────
@@ -183,7 +183,7 @@ def _render_toolbar(theme: ColorTokens) -> None:
             </div>
             <div style="display:flex; gap:8px;">
                 <span style="font-size:11px; color:{theme.text_muted}; font-family:monospace;">
-                    Ctrl+Enter to convert
+                    Click Convert to run
                 </span>
             </div>
         </div>
@@ -222,7 +222,7 @@ def _render_batch_section(src_dialect: str, tgt_dialect: str, theme: ColorTokens
             else:
                 with st.spinner("Batch converting..."):
                     # Use canonical backend for proper semicolon splitting
-                    statements = _split_statements(batch_sql)
+                    statements = split_sql_statements(batch_sql)
                     results = batch_convert_sql(statements, batch_src, batch_tgt)
                     bvm = BatchConversionViewModel.from_results(statements, results)
                     st.session_state.batch_last_vm = bvm
@@ -252,27 +252,14 @@ def _render_batch_section(src_dialect: str, tgt_dialect: str, theme: ColorTokens
         )
 
 
-def _split_statements(sql: str) -> list[str]:
-    """Split SQL into individual statements using canonical backend logic.
-
-    This properly handles semicolons inside string literals, comments,
-    and dollar-quoted strings by delegating to the transpiler's parsing.
-    """
-    import sqlglot
-    try:
-        statements = sqlglot.parse(sql, dialect="postgres")
-        return [s.sql(pretty=False) for s in statements if s is not None]
-    except Exception:  # noqa: BLE001 — fallback for malformed SQL
-        # Fallback: split on semicolons not inside strings/comments
-        return [s.strip() for s in sql.split(";") if s.strip()]
-
-
 def _add_to_history(vm: ConversionViewModel, theme: ColorTokens) -> None:
     """Add a successful conversion to session history."""
     if not vm.success:
         return
     from datetime import UTC, datetime
+    import uuid
     entry = {
+        "identity": uuid.uuid4().hex[:8],
         "sql": vm.source_sql,
         "src": vm.source_dialect,
         "tgt": vm.target_dialect,
@@ -283,3 +270,5 @@ def _add_to_history(vm: ConversionViewModel, theme: ColorTokens) -> None:
     if "sdm_history" not in st.session_state:
         st.session_state.sdm_history = []
     st.session_state.sdm_history.append(entry)
+    if "sdm_favorites" not in st.session_state:
+        st.session_state.sdm_favorites = []

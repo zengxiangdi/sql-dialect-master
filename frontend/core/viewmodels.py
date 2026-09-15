@@ -40,7 +40,6 @@ class ConversionViewModel:
     compatibility_notes: list[str] = field(default_factory=list)
     error_message: str | None = None
     semantic_findings: list[StructuredSemanticDifference] = field(default_factory=list)
-    raw_backend_result: Any | None = None
 
     @classmethod
     def from_transpile_result(cls, result: Any) -> ConversionViewModel:
@@ -73,7 +72,6 @@ class ConversionViewModel:
             compatibility_notes=list(result.compatibility_notes),
             error_message=error_message,
             semantic_findings=findings,
-            raw_backend_result=result,
         )
 
     @classmethod
@@ -113,7 +111,6 @@ class ConversionViewModel:
             compatibility_notes=base.compatibility_notes,
             error_message=base.error_message,
             semantic_findings=list(diff.structured_differences),
-            raw_backend_result=base.raw_backend_result,
         )
         return enriched
 
@@ -242,13 +239,18 @@ class NL2SQLViewModel:
         )
 
     def clean_sql(self) -> str:
-        """Return SQL without any comment prefix that backend may add."""
+        """Return SQL without the backend's specific comment prefix.
+
+        The backend prefixes generated SQL with '-- Generated for DIALECT\\n'.
+        We only strip that exact prefix to avoid removing legitimate comments.
+        """
         if not self.sql:
             return ""
-        # Backend sometimes prefixes with "-- Generated for DIALECT\n"
         lines = self.sql.splitlines()
-        sql_lines = [l for l in lines if not l.startswith("--")]
-        return "\n".join(sql_lines).strip() or self.sql
+        # Remove only the backend-generated header comment
+        if lines and lines[0].startswith("-- Generated for "):
+            lines = lines[1:]
+        return "\n".join(lines).strip() or self.sql
 
 
 # ── Semantic Diff ViewModel ────────────────────────────────────────────
