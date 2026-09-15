@@ -4,13 +4,12 @@
 Provides validation functions for SQL, dialects, and other inputs.
 """
 import re
-from typing import Tuple, List
 
 from backend.core.config import SUPPORTED_DIALECTS, settings
 from backend.core.exceptions import (
-    ValidationError,
+    SecurityViolationError,
     UnsupportedDialectError,
-    SecurityViolationError
+    ValidationError,
 )
 
 
@@ -70,7 +69,7 @@ def validate_sql(sql: str, max_length: int = None) -> str:
     return sql
 
 
-def validate_sql_security(sql: str, block_dangerous: bool = None) -> Tuple[bool, List[str]]:
+def validate_sql_security(sql: str, block_dangerous: bool = None) -> tuple[bool, list[str]]:
     """Validate SQL for security issues.
     
     Args:
@@ -236,7 +235,7 @@ def sanitize_column_name(name: str) -> str:
     return name
 
 
-def split_sql_statements(sql: str) -> List[str]:
+def split_sql_statements(sql: str) -> list[str]:
     """Split SQL text into individual statements respecting string literals and comments.
 
     This is a pure parsing utility — no semantic analysis.

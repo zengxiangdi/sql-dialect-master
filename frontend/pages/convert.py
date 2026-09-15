@@ -256,8 +256,8 @@ def _add_to_history(vm: ConversionViewModel, theme: ColorTokens) -> None:
     """Add a successful conversion to session history."""
     if not vm.success:
         return
-    from datetime import UTC, datetime
     import uuid
+    from datetime import UTC, datetime
     entry = {
         "identity": uuid.uuid4().hex[:8],
         "sql": vm.source_sql,
