@@ -83,7 +83,8 @@ class TestLineageEdgeCases:
 
     def test_empty_query(self) -> None:
         """Empty query should return empty lineage."""
-        with pytest.raises(Exception):  # sqlglot will raise on empty
+        import sqlglot
+        with pytest.raises(sqlglot.errors.ParseError):
             _build_lineage("", "postgres")
 
     def test_complex_cte(self) -> None:

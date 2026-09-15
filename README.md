@@ -63,7 +63,7 @@ python -m pip install -e ".[dev,semantic]"
 ### Run Streamlit UI (Recommended)
 
 ```bash
-streamlit run sdm_local.py
+streamlit run sdm_local_v2.py
 ```
 
 Open http://localhost:8501 in your browser.
@@ -167,7 +167,7 @@ sql-dialect-master/
 │   └── basic_usage.py            # SDK usage examples
 ├── scripts/
 │   └── verify_readme_consistency.py # README source-of-truth checks
-├── sdm_local.py                 # Streamlit Application Entry
+├── sdm_local_v2.py             # Streamlit Application Entry (v2)
 ├── pyproject.toml               # Project configuration
 ├── requirements.txt              # Legacy/runtime dependency list
 ├── .env.example                 # Environment template

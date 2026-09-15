@@ -39,7 +39,7 @@ jobs:
         run: pytest backend/tests/test_audit_remaining_gaps.py -q
 
       - name: Compile Python sources
-        run: python -m compileall -q backend frontend sdm_local.py
+        run: python -m compileall -q backend frontend sdm_local_v2.py
 
       - name: Build distributable wheel
         run: |
