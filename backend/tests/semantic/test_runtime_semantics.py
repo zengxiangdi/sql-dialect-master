@@ -5,6 +5,13 @@ Covers predicates, aggregations, joins, ordering, date/time, and DML.
 """
 
 import pytest
+
+# Skip entire module if duckdb is not available (e.g., in base CI without semantic deps)
+duckdb = pytest.importorskip(
+    "duckdb",
+    reason="duckdb not installed; skip DuckDB-based runtime semantic tests",
+)
+
 import sqlglot
 from sqlglot import exp
 
