@@ -12,6 +12,7 @@ from __future__ import annotations
 import streamlit as st
 
 from backend.core.semantic_diff import diff_sql_ast
+from frontend.app_context_v2 import DIALECTS
 from frontend.core.design_tokens import ColorTokens
 from frontend.core.navigation import consume_navigation_intent
 from frontend.core.viewmodels import SemanticDiffViewModel
@@ -82,7 +83,7 @@ def _render_input_section(theme: ColorTokens) -> None:
         )
         st.selectbox(
             "Dialect",
-            ["postgres", "mysql", "hive", "spark", "oracle", "tsql"],
+            DIALECTS,
             key="diff_src_dialect",
             label_visibility="collapsed",
         )
@@ -103,7 +104,7 @@ def _render_input_section(theme: ColorTokens) -> None:
         )
         st.selectbox(
             "Dialect",
-            ["postgres", "mysql", "hive", "spark", "oracle", "tsql"],
+            DIALECTS,
             key="diff_tgt_dialect",
             label_visibility="collapsed",
         )

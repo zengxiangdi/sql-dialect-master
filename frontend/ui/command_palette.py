@@ -1,7 +1,10 @@
 """Command Palette for SQL Dialect Master v2.
 
-Provides ⌘K / Ctrl+K access to all workspace actions.
+Provides a button-based command palette for quick access to all workspace actions.
 All commands produce NavigationIntent objects — no direct routing.
+
+Note: Streamlit does not support native keyboard shortcuts, so the ⌘K button
+is used as the trigger instead of a keyboard listener.
 """
 from __future__ import annotations
 
@@ -28,19 +31,19 @@ class Command:
 
 COMMANDS: list[Command] = [
     # Workspace
-    Command("Convert SQL", "Open the SQL conversion workspace", "Workspace", "new_conversion", "⌘1"),
-    Command("NL2SQL", "Generate SQL from natural language", "Workspace", "open_nl2sql", "⌘2"),
-    Command("Semantic Diff", "Compare two SQL statements", "Workspace", "open_diff", "⌘⇧D"),
-    Command("Lineage", "Visualize table and column dependencies", "Workspace", "open_lineage"),
-    Command("Runtime", "Execute and verify SQL against databases", "Workspace", "open_runtime"),
+    Command("Convert SQL", "Open the SQL conversion workspace", "Workspace", "new_conversion", ""),
+    Command("NL2SQL", "Generate SQL from natural language", "Workspace", "open_nl2sql", ""),
+    Command("Semantic Diff", "Compare two SQL statements", "Workspace", "open_diff", ""),
+    Command("Lineage", "Visualize table dependencies", "Workspace", "open_lineage", ""),
+    Command("Runtime", "Execute and verify SQL against databases", "Workspace", "open_runtime", ""),
     # Library
-    Command("Function Library", "Search and compare SQL functions", "Library", "open_functions"),
-    Command("Type Mapping", "Compare data types across dialects", "Library", "open_types"),
-    Command("Templates", "Browse SQL templates by category", "Library", "open_templates"),
-    Command("History", "View recent conversions", "Library", "open_history"),
+    Command("Function Library", "Search and compare SQL functions", "Library", "open_functions", ""),
+    Command("Type Mapping", "Compare data types across dialects", "Library", "open_types", ""),
+    Command("Templates", "Browse SQL templates by category", "Library", "open_templates", ""),
+    Command("History", "View recent conversions", "Library", "open_history", ""),
     # System
-    Command("Query Analysis", "Static analysis of SQL queries", "System", "open_query_analysis"),
-    Command("Settings", "Theme and configuration", "System", "open_settings"),
+    Command("Query Analysis", "Static analysis of SQL queries", "System", "open_query_analysis", ""),
+    Command("Settings", "Theme and configuration", "System", "open_settings", ""),
 ]
 
 CATEGORY_ORDER = ["Workspace", "Library", "System"]

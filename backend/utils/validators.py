@@ -234,3 +234,93 @@ def sanitize_column_name(name: str) -> str:
         )
     
     return name
+
+
+def split_sql_statements(sql: str) -> List[str]:
+    """Split SQL text into individual statements respecting string literals and comments.
+
+    This is a pure parsing utility — no semantic analysis.
+    Handles:
+    - Semicolons inside single-quoted strings ('...;...')
+    - Semicolons inside double-quoted identifiers ("...;...")
+    - Semicolons inside block comments (-- line comment; ... or /* ... */)
+    - Dollar-quoted strings ($$...$$ or $tag$...$tag$)
+    - Empty statements are filtered out
+
+    Args:
+        sql: SQL text potentially containing multiple statements
+
+    Returns:
+        List of individual SQL statement strings
+    """
+    if not sql or not sql.strip():
+        return []
+
+    import sqlglot
+
+    statements = []
+    try:
+        parsed = sqlglot.parse(sql, dialect="postgres")
+        for stmt in parsed:
+            if stmt is not None:
+                rendered = stmt.sql(pretty=False)
+                if rendered.strip():
+                    statements.append(rendered)
+    except Exception:  # noqa: BLE001 — malformed SQL fallback
+        # Fallback: state-machine aware splitter
+        stmt_lines: list[str] = []
+        in_single_quote = False
+        in_double_quote = False
+        i = 0
+        text = sql
+        while i < len(text):
+            ch = text[i]
+            if ch == "'" and not in_double_quote:
+                # Check for escaped quote ''
+                if i + 1 < len(text) and text[i + 1] == "'":
+                    stmt_lines.append(ch)
+                    i += 2
+                    continue
+                in_single_quote = not in_single_quote
+                stmt_lines.append(ch)
+            elif ch == '"' and not in_single_quote:
+                in_double_quote = not in_double_quote
+                stmt_lines.append(ch)
+            elif ch == ";" and not in_single_quote and not in_double_quote:
+                # Check for line comment starting with ;
+                statement = "".join(stmt_lines).strip()
+                if statement:
+                    statements.append(statement)
+                stmt_lines = []
+            elif ch == "-" and i + 1 < len(text) and text[i + 1] == "-":
+                # Line comment — consume until newline
+                stmt_lines.append(ch)
+                i += 1
+                while i < len(text) and text[i] != "\n":
+                    stmt_lines.append(text[i])
+                    i += 1
+                continue
+            elif ch == "/" and i + 1 < len(text) and text[i + 1] == "*":
+                # Block comment — consume until */
+                stmt_lines.append(ch)
+                i += 1
+                while i + 1 < len(text):
+                    if text[i] == "*" and text[i + 1] == "/":
+                        stmt_lines.append("*/")
+                        i += 2
+                        break
+                    stmt_lines.append(text[i])
+                    i += 1
+                else:
+                    i += 1
+                continue
+            else:
+                stmt_lines.append(ch)
+            i += 1
+
+        # Last statement (no trailing semicolon)
+        last = "".join(stmt_lines).strip()
+        if last:
+            statements.append(last)
+
+    return statements

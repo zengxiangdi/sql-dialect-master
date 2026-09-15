@@ -93,6 +93,7 @@ def generate_nl2sql(nl: str, dialect: str, table_hint: str | None = None) -> NL2
 # Static data
 # ---------------------------------------------------------------------------
 from backend.core.config import SUPPORTED_DIALECTS, get_dialect_ui_info
+from backend.utils.validators import split_sql_statements
 
 DIALECTS = SUPPORTED_DIALECTS
 DIALECT_INFO = get_dialect_ui_info()

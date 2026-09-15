@@ -33,13 +33,10 @@ def render_settings_page(theme: ColorTokens) -> None:
 
     # Keyboard shortcuts reference
     st.markdown("---")
-    st.markdown("##### Keyboard Shortcuts")
+    st.markdown("##### Notes")
     st.markdown("""
-    | Shortcut | Action |
-    |----------|--------|
-    | `Ctrl+Enter` | Convert SQL |
-    | `Ctrl+Shift+F` | Format SQL |
-    | `F11` | Fullscreen |
+    Streamlit does not support native keyboard shortcuts.
+    Actions are performed via buttons and menu selections.
     """)
 
     # About
