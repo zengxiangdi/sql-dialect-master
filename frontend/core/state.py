@@ -44,7 +44,7 @@ class ConversionState:
     batch_results: list[Any] | None = None
 
 
-@dataclass(frozen=True)
+@dataclass
 class NL2SQLState:
     """Ephemeral state for the NL2SQL workspace."""
 
@@ -52,6 +52,8 @@ class NL2SQLState:
     natural_language: str = ""
     table_hint: str = ""
     last_result: Any | None = None
+    loading: bool = False
+    error: str | None = None
 
 
 @dataclass(frozen=True)

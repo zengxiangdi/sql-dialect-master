@@ -167,6 +167,9 @@ class BatchConversionViewModel:
 
 # ── NL2SQL ViewModel ───────────────────────────────────────────────────
 
+ConfidenceLevel = Literal["high", "review", "low"]
+
+
 @dataclass
 class NL2SQLViewModel:
     success: bool
@@ -182,6 +185,49 @@ class NL2SQLViewModel:
     def status(self) -> StatusKind:
         return "valid" if self.success else "error"
 
+    @property
+    def confidence_level(self) -> ConfidenceLevel:
+        """Map overall confidence to a display level."""
+        if self.confidence >= 0.8:
+            return "high"
+        elif self.confidence >= 0.5:
+            return "review"
+        return "low"
+
+    @property
+    def confidence_label(self) -> str:
+        return {
+            "high": "High confidence",
+            "review": "Review recommended",
+            "low": "Low confidence",
+        }[self.confidence_level]
+
+    @property
+    def tables(self) -> list[str]:
+        """Extract table names from parsed_elements."""
+        pe = self.parsed_elements
+        return list({t for t in pe.get("tables", []) if t})
+
+    @property
+    def columns(self) -> list[str]:
+        """Extract column names from parsed_elements."""
+        pe = self.parsed_elements
+        return list({c for c in pe.get("columns", []) if c})
+
+    @property
+    def values(self) -> list[str]:
+        """Extract numeric/string values from parsed_elements."""
+        pe = self.parsed_elements
+        return list({str(v) for v in pe.get("numbers", []) if v})
+
+    @property
+    def is_chinese(self) -> bool:
+        return bool(self.parsed_elements.get("is_chinese"))
+
+    @property
+    def token_count(self) -> int:
+        return int(self.parsed_elements.get("token_count", 0))
+
     @classmethod
     def from_nl2sql_result(cls, result: Any) -> NL2SQLViewModel:
         return cls(
@@ -194,6 +240,15 @@ class NL2SQLViewModel:
             suggestions=list(result.suggestions),
             parsed_elements=dict(result.parsed_elements),
         )
+
+    def clean_sql(self) -> str:
+        """Return SQL without any comment prefix that backend may add."""
+        if not self.sql:
+            return ""
+        # Backend sometimes prefixes with "-- Generated for DIALECT\n"
+        lines = self.sql.splitlines()
+        sql_lines = [l for l in lines if not l.startswith("--")]
+        return "\n".join(sql_lines).strip() or self.sql
 
 
 # ── Semantic Diff ViewModel ────────────────────────────────────────────
