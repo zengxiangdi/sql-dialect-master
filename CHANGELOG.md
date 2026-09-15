@@ -4,27 +4,33 @@ All notable changes to SQL Dialect Master are documented here.
 
 ## [Unreleased]
 
-### Engineering
+### Security & Architecture
 
-- Added repository-level Dependabot configuration for Python and GitHub Actions dependencies.
-- Added CodeQL security analysis for Python on pushes, pull requests, and a weekly schedule.
-- Added CODEOWNERS, pull request templates, and issue templates.
-- Added tag-driven GitHub Release automation.
-- Added a PyPI publishing workflow using GitHub Actions trusted publishing (OIDC).
-- Refreshed the immutable GitHub Actions SHA lockfile after Dependabot action upgrades.
-- Added a generic SQL parser fallback when target-dialect parsing is unavailable, with an explicit compatibility warning.
-- Added an AST-based semantic diff detector for structural conversion regressions.
-- Added PostgreSQL + DuckDB runtime semantic regression coverage and a dedicated CI gate.
-- Added locked semantic-test dependencies for DuckDB and Psycopg.
-- Added README source-of-truth validation for release version, Python requirement, supported dialects, and benchmark references.
-- Added a CI benchmark workflow for reproducible transpiler performance observability.
+- **Eliminated all runtime monkey patches** — `batch_validation.py`, `input_validation.py` deleted; validation now lives natively in `SQLTranspiler.transpile()`.
+- **Removed hardening/patch/fix compatibility layers** — no hidden import-side-effects remain.
+- **Frontend XSS remediation** — all user-supplied HTML escaped via `_esc()`; replaced raw `navigator.clipboard.writeText()` with native `st.copy_button()`.
+- **Canonical conversion paths** — all 4 key methods verified to live in their canonical modules:
+  - `SQLTranspiler.transpile/batch_transpile/batch_transpile_async` → `backend.core.transpiler`
+  - `NL2SQLGenerator._extract_conditions_enhanced` → `backend.core.nl2sql_legacy`
+  - `TransformRule.apply` → `backend.core.rules`
 
-### Fixed
+### Semantic Fixes
 
-- Release automation now rejects Git tags that do not exactly match `pyproject.toml` project version.
-- Dependabot now ignores `websockets>=17`, which conflicts with the currently locked Streamlit dependency.
+- **NL2SQL IN predicate lost** — fixed regex-based `IN`/`NOT IN` extraction in `_extract_conditions_enhanced`.
+- **NL2SQL spurious ORDER BY** — changed substring `"order" in text` to `\b` word-boundary matching; "orders" table name no longer triggers false ORDER BY.
+- **NL2SQL duplicate status conditions** — `in_matched_columns` set prevents redundant `status = 'active'` when `status IN (...)` was already matched.
+- **False compatibility notes** — `LISTAGG → ARRAY_JOIN(COLLECT_LIST())` and `CONNECT BY → WITH RECURSIVE` notes now filtered when the transformation was not actually applied (sqlglot-native conversions).
+- **CONCAT NULL semantics** — added `CONCAT` to `_CONTEXT_SENSITIVE_FUNCTIONS`; classified as `potentially_different` with explicit compatibility note documenting PostgreSQL vs MySQL NULL behavior difference.
 
-## [1.0.1] - 2026-09-08
+### TypeMapper
+
+- Added `DATETIME` type mapping (`mysql` → `TIMESTAMP` in postgres).
+
+### Documentation
+
+- Added `RELEASE_READINESS.md` with full engineering, semantic, runtime, and security gate evidence.
+
+## [1.0.1] - 2026-09-15
 
 ### Added
 
