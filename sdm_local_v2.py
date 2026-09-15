@@ -4,6 +4,8 @@ Refactored frontend architecture with:
 - Dark / Light theme system
 - Sidebar navigation (Workspace / Library / System)
 - ViewModel-based state management
+- Unified NavigationIntent for cross-page handoffs
+- Command Palette (⌘K / Ctrl+K)
 - Security-safe HTML rendering
 - Fixed batch conversion bug
 """
@@ -26,6 +28,10 @@ logger = logging.getLogger(__name__)
 # ── Import new architecture ──────────────────────────────────────────
 from frontend.app_context_v2 import load_data_v2
 from frontend.core.design_tokens import THEMES
+from frontend.core.navigation import (
+    NavigationIntent,
+    consume_navigation_intent,
+)
 from frontend.core.styles import generate_css
 from frontend.pages.convert import render_convert_page
 from frontend.pages.diff import render_diff_page
@@ -38,24 +44,65 @@ from frontend.pages.runtime import render_runtime_page
 from frontend.pages.settings import render_settings_page
 from frontend.pages.templates import render_templates_page
 from frontend.pages.types import render_types_page
+from frontend.ui.command_palette import render_command_palette
+
+# ── Page registry (must be before navigation processing) ─────────────
+PAGE_MAP = {
+    "convert": ("Convert", render_convert_page),
+    "nl2sql": ("NL2SQL", render_nl2sql_page),
+    "diff": ("Semantic Diff", render_diff_page),
+    "lineage": ("Lineage", render_lineage_page),
+    "runtime": ("Runtime", render_runtime_page),
+    "functions": ("Functions", render_functions_page),
+    "types": ("Types", render_types_page),
+    "templates": ("Templates", render_templates_page),
+    "history": ("History", render_history_page),
+    "settings": ("Settings", render_settings_page),
+    "query_analysis": ("Query Analysis", render_query_analysis_page),
+}
+
 
 # ── Initialize session state ─────────────────────────────────────────
+_NAV_KEY = "sdm_navigation_intent"
+_FINDING_KEY = "sdm_selected_finding_index"
+
 _DEFAULTS = {
     "sdm_theme": "dark",
     "sdm_history": [],
     "sdm_favorites": [],
     "convert_last_vm": None,
-    "convert_last_diff": None,
     "batch_last_vm": None,
     "nl_last_vm": None,
     "lineage_last_vm": None,
     "qa_last_result": None,
-    "diff_last_result": None,
-    "sdm_pending_diff": None,
+    "diff_last_vm": None,
+    _NAV_KEY: NavigationIntent(),
+    _FINDING_KEY: None,
 }
 for key, default in _DEFAULTS.items():
     if key not in st.session_state:
         st.session_state[key] = default
+
+# ── Process navigation intent (consumed once per request) ────────────
+_pending = consume_navigation_intent()
+if _pending and _pending.is_valid and _pending.target_page in PAGE_MAP:
+    st.query_params["page"] = _pending.target_page
+    if _pending.action == "open_diff" and _pending.get_payload("source"):
+        st.session_state.diff_src_sql = _pending.get_payload("source")
+        st.session_state.diff_tgt_sql = _pending.get_payload("target")
+        st.session_state.diff_src_dialect = _pending.get_payload("src_dialect", "postgres")
+        st.session_state.diff_tgt_dialect = _pending.get_payload("tgt_dialect", "mysql")
+        st.session_state.diff_last_vm = None
+        st.session_state[_FINDING_KEY] = None
+    elif _pending.action == "open_conversion" and _pending.get_payload("sql"):
+        st.session_state.convert_src_sql = _pending.get_payload("sql")
+        st.session_state.convert_src = _pending.get_payload("dialect", "postgres")
+        st.session_state.convert_target_sql = ""
+        st.session_state.convert_last_vm = None
+    elif _pending.action == "select_finding" and _pending.has_payload("finding_index"):
+        st.session_state[_FINDING_KEY] = _pending.get_payload("finding_index")
+    st.rerun()
+
 
 # ── Theme setup ──────────────────────────────────────────────────────
 theme_name: str = st.session_state.get("sdm_theme", "dark")
@@ -71,21 +118,6 @@ st.markdown(generate_css(current_theme), unsafe_allow_html=True)
 types_data, funcs_data = load_data_v2()
 
 # ── Determine active page ────────────────────────────────────────────
-PAGE_MAP = {
-    "convert": ("Convert", render_convert_page),
-    "nl2sql": ("NL2SQL", render_nl2sql_page),
-    "diff": ("Semantic Diff", render_diff_page),
-    "lineage": ("Lineage", render_lineage_page),
-    "runtime": ("Runtime", render_runtime_page),
-    "functions": ("Functions", render_functions_page),
-    "types": ("Types", render_types_page),
-    "templates": ("Templates", render_templates_page),
-    "history": ("History", render_history_page),
-    "settings": ("Settings", render_settings_page),
-    "query_analysis": ("Query Analysis", render_query_analysis_page),
-}
-
-# Resolve page from query params or default to convert
 requested_page = st.query_params.get("page", "convert")
 if requested_page not in PAGE_MAP:
     requested_page = "convert"
@@ -142,7 +174,6 @@ with st.sidebar:
             active = "active" if page_id == requested_page else ""
             bg = current_theme.selected_bg if active else "transparent"
             color = current_theme.accent if active else current_theme.text_secondary
-            border_color = current_theme.accent if active else "transparent"
 
             if st.button(
                 f"  {icon}  {label}",
@@ -172,6 +203,9 @@ st.markdown(f"<div class='sdm-content'>{page_label}</div>", unsafe_allow_html=Tr
 
 # Pass theme to page renderer
 page_renderer(current_theme)
+
+# ── Command Palette ──────────────────────────────────────────────────
+render_command_palette(current_theme)
 
 # ── Footer ───────────────────────────────────────────────────────────
 st.markdown("---")

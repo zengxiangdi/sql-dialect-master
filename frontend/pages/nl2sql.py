@@ -276,21 +276,27 @@ def _render_action_buttons(vm: NL2SQLViewModel, theme: ColorTokens) -> None:
 
     with col_convert:
         if st.button("Open in Converter", key="nl_to_convert", use_container_width=True):
-            st.session_state.sdm_pending_conversion = {
-                "sql": sql,
-                "dialect": vm.dialect,
-                "origin": "nl2sql",
-            }
-            st.query_params["page"] = "convert"
+            from frontend.core.navigation import create_navigation_intent
+            intent = create_navigation_intent(
+                target_page="convert",
+                action="open_conversion",
+                sql=sql,
+                dialect=vm.dialect,
+                origin="nl2sql",
+            )
+            st.session_state.sdm_navigation_intent = intent
             st.rerun()
 
     with col_diff:
         if st.button("Semantic Diff", key="nl_to_diff", use_container_width=True):
-            st.session_state.sdm_pending_diff = {
-                "source": sql,
-                "src_dialect": vm.dialect,
-                "target": sql,
-                "tgt_dialect": vm.dialect,
-            }
-            st.query_params["page"] = "diff"
+            from frontend.core.navigation import create_navigation_intent
+            intent = create_navigation_intent(
+                target_page="diff",
+                action="open_diff",
+                source=sql,
+                target=sql,
+                src_dialect=vm.dialect,
+                tgt_dialect=vm.dialect,
+            )
+            st.session_state.sdm_navigation_intent = intent
             st.rerun()

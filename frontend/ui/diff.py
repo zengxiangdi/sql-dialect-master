@@ -147,7 +147,7 @@ def _render_finding_list(vm: SemanticDiffViewModel, selected_idx: int | None, th
         )
 
         if st.button("Select", key=f"find_{i}", help=f"View {finding.category} finding details"):
-            st.session_state.sdm_selected_finding = i
+            st.session_state.sdm_selected_finding_index = i
             st.rerun()
 
 

@@ -134,8 +134,16 @@ def render_result_panel(
         st.download_button("Download", sql, "converted.sql", mime="text/sql")
     with col_diff:
         if st.button("Semantic Diff", key="to_diff_btn"):
-            st.session_state.sdm_pending_diff = {"source": sql, "src_dialect": source_dialect,
-                                                  "target": sql, "tgt_dialect": target_dialect}
+            from frontend.core.navigation import create_navigation_intent
+            intent = create_navigation_intent(
+                target_page="diff",
+                action="open_diff",
+                source=sql,
+                target=sql,
+                src_dialect=source_dialect,
+                tgt_dialect=target_dialect,
+            )
+            st.session_state.sdm_navigation_intent = intent
             st.rerun()
 
     # Transformations

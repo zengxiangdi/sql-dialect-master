@@ -20,6 +20,7 @@ from frontend.core.design_tokens import (
     ColorTokens,
 )
 from frontend.core.escaping import esc
+from frontend.core.navigation import create_navigation_intent
 from frontend.core.viewmodels import (
     BatchConversionViewModel,
     ConversionViewModel,
@@ -150,13 +151,15 @@ def render_convert_page(theme: ColorTokens) -> None:
             col_diff, _ = st.columns([1, 3])
             with col_diff:
                 if st.button("Semantic Diff →", key="run_semantic_diff", type="secondary", use_container_width=True):
-                    st.session_state.sdm_pending_diff = {
-                        "source": vm.source_sql,
-                        "src_dialect": vm.source_dialect,
-                        "target": vm.target_sql,
-                        "tgt_dialect": vm.target_dialect,
-                    }
-                    st.query_params["page"] = "diff"
+                    intent = create_navigation_intent(
+                        target_page="diff",
+                        action="open_diff",
+                        source=vm.source_sql,
+                        target=vm.target_sql,
+                        src_dialect=vm.source_dialect,
+                        tgt_dialect=vm.target_dialect,
+                    )
+                    st.session_state.sdm_navigation_intent = intent
                     st.rerun()
 
     # ── Batch conversion ───────────────────────────────────────────

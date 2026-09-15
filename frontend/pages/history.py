@@ -92,10 +92,15 @@ def _render_history_entry(entry: dict, idx: int, theme: ColorTokens) -> None:
         col_load, col_copy, col_fav, col_del = st.columns([1, 1, 1, 1])
         with col_load:
             if st.button("Load", key=f"hist_load_{idx}"):
-                st.session_state.convert_src_sql = entry.get("sql", "")
-                st.session_state.convert_src = entry.get("src", "postgres")
-                st.session_state.convert_tgt = entry.get("tgt", "mysql")
-                st.query_params["page"] = "convert"
+                from frontend.core.navigation import create_navigation_intent
+                intent = create_navigation_intent(
+                    target_page="convert",
+                    action="open_conversion",
+                    sql=entry.get("sql", ""),
+                    dialect=entry.get("src", "postgres"),
+                    origin="history",
+                )
+                st.session_state.sdm_navigation_intent = intent
                 st.rerun()
         with col_copy:
             if st.button("Copy", key=f"hist_copy_{idx}"):

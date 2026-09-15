@@ -11,6 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from frontend.core.navigation import NavigationIntent
+
 # ── Value objects ──────────────────────────────────────────────────────
 
 StatusKind = Literal["valid", "warning", "error", "info", "neutral"]
@@ -119,6 +121,7 @@ class AppState:
     functions: FunctionsState = field(default_factory=FunctionsState)
     types: TypesState = field(default_factory=TypesState)
     settings: SettingsState = field(default_factory=SettingsState)
+    navigation: NavigationIntent = field(default_factory=NavigationIntent)
 
     def current_theme_name(self) -> Literal["dark", "light"]:
         return self.theme

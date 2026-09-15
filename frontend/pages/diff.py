@@ -5,7 +5,7 @@ Full workspace with:
 - Finding list (clickable, with severity indicators)
 - Inspector panel (shows selected finding details)
 - Semantic vs Text diff tab switcher
-- Integration with Convert workspace via ?page=diff&find=N
+- Integration with Convert workspace via unified NavigationIntent
 """
 from __future__ import annotations
 
@@ -13,11 +13,11 @@ import streamlit as st
 
 from backend.core.semantic_diff import diff_sql_ast
 from frontend.core.design_tokens import ColorTokens
-from frontend.core.viewmodels import (
-    SemanticDiffViewModel,
-)
+from frontend.core.navigation import consume_navigation_intent
+from frontend.core.viewmodels import SemanticDiffViewModel
 
-# ── Page definition ────────────────────────────────────────────────────
+_FINDING_KEY = "sdm_selected_finding_index"
+
 
 def render_diff_page(theme: ColorTokens) -> None:
     """Render the Semantic Diff workspace."""
@@ -25,14 +25,14 @@ def render_diff_page(theme: ColorTokens) -> None:
     _render_header(theme)
     _render_input_section(theme)
 
-    # Check for auto-populate from Convert → Diff navigation
-    pending = st.session_state.get("sdm_pending_diff")
-    if pending and not st.session_state.get("diff_last_vm"):
-        st.session_state.diff_src_sql = pending.get("source", "")
-        st.session_state.diff_tgt_sql = pending.get("target", "")
-        st.session_state.diff_src_dialect = pending.get("src_dialect", "postgres")
-        st.session_state.diff_tgt_dialect = pending.get("tgt_dialect", "mysql")
-        st.session_state.sdm_pending_diff = None  # consume
+    # Process navigation intent from Convert → Diff handoff
+    intent = consume_navigation_intent()
+    if intent and intent.action == "open_diff" and not st.session_state.get("diff_last_vm"):
+        st.session_state.diff_src_sql = intent.get_payload("source", "")
+        st.session_state.diff_tgt_sql = intent.get_payload("target", "")
+        st.session_state.diff_src_dialect = intent.get_payload("src_dialect", "postgres")
+        st.session_state.diff_tgt_dialect = intent.get_payload("tgt_dialect", "mysql")
+        st.session_state[_FINDING_KEY] = None
 
     # Get saved inputs
     src_sql = st.session_state.get("diff_src_sql", "")
@@ -41,7 +41,7 @@ def render_diff_page(theme: ColorTokens) -> None:
     # Render results if available
     vm: SemanticDiffViewModel | None = st.session_state.get("diff_last_vm")
     if vm is not None:
-        selected_idx = st.session_state.get("sdm_selected_finding")
+        selected_idx = st.session_state.get(_FINDING_KEY)
         _render_results(vm, src_sql, tgt_sql, selected_idx, theme)
 
 
@@ -137,7 +137,7 @@ def _run_comparison(theme: ColorTokens) -> None:
         diff=backend_result,
     )
     st.session_state.diff_last_vm = vm
-    st.session_state.sdm_selected_finding = None
+    st.session_state.sdm_selected_finding_index = None
     st.rerun()
 
 
