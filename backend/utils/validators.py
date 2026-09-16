@@ -236,91 +236,172 @@ def sanitize_column_name(name: str) -> str:
     return name
 
 
-def split_sql_statements(sql: str) -> List[str]:
-    """Split SQL text into individual statements respecting string literals and comments.
 
-    This is a pure parsing utility — no semantic analysis.
+
+
+def split_sql_statements(sql: str, dialect: str = "postgres") -> list[str]:
+    """Split SQL text into individual statements, preserving original text exactly.
+
+    Pure lexical splitter — no AST parsing, no re-rendering, no semantic analysis.
+    Finds statement boundaries by tracking quote/comment states so semicolons
+    inside literals/comments are not mistaken for separators.
+
     Handles:
-    - Semicolons inside single-quoted strings ('...;...')
-    - Semicolons inside double-quoted identifiers ("...;...")
-    - Semicolons inside block comments (-- line comment; ... or /* ... */)
-    - Dollar-quoted strings ($$...$$ or $tag$...$tag$)
-    - Empty statements are filtered out
+    - Single-quoted strings with escaped quotes ('')
+    - Double-quoted identifiers
+    - Backtick identifiers (MySQL)
+    - Line comments (-- comment\n)
+    - Block comments (/* ... */)
+    - PostgreSQL dollar-quoted strings ($$...$$ or $tag$...$tag$)
+    - Empty statements and trailing semicolons filtered out
 
     Args:
         sql: SQL text potentially containing multiple statements
+        dialect: SQL dialect hint (not used for splitting logic)
 
     Returns:
-        List of individual SQL statement strings
+        List of individual SQL statement strings (original text preserved)
     """
     if not sql or not sql.strip():
         return []
 
-    import sqlglot
+    statements: list[str] = []
+    stmt_chars: list[str] = []
+    i = 0
+    n = len(sql)
+    in_single = False
+    in_double = False
+    in_backtick = False
 
-    statements = []
-    try:
-        parsed = sqlglot.parse(sql, dialect="postgres")
-        for stmt in parsed:
-            if stmt is not None:
-                rendered = stmt.sql(pretty=False)
-                if rendered.strip():
-                    statements.append(rendered)
-    except Exception:  # noqa: BLE001 — malformed SQL fallback
-        # Fallback: state-machine aware splitter
-        stmt_lines: list[str] = []
-        in_single_quote = False
-        in_double_quote = False
-        i = 0
-        text = sql
-        while i < len(text):
-            ch = text[i]
-            if ch == "'" and not in_double_quote:
-                # Check for escaped quote ''
-                if i + 1 < len(text) and text[i + 1] == "'":
-                    stmt_lines.append(ch)
+    # Sentinel values to distinguish "inside $$" from "not in dollar quote"
+    _IN_DOLLAR_EMPTY = object()  # inside $$...$$
+    _NOT_IN_DOLLAR = None        # not inside any dollar quote
+    dollar_tag = _NOT_IN_DOLLAR
+
+    while i < n:
+        ch = sql[i]
+
+        # ── Dollar-quoted string content ──
+        if dollar_tag is not _NOT_IN_DOLLAR:
+            # We're inside a dollar-quoted string
+            if dollar_tag is _IN_DOLLAR_EMPTY:
+                # Looking for closing $$
+                if sql[i:i+2] == "$$":
+                    stmt_chars.append("$$")
                     i += 2
-                    continue
-                in_single_quote = not in_single_quote
-                stmt_lines.append(ch)
-            elif ch == '"' and not in_single_quote:
-                in_double_quote = not in_double_quote
-                stmt_lines.append(ch)
-            elif ch == ";" and not in_single_quote and not in_double_quote:
-                # Check for line comment starting with ;
-                statement = "".join(stmt_lines).strip()
-                if statement:
-                    statements.append(statement)
-                stmt_lines = []
-            elif ch == "-" and i + 1 < len(text) and text[i + 1] == "-":
-                # Line comment — consume until newline
-                stmt_lines.append(ch)
-                i += 1
-                while i < len(text) and text[i] != "\n":
-                    stmt_lines.append(text[i])
-                    i += 1
-                continue
-            elif ch == "/" and i + 1 < len(text) and text[i + 1] == "*":
-                # Block comment — consume until */
-                stmt_lines.append(ch)
-                i += 1
-                while i + 1 < len(text):
-                    if text[i] == "*" and text[i + 1] == "/":
-                        stmt_lines.append("*/")
-                        i += 2
-                        break
-                    stmt_lines.append(text[i])
-                    i += 1
+                    dollar_tag = _NOT_IN_DOLLAR
                 else:
+                    stmt_chars.append(ch)
                     i += 1
                 continue
             else:
-                stmt_lines.append(ch)
-            i += 1
+                # Looking for closing $tag$
+                end_tag = "$" + dollar_tag + "$"
+                if sql[i:i + len(end_tag)] == end_tag:
+                    stmt_chars.append(end_tag)
+                    i += len(end_tag)
+                    dollar_tag = _NOT_IN_DOLLAR
+                else:
+                    stmt_chars.append(ch)
+                    i += 1
+                continue
 
-        # Last statement (no trailing semicolon)
-        last = "".join(stmt_lines).strip()
-        if last:
-            statements.append(last)
+        # ── Start of dollar-quoted string ──
+        if ch == "$" and not in_single and not in_double and not in_backtick:
+            # Check for $$ (empty tag)
+            if i + 1 < n and sql[i + 1] == "$":
+                stmt_chars.append("$$")
+                dollar_tag = _IN_DOLLAR_EMPTY
+                i += 2
+                continue
+            # Check for $tag$ format
+            if i + 1 < n:
+                next_ch = sql[i + 1]
+                if next_ch.isalnum() or next_ch == "_":
+                    j = i + 1
+                    while j < n and sql[j] != "$":
+                        j += 1
+                    if j < n and sql[j] == "$":
+                        tag = sql[i + 1:j]
+                        if tag:
+                            # Append the opening $tag$ to preserve it
+                            stmt_chars.append("$" + tag + "$")
+                            dollar_tag = tag
+                            i = j + 1
+                            continue
+            # Not a dollar-quote start
+            stmt_chars.append(ch)
+            i += 1
+            continue
+
+        # ── Single-quoted strings ──
+        if ch == "'" and not in_double and not in_backtick:
+            if i + 1 < n and sql[i + 1] == "'":
+                stmt_chars.append("''")
+                i += 2
+                continue
+            in_single = not in_single
+            stmt_chars.append(ch)
+            i += 1
+            continue
+
+        # ── Double-quoted identifiers ──
+        if ch == '"' and not in_single and not in_backtick:
+            in_double = not in_double
+            stmt_chars.append(ch)
+            i += 1
+            continue
+
+        # ── Backtick identifiers (MySQL) ──
+        if ch == "`" and not in_single and not in_double:
+            in_backtick = not in_backtick
+            stmt_chars.append(ch)
+            i += 1
+            continue
+
+        # ── Line comments ──
+        if ch == "-" and i + 1 < n and sql[i + 1] == "-":
+            stmt_chars.append(ch)
+            i += 1
+            while i < n and sql[i] != "\n":
+                stmt_chars.append(sql[i])
+                i += 1
+            continue
+
+        # ── Block comments ──
+        if ch == "/" and i + 1 < n and sql[i + 1] == "*":
+            stmt_chars.append("/*")
+            i += 2
+            while i + 1 < n:
+                if sql[i] == "*" and sql[i + 1] == "/":
+                    stmt_chars.append("*/")
+                    i += 2
+                    break
+                stmt_chars.append(sql[i])
+                i += 1
+            else:
+                # Unterminated block comment
+                while i < n:
+                    stmt_chars.append(sql[i])
+                    i += 1
+            continue
+
+        # ── Statement terminator ──
+        if ch == ";" and not in_single and not in_double and not in_backtick:
+            statement = "".join(stmt_chars).strip()
+            if statement:
+                statements.append(statement)
+            stmt_chars = []
+            i += 1
+            continue
+
+        # ── Normal character ──
+        stmt_chars.append(ch)
+        i += 1
+
+    # Last statement without trailing semicolon
+    last = "".join(stmt_chars).strip()
+    if last:
+        statements.append(last)
 
     return statements
