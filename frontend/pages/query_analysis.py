@@ -79,7 +79,8 @@ def render_query_analysis_page(theme: ColorTokens) -> None:
             st.caption(f"`{esc(t)}`")
 
     if result["hints"]:
-        st.markdown("##### Dialect Hints")
+        st.markdown("##### Dialect Characteristics")
+        st.caption("These are general characteristics of how this dialect handles queries, not optimizer output.")
         for hint in result["hints"][:5]:
             st.info(esc(hint))
 
