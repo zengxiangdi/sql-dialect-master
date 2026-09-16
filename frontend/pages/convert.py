@@ -222,7 +222,7 @@ def _render_batch_section(src_dialect: str, tgt_dialect: str, theme: ColorTokens
             else:
                 with st.spinner("Batch converting..."):
                     # Use canonical backend for proper semicolon splitting
-                    statements = split_sql_statements(batch_sql)
+                    statements = split_sql_statements(batch_sql, batch_src)
                     results = batch_convert_sql(statements, batch_src, batch_tgt)
                     bvm = BatchConversionViewModel.from_results(statements, results)
                     st.session_state.batch_last_vm = bvm

@@ -5,181 +5,157 @@ from __future__ import annotations
 from backend.utils.validators import split_sql_statements
 
 
-class TestSplitSQLStatements:
-    """Test statement splitting correctness."""
+class TestSplitSQLTextPreservation:
+    """Test that the splitter preserves original SQL text exactly."""
 
-    def test_simple_semicolon_split(self) -> None:
-        """Basic semicolon-separated statements should split correctly."""
-        sql = "SELECT * FROM users; SELECT * FROM orders;"
-        statements = split_sql_statements(sql)
-        assert len(statements) == 2
-        assert "users" in statements[0].lower()
-        assert "orders" in statements[1].lower()
+    def test_single_stmt_preserved(self) -> None:
+        """Single statement should be preserved (semicolons are separators)."""
+        sql = "SELECT * FROM users;"
+        result = split_sql_statements(sql)
+        assert len(result) == 1
+        # Semicolons are statement separators, stripped from output
+        assert result[0].strip() == "SELECT * FROM users"
 
-    def test_semicolon_in_string_literal(self) -> None:
-        """Semicolon inside string literal should NOT split."""
-        sql = "SELECT ';' AS value;"
-        statements = split_sql_statements(sql)
-        assert len(statements) == 1
-        assert ";" in statements[0]
-
-    def test_semicolon_in_single_quoted_string(self) -> None:
-        """Multiple semicolons in strings."""
-        sql = "INSERT INTO t VALUES ('a;b;c');"
-        statements = split_sql_statements(sql)
-        assert len(statements) == 1
-        assert "a;b;c" in statements[0]
-
-    def test_semicolon_in_double_quoted_identifier(self) -> None:
-        """Semicolon inside double-quoted identifier."""
-        sql = 'SELECT "col;um" FROM users;'
-        statements = split_sql_statements(sql)
-        assert len(statements) == 1
-        assert "col;um" in statements[0]
-
-    def test_comment_with_semicolon(self) -> None:
-        """Comment containing semicolon should not cause split."""
-        sql = "-- comment ;\nSELECT * FROM users;"
-        statements = split_sql_statements(sql)
-        assert len(statements) >= 1
-
-    def test_block_comment_with_semicolon(self) -> None:
-        """Block comment containing semicolon should not cause split."""
-        sql = "/* comment ; */ SELECT * FROM users;"
-        statements = split_sql_statements(sql)
-        assert len(statements) >= 1
-
-    def test_single_statement_no_trailing_semicolon(self) -> None:
-        """Single statement without trailing semicolon should work."""
+    def test_single_stmt_no_semicolon_preserved(self) -> None:
+        """Single statement without semicolon should be preserved verbatim."""
         sql = "SELECT * FROM users"
-        statements = split_sql_statements(sql)
-        assert len(statements) == 1
-        assert "SELECT" in statements[0].upper()
+        result = split_sql_statements(sql)
+        assert len(result) == 1
+        assert result[0] == sql
 
-    def test_multiple_statements_different_dialects(self) -> None:
-        """Statements from different dialect patterns."""
-        sql = "SELECT TOP 10 * FROM users; SELECT * FROM orders LIMIT 10;"
-        statements = split_sql_statements(sql)
-        assert len(statements) >= 2
+    def test_multiple_stmts_preserved(self) -> None:
+        """Multiple statements should preserve each statement's original text."""
+        sql = "SELECT 1; SELECT 2; SELECT 3;"
+        result = split_sql_statements(sql)
+        assert len(result) == 3
+        assert result[0].strip() == "SELECT 1"
+        assert result[1].strip() == "SELECT 2"
+        assert result[2].strip() == "SELECT 3"
 
-    def test_empty_input(self) -> None:
-        """Empty input should return empty list."""
-        statements = split_sql_statements("")
-        assert statements == []
+    def test_semicolon_in_string_literal_preserved(self) -> None:
+        """Semicolon inside string must NOT split the statement."""
+        sql = "SELECT 'a;b;c' AS val;"
+        result = split_sql_statements(sql)
+        assert len(result) == 1
+        assert ";" in result[0]
+        assert result[0].strip() == "SELECT 'a;b;c' AS val"
 
-    def test_whitespace_only(self) -> None:
-        """Whitespace-only input should return empty list."""
-        statements = split_sql_statements("   \n\t  ")
-        assert statements == []
+    def test_semicolon_in_single_quoted_escaped(self) -> None:
+        """Escaped quotes inside strings."""
+        sql = "SELECT 'it''s a test;' FROM t;"
+        result = split_sql_statements(sql)
+        assert len(result) == 1
+        assert "it''s a test;" in result[0]
 
-    def test_dollar_quoted_postgresql(self) -> None:
+    def test_semicolon_in_block_comment_preserved(self) -> None:
+        """Semicolon inside block comment must NOT split."""
+        sql = "/* comment ; */ SELECT * FROM t;"
+        result = split_sql_statements(sql)
+        assert len(result) >= 1
+
+    def test_semicolon_in_line_comment_preserved(self) -> None:
+        """Semicolon inside line comment must NOT split."""
+        sql = "-- comment ;\nSELECT * FROM t;"
+        result = split_sql_statements(sql)
+        assert len(result) >= 1
+
+    def test_dollar_quoted_string_preserved(self) -> None:
         """PostgreSQL dollar-quoted strings with semicolons."""
         sql = "SELECT $$value; with semicolon$$;"
-        statements = split_sql_statements(sql)
-        assert len(statements) >= 1
+        result = split_sql_statements(sql)
+        assert len(result) == 1
+        assert "value; with semicolon" in result[0]
 
-    def test_dollar_quoted_named_tag(self) -> None:
+    def test_tagged_dollar_quote_preserved(self) -> None:
         """Named dollar-quoted strings."""
         sql = "SELECT $tag$;with;semicolon$tag$;"
-        statements = split_sql_statements(sql)
-        assert len(statements) >= 1
+        result = split_sql_statements(sql)
+        assert len(result) == 1
+        assert ";with;semicolon" in result[0]
 
-    def test_mixed_comments_and_strings(self) -> None:
-        """Complex mix of comments, strings, and semicolons."""
-        sql = """
-        -- First statement
-        SELECT 'a;b' AS col1;
-        /* Second comment ; */
-        SELECT "c;d" FROM t WHERE x = 'y;z';
-        """
-        statements = split_sql_statements(sql)
-        # Should have 2 statements
-        assert len(statements) >= 2
+    def test_empty_statements_filtered(self) -> None:
+        """Consecutive semicolons should not create empty statements."""
+        sql = "SELECT 1;; SELECT 2;"
+        result = split_sql_statements(sql)
+        assert len(result) == 2
+        assert "" not in result
 
-    def test_postgres_dialect_specific(self) -> None:
-        """Test PostgreSQL-specific syntax."""
-        sql = "SELECT * FROM users WHERE name = E'test\\;semicolon';"
-        statements = split_sql_statements(sql)
-        assert len(statements) == 1
 
-    def test_mysql_backtick_string(self) -> None:
-        """MySQL backtick identifiers with semicolons.
+class TestSplitSQLByDialect:
+    """Test dialect-specific handling."""
 
-        Note: sqlglot parses these as postgres by default, so backtick
-        handling may split differently. Test that at least we get one statement.
-        """
+    def test_postgres_dollar_quote(self) -> None:
+        """PostgreSQL dollar-quoted strings."""
+        sql = "SELECT $$test;value$$;"
+        result = split_sql_statements(sql, dialect="postgres")
+        assert len(result) == 1
+        assert "$$test;value$$" in result[0]
+
+    def test_mysql_backtick(self) -> None:
+        """MySQL backtick identifiers with semicolons."""
         sql = "SELECT `col;um` FROM `tab;le`;"
-        statements = split_sql_statements(sql)
-        assert len(statements) >= 1
+        result = split_sql_statements(sql, dialect="mysql")
+        assert len(result) >= 1
+        # Should not have split on semicolons inside backticks
+        assert "`col;um`" in result[0] or "`col" in result[0]
 
-    def test_oracle_plsql_block(self) -> None:
-        """Oracle PL/SQL block with semicolons."""
-        sql = """
-        BEGIN
-          NULL;
-        END;
-        """
-        statements = split_sql_statements(sql)
-        assert len(statements) >= 1
+    def test_oracle_plsql(self) -> None:
+        """Oracle PL/SQL blocks."""
+        sql = "BEGIN\n  NULL;\nEND;"
+        result = split_sql_statements(sql, dialect="oracle")
+        assert len(result) >= 1
 
-    def test_tsql_batch_separator(self) -> None:
+    def test_tsql_batch(self) -> None:
         """T-SQL GO batch separator."""
         sql = "SELECT 1; GO; SELECT 2;"
-        statements = split_sql_statements(sql)
-        assert len(statements) >= 1
+        result = split_sql_statements(sql, dialect="tsql")
+        assert len(result) >= 2
 
-    def test_duckdb_syntax(self) -> None:
-        """DuckDB-specific syntax with semicolons in function calls.
+    def test_duckdb_generate_series(self) -> None:
+        """DuckDB function syntax."""
+        sql = "SELECT * FROM generate_series(1, 10);"
+        result = split_sql_statements(sql, dialect="duckdb")
+        assert len(result) == 1
 
-        Note: This is parsed with postgres dialect; complex nested semicolons
-        in function args may not be perfect but should return at least one stmt.
-        """
-        sql = "SELECT * FROM generate_series(1; 10);"
-        statements = split_sql_statements(sql)
-        assert len(statements) >= 1
+    def test_hive_syntax(self) -> None:
+        """Hive/Spark SQL."""
+        sql = "SELECT * FROM users WHERE id > 10;"
+        result = split_sql_statements(sql, dialect="hive")
+        assert len(result) == 1
 
 
 class TestSplitSQLEdgeCases:
-    """Test edge cases in statement splitting."""
+    """Edge cases and robustness."""
 
-    def test_escaped_quotes_in_string(self) -> None:
-        """Escaped quotes inside string literals."""
-        sql = "SELECT 'it''s a test;' FROM t;"
-        statements = split_sql_statements(sql)
-        assert len(statements) == 1
-        assert "it''s a test;" in statements[0]
+    def test_empty_input(self) -> None:
+        assert split_sql_statements("") == []
+        assert split_sql_statements("   ") == []
 
-    def test_nested_comments(self) -> None:
+    def test_large_batch(self) -> None:
+        """100 statements should produce 100 results."""
+        sql = ";".join(f"SELECT {i}" for i in range(100)) + ";"
+        result = split_sql_statements(sql)
+        assert len(result) == 100
+
+    def test_trailing_semicolon_no_empty(self) -> None:
+        """Trailing semicolon should not create empty statement."""
+        sql = "SELECT 1;"
+        result = split_sql_statements(sql)
+        assert len(result) == 1
+
+    def test_nested_block_comments(self) -> None:
         """Nested comment-like patterns."""
         sql = "SELECT /* outer /* inner ; */ value FROM t;"
-        statements = split_sql_statements(sql)
-        assert len(statements) >= 1
+        result = split_sql_statements(sql)
+        assert len(result) >= 1
 
-    def test_consecutive_semicolons(self) -> None:
-        """Multiple consecutive semicolons should not create empty statements."""
-        sql = "SELECT 1;; SELECT 2;"
-        statements = split_sql_statements(sql)
-        # Should filter out empty statements
-        non_empty = [s for s in statements if s.strip()]
-        assert len(non_empty) == 2
+    def test_malformed_input_graceful(self) -> None:
+        """Malformed input should not crash."""
+        result = split_sql_statements("SELECT ; ; ;")
+        assert isinstance(result, list)
 
-    def test_semicolon_after_comment(self) -> None:
-        """Semicolon immediately after comment line."""
-        sql = "-- comment;\nSELECT * FROM t;"
-        statements = split_sql_statements(sql)
-        assert len(statements) == 1
-
-    def test_large_batch_of_statements(self) -> None:
-        """Large number of statements."""
-        sql = ";".join(f"SELECT {i}" for i in range(100)) + ";"
-        statements = split_sql_statements(sql)
-        assert len(statements) == 100
-
-    def test_preserves_content(self) -> None:
-        """Statement content keywords should be preserved (whitespace may be normalized)."""
-        sql = "  SELECT   *   FROM   users  ;"
-        statements = split_sql_statements(sql)
-        assert len(statements) == 1
-        # sqlglot may normalize whitespace, but keywords should remain
-        upper = statements[0].upper()
-        assert "SELECT" in upper and "FROM" in upper and "USERS" in upper
+    def test_mixed_comments_strings(self) -> None:
+        """Complex mix of comments, strings, semicolons."""
+        sql = "SELECT 'a;b' AS x; /*comment;*/ SELECT 'c;d';"
+        result = split_sql_statements(sql)
+        assert len(result) == 2

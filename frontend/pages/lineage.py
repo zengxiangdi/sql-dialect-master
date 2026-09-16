@@ -24,7 +24,7 @@ def render_lineage_page(theme: ColorTokens) -> None:
         <div style="padding:12px 0; margin-bottom:16px; border-bottom:1px solid {theme.border};">
             <div style="font-size:18px; font-weight:700; color:{theme.text_primary};">Lineage</div>
             <div style="font-size:12px; color:{theme.text_muted}; margin-top:2px;">
-                Visualize table and column dependencies
+                Table dependencies and column references from AST analysis
             </div>
         </div>
         """,
