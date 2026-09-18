@@ -8,6 +8,9 @@ import logging
 import re
 from typing import Tuple, List, Callable, Optional
 
+import sqlglot
+from sqlglot import exp
+
 from .rules import rule_engine, RuleEngine
 from .function_call_scanner import replace_function_calls
 from .p1_sql_scanner import mask_non_executable, executable_segments
@@ -105,6 +108,9 @@ class PostProcessor:
         if source == "oracle" and target in ("mysql", "postgres", "hive", "spark"):
             result, rownum_notes = self._convert_rownum_to_limit(result)
             notes.extend(rownum_notes)
+        if source == "oracle" and target in ("hive", "spark", "databricks"):
+            result, listagg_notes = self._convert_listagg_to_array_join(result)
+            notes.extend(listagg_notes)
         if source == "mysql" and target == "postgres":
             result, gc_notes = self._fix_group_concat_default_separator(result)
             notes.extend(gc_notes)
@@ -271,8 +277,74 @@ class PostProcessor:
             warnings.append("WARNING: Materialized view syntax and refresh mechanisms vary by database.")
         return warnings
 
+    def _convert_listagg_to_array_join(self, sql: str) -> Tuple[str, List[str]]:
+        """Convert Oracle LISTAGG→Hive-family aggregated output to ARRAY_JOIN(COLLECT_LIST(...)).
+
+        sqlglot transpiles Oracle LISTAGG to GROUP_CONCAT for hive/spark/databricks,
+        but Hive does not natively support GROUP_CONCAT. This method rewrites the
+        sqlglot-produced GROUP_CONCAT(... ORDER BY ..., sep) form to
+        ARRAY_JOIN(COLLECT_LIST(expr), sep). Ordering semantics are explicitly
+        noted as lost because Hive's COLLECT_LIST does not preserve input order.
+
+        The separator is the last Ordered expression when it is a string Literal.
+        """
+        try:
+            tree = sqlglot.parse_one(sql, read="hive")
+        except sqlglot.errors.ParseError:
+            return sql, []
+
+        notes = []
+        rewritten = False
+
+        for node in list(tree.walk()):
+            if not isinstance(node, exp.GroupConcat):
+                continue
+            expr = node.this
+            sep = node.args.get("separator")
+
+            has_order = isinstance(expr, exp.Order)
+            if has_order:
+                inner_expr = expr.this
+                # The separator is encoded as the last Ordered expression when it's a string literal
+                order_exprs = expr.expressions
+                if (
+                    order_exprs
+                    and isinstance(order_exprs[-1].this, exp.Literal)
+                    and order_exprs[-1].this.is_string
+                ):
+                    sep = order_exprs[-1].this
+            else:
+                inner_expr = expr
+
+            collect_list = exp.Anonymous(
+                this="COLLECT_LIST",
+                expressions=[inner_expr],
+            )
+            array_join = exp.Anonymous(
+                this="ARRAY_JOIN",
+                expressions=[collect_list, sep or exp.Literal.string(",")],
+            )
+            node.replace(array_join)
+            if has_order:
+                notes.append(
+                    "LISTAGG ordering semantics cannot be preserved in Hive; "
+                    "converted to ARRAY_JOIN(COLLECT_LIST()) which does not guarantee order"
+                )
+            rewritten = True
+
+        if rewritten:
+            return tree.sql(dialect="hive"), notes
+        return sql, notes
+
     def get_stats(self) -> dict:
         return {
             "rule_engine": self.engine.get_stats(),
-            "custom_handlers": ["DECODE to CASE", "DATE_FORMAT conversion", "TOP to LIMIT", "ROWNUM to LIMIT", "GROUP_CONCAT separator fix"]
+            "custom_handlers": [
+                "DECODE to CASE",
+                "DATE_FORMAT conversion",
+                "TOP to LIMIT",
+                "ROWNUM to LIMIT",
+                "GROUP_CONCAT separator fix",
+                "LISTAGG to ARRAY_JOIN (Hive)",
+            ],
         }

@@ -355,10 +355,9 @@ class SQLTranspiler:
         warnings = []
         if "DROP TABLE" in sql_upper or "TRUNCATE" in sql_upper:
             warnings.append("⚠️ Dangerous operation detected: DROP/TRUNCATE")
-        if _contains_sql_keyword(sql_upper, "DELETE") and not _contains_sql_keyword(sql_upper, "WHERE"):
-            warnings.append("⚠️ DELETE without WHERE clause - will affect all rows")
-        if _contains_sql_keyword(sql_upper, "UPDATE") and not _contains_sql_keyword(sql_upper, "WHERE"):
-            warnings.append("⚠️ UPDATE without WHERE clause - will affect all rows")
+        # NOTE: DML-without-WHERE warnings are produced exclusively by
+        # _validate_security via the AST-based _dml_without_where() check.
+        # The regex-based check below would duplicate those warnings.
         if "SELECT *" in sql_upper:
             warnings.append("💡 Consider specifying columns instead of SELECT *")
         if "CROSS JOIN" in sql_upper:
