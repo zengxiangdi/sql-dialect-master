@@ -121,4 +121,6 @@ jobs:
       - name: Run runtime semantic regression suite
         env:
           SDM_TEST_POSTGRES_DSN: postgresql://postgres:postgres@127.0.0.1:5432/sql_dialect_test
-        run: pytest backend/tests/test_runtime_semantics.py -q
+        run: |
+          pytest backend/tests/test_runtime_semantics.py -q
+          pytest backend/tests/semantic/test_runtime_semantics.py -q
