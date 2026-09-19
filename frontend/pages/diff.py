@@ -15,6 +15,7 @@ from backend.core.semantic_diff import diff_sql_ast
 from frontend.app_context_v2 import DIALECTS
 from frontend.core.design_tokens import ColorTokens
 from frontend.core.navigation import consume_navigation_intent
+from frontend.core.state import SessionState
 from frontend.core.viewmodels import SemanticDiffViewModel
 
 _FINDING_KEY = "sdm_selected_finding_index"
@@ -22,27 +23,28 @@ _FINDING_KEY = "sdm_selected_finding_index"
 
 def render_diff_page(theme: ColorTokens) -> None:
     """Render the Semantic Diff workspace."""
+    state = SessionState.get()
 
     _render_header(theme)
     _render_input_section(theme)
 
     # Process navigation intent from Convert → Diff handoff
     intent = consume_navigation_intent()
-    if intent and intent.action == "open_diff" and not st.session_state.get("diff_last_vm"):
+    if intent and intent.action == "open_diff" and not state.diff_last_vm:
         st.session_state.diff_src_sql = intent.get_payload("source", "")
         st.session_state.diff_tgt_sql = intent.get_payload("target", "")
         st.session_state.diff_src_dialect = intent.get_payload("src_dialect", "postgres")
         st.session_state.diff_tgt_dialect = intent.get_payload("tgt_dialect", "mysql")
-        st.session_state[_FINDING_KEY] = None
+        state.selected_finding_index = None
 
-    # Get saved inputs
+    # Get saved inputs (widget keys — managed by Streamlit)
     src_sql = st.session_state.get("diff_src_sql", "")
     tgt_sql = st.session_state.get("diff_tgt_sql", "")
 
     # Render results if available
-    vm: SemanticDiffViewModel | None = st.session_state.get("diff_last_vm")
+    vm: SemanticDiffViewModel | None = state.diff_last_vm
     if vm is not None:
-        selected_idx = st.session_state.get(_FINDING_KEY)
+        selected_idx = state.selected_finding_index
         _render_results(vm, src_sql, tgt_sql, selected_idx, theme)
 
 
@@ -137,8 +139,8 @@ def _run_comparison(theme: ColorTokens) -> None:
         target_dialect=tgt_dialect,
         diff=backend_result,
     )
-    st.session_state.diff_last_vm = vm
-    st.session_state.sdm_selected_finding_index = None
+    state.diff_last_vm = vm
+    state.clear_finding_selection()
     st.rerun()
 
 

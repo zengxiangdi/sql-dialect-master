@@ -11,6 +11,7 @@ import streamlit as st
 from frontend.app_context_v2 import DIALECTS, generate_nl2sql, get_dialect_label
 from frontend.core.design_tokens import ColorTokens
 from frontend.core.escaping import esc
+from frontend.core.state import SessionState
 from frontend.core.viewmodels import NL2SQLViewModel
 
 # ── Example queries (no emoji) ─────────────────────────────────────────
@@ -31,10 +32,11 @@ EXAMPLE_QUERIES: dict[str, str] = {
 
 def render_nl2sql_page(theme: ColorTokens) -> None:
     """Render the NL2SQL workspace."""
+    state = SessionState.get()
 
     _render_header(theme)
     _render_input_section(theme)
-    _render_result_section(theme)
+    _render_result_section(state, theme)
 
 
 def _render_header(theme: ColorTokens) -> None:
@@ -122,15 +124,15 @@ def _run_generation(theme: ColorTokens) -> None:
         result = generate_nl2sql(nl_input, dialect, table_hint or None)
 
     vm = NL2SQLViewModel.from_nl2sql_result(result)
-    st.session_state.nl_last_vm = vm
-    st.session_state.nl_generation_error = None
+    state.nl_last_vm = vm
+    state.nl_generation_error = None
     st.rerun()
 
 
-def _render_result_section(theme: ColorTokens) -> None:
+def _render_result_section(state: SessionState, theme: ColorTokens) -> None:
     """Render the generation result."""
-    vm: NL2SQLViewModel | None = st.session_state.get("nl_last_vm")
-    error: str | None = st.session_state.get("nl_generation_error")
+    vm: NL2SQLViewModel | None = state.nl_last_vm
+    error: str | None = state.nl_generation_error
 
     if error:
         st.error(f"Generation failed: {esc(error)}")

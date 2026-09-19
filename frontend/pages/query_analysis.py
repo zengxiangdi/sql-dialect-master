@@ -10,10 +10,12 @@ import streamlit as st
 from frontend.app_context_v2 import DIALECTS, get_dialect_label
 from frontend.core.design_tokens import ColorTokens
 from frontend.core.escaping import esc
+from frontend.core.state import SessionState
 
 
 def render_query_analysis_page(theme: ColorTokens) -> None:
     """Render the Query Analysis workspace."""
+    state = SessionState.get()
 
     st.markdown(
         f"""
@@ -53,12 +55,12 @@ def render_query_analysis_page(theme: ColorTokens) -> None:
         else:
             try:
                 result = _analyze_sql(sql, dialect)
-                st.session_state.qa_last_result = result
+                state.qa_last_result = result
                 st.rerun()
             except Exception as e:  # noqa: BLE001
                 st.error(f"Parse error: {esc(str(e))}")
 
-    result = st.session_state.get("qa_last_result")
+    result = state.qa_last_result
     if result is None:
         return
 
