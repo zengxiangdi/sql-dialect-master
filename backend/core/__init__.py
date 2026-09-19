@@ -25,12 +25,6 @@ from .exceptions import (
     SecurityViolationError,
     ValidationError,
 )
-from .compatibility import install_compatibility_patches
-from .structured_aggregation import install_structured_aggregation_rules
-
-# Explicit compatibility entry points are no-ops; kept for import stability.
-install_compatibility_patches()
-install_structured_aggregation_rules()
 
 __all__ = [
     "setup_logging",
@@ -60,5 +54,4 @@ __all__ = [
     "ParseError",
     "SecurityViolationError",
     "ValidationError",
-    "install_compatibility_patches",
 ]

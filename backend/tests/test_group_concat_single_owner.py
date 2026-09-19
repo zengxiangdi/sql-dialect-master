@@ -1,7 +1,8 @@
 """Regression tests proving GROUP_CONCAT conversion has a single owning implementation.
 
-The effective runtime implementation is the structured_aggregation rule
-(mysql_group_concat_to_postgres) which delegates to _replace_group_concat.
+The effective runtime implementation is the rule engine's
+structured aggregation rewrite (mysql_group_concat_to_postgres) which
+delegates to _replace_group_concat.
 
 post_processor._fix_group_concat_default_separator is dead code — it never
 fires because the rule engine handles all GROUP_CONCAT cases first, converting
@@ -9,11 +10,8 @@ GROUP_CONCAT to STRING_AGG before _fix_group_concat_default_separator runs.
 """
 import pytest
 
-from backend.core.compatibility import install_compatibility_patches
 from backend.core.post_processor import PostProcessor
 from backend.core.rules import rule_engine
-
-install_compatibility_patches()
 
 
 @pytest.mark.parametrize(

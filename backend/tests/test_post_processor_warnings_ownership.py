@@ -5,10 +5,7 @@ never monkey-patched, and correctly ignores literals/comments/identifiers.
 """
 import pytest
 
-from backend.core.compatibility import install_compatibility_patches
 from backend.core.post_processor import PostProcessor
-
-install_compatibility_patches()
 
 
 class TestPostProcessorWarningsOwnership:
