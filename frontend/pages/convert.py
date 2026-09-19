@@ -22,6 +22,7 @@ from frontend.core.design_tokens import (
 )
 from frontend.core.escaping import esc
 from frontend.core.navigation import create_navigation_intent
+from frontend.core.state import SessionState
 from frontend.core.viewmodels import (
     BatchConversionViewModel,
     ConversionViewModel,
@@ -31,6 +32,7 @@ from frontend.ui.status import render_batch_result, render_result_panel
 
 def render_convert_page(theme: ColorTokens) -> None:
     """Render the Convert workspace page."""
+    state = SessionState.get()
 
     # ── Toolbar ──────────────────────────────────────────────────────
     _render_toolbar(theme)
@@ -96,7 +98,7 @@ def render_convert_page(theme: ColorTokens) -> None:
         )
 
         # Show converted SQL or placeholder
-        target_sql_display = st.session_state.get("convert_target_sql", "")
+        target_sql_display = state.convert_target_sql
         if target_sql_display:
             st.code(target_sql_display, language="sql")
             col_copy, col_dl = st.columns([1, 1])
@@ -120,17 +122,17 @@ def render_convert_page(theme: ColorTokens) -> None:
             result = convert_sql(src_sql, src_dialect, tgt_dialect)
 
         vm = ConversionViewModel.from_transpile_result(result)
-        st.session_state.convert_last_vm = vm
-        st.session_state.convert_target_sql = vm.target_sql or ""
+        state.convert_last_vm = vm
+        state.convert_target_sql = vm.target_sql or ""
 
         # Add to history
-        _add_to_history(vm, theme)
+        _add_to_history(state, vm, theme)
         st.rerun()
     elif convert_clicked and not src_sql.strip():
         st.warning("Please enter SQL to convert.")
 
     # ── Result display ─────────────────────────────────────────────
-    vm: ConversionViewModel | None = st.session_state.get("convert_last_vm")
+    vm: ConversionViewModel | None = state.convert_last_vm
     if vm is not None:
         st.markdown("---")
         render_result_panel(
@@ -225,10 +227,10 @@ def _render_batch_section(src_dialect: str, tgt_dialect: str, theme: ColorTokens
                     statements = split_sql_statements(batch_sql, batch_src)
                     results = batch_convert_sql(statements, batch_src, batch_tgt)
                     bvm = BatchConversionViewModel.from_results(statements, results)
-                    st.session_state.batch_last_vm = bvm
+                    state.batch_last_vm = bvm
                 st.rerun()
 
-    bvm: BatchConversionViewModel | None = st.session_state.get("batch_last_vm")
+    bvm: BatchConversionViewModel | None = state.batch_last_vm
     if bvm is not None:
         render_batch_result(
             total=bvm.total,
@@ -252,23 +254,20 @@ def _render_batch_section(src_dialect: str, tgt_dialect: str, theme: ColorTokens
         )
 
 
-def _add_to_history(vm: ConversionViewModel, theme: ColorTokens) -> None:
-    """Add a successful conversion to session history."""
+def _add_to_history(
+    state: SessionState,
+    vm: ConversionViewModel,
+    theme: ColorTokens,
+) -> None:
+    """Add a successful conversion to session history via SessionState."""
     if not vm.success:
         return
-    from datetime import UTC, datetime
-    import uuid
-    entry = {
-        "identity": uuid.uuid4().hex[:8],
-        "sql": vm.source_sql,
-        "src": vm.source_dialect,
-        "tgt": vm.target_dialect,
-        "result": vm.target_sql,
-        "status": vm.status,
-        "created_at": datetime.now(UTC).isoformat(),
-    }
-    if "sdm_history" not in st.session_state:
-        st.session_state.sdm_history = []
-    st.session_state.sdm_history.append(entry)
-    if "sdm_favorites" not in st.session_state:
-        st.session_state.sdm_favorites = []
+    from datetime import UTC
+    state.add_history_entry(
+        sql=vm.source_sql,
+        source_dialect=vm.source_dialect,
+        target_dialect=vm.target_dialect,
+        result_sql=vm.target_sql,
+        status=vm.status,
+        created_at=datetime.now(UTC).isoformat(),
+    )

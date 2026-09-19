@@ -4,10 +4,12 @@ from __future__ import annotations
 import streamlit as st
 
 from frontend.core.design_tokens import ColorTokens
+from frontend.core.state import SessionState
 
 
 def render_settings_page(theme: ColorTokens) -> None:
     """Render the Settings page."""
+    state = SessionState.get()
 
     st.markdown(
         f"""
@@ -24,11 +26,11 @@ def render_settings_page(theme: ColorTokens) -> None:
     st.markdown("##### Theme")
     col_theme_sel, _ = st.columns([2, 1])
     with col_theme_sel:
-        current = st.session_state.get("sdm_theme", "dark")
+        current = state.theme
         selected = st.selectbox("Color theme", ["dark", "light"], index=["dark", "light"].index(current) if current in ["dark", "light"] else 0, key="settings_theme_sel")
     with st.container():
         if st.button("Apply Theme", key="settings_apply_theme"):
-            st.session_state.sdm_theme = selected
+            state.theme = selected
             st.rerun()
 
     # Keyboard shortcuts reference

@@ -7,10 +7,12 @@ import streamlit as st
 
 from frontend.core.design_tokens import ColorTokens
 from frontend.core.escaping import esc
+from frontend.core.state import SessionState
 
 
 def render_history_page(theme: ColorTokens) -> None:
     """Render the History page."""
+    state = SessionState.get()
 
     st.markdown(
         f"""
@@ -26,19 +28,13 @@ def render_history_page(theme: ColorTokens) -> None:
         unsafe_allow_html=True,
     )
 
-    history: list[dict] = st.session_state.get("sdm_history", [])
+    history = state.history
 
     if not history:
         st.info("No conversion history yet.")
         return
 
-    # Ensure each entry has a stable identity key
-    for entry in history:
-        if "identity" not in entry:
-            import uuid
-            entry["identity"] = str(uuid.uuid4())[:8]
-
-    # Search and filter controls
+    # Search and filter controls (widget keys — managed by Streamlit)
     col_search, col_filter = st.columns([2, 1])
     with col_search:
         search = st.text_input("Search", key="hist_search", placeholder="Search SQL...", label_visibility="collapsed")
@@ -59,10 +55,14 @@ def render_history_page(theme: ColorTokens) -> None:
 
     # Render entries
     for entry in filtered:
-        _render_history_entry(entry, theme)
+        _render_history_entry(state, entry, theme)
 
 
-def _render_history_entry(entry: dict, theme: ColorTokens) -> None:
+def _render_history_entry(
+    state: SessionState,
+    entry: dict,
+    theme: ColorTokens,
+) -> None:
     """Render a single history entry."""
     src = esc(entry.get("src", "unknown"))
     tgt = esc(entry.get("tgt", "unknown"))
@@ -113,17 +113,15 @@ def _render_history_entry(entry: dict, theme: ColorTokens) -> None:
             if st.button("Copy", key=f"hist_copy_{identity}"):
                 st.copy_button("Copy SQL", data=entry.get("sql", ""))
         with col_fav:
-            favs: list[str] = st.session_state.get("sdm_favorites", [])
-            if identity not in favs:
+            if not state.is_favorite(identity):
                 if st.button("☆", key=f"hist_fav_{identity}"):
-                    st.session_state.sdm_favorites.append(identity)
+                    state.add_favorite(identity)
                     st.rerun()
             else:
                 st.button("★", key=f"hist_fav_{identity}", disabled=True)
         with col_del:
             if st.button("Del", key=f"hist_del_{identity}"):
-                history = st.session_state.sdm_history
-                st.session_state.sdm_history = [h for h in history if h.get("identity") != identity]
+                state.remove_history_entry(identity)
                 st.rerun()
 
 

@@ -3,7 +3,7 @@
 Refactored frontend architecture with:
 - Dark / Light theme system
 - Sidebar navigation (Workspace / Library / System)
-- ViewModel-based state management
+- SessionState-based application state management
 - Unified NavigationIntent for cross-page handoffs
 - Command Palette (⌘K / Ctrl+K)
 - Security-safe HTML rendering
@@ -32,6 +32,7 @@ from frontend.core.navigation import (
     NavigationIntent,
     consume_navigation_intent,
 )
+from frontend.core.state import SessionState
 from frontend.core.styles import generate_css
 from frontend.pages.convert import render_convert_page
 from frontend.pages.diff import render_diff_page
@@ -62,53 +63,37 @@ PAGE_MAP = {
 }
 
 
-# ── Initialize session state ─────────────────────────────────────────
-_NAV_KEY = "sdm_navigation_intent"
-_FINDING_KEY = "sdm_selected_finding_index"
-
-_DEFAULTS = {
-    "sdm_theme": "dark",
-    "sdm_history": [],
-    "sdm_favorites": [],
-    "convert_last_vm": None,
-    "batch_last_vm": None,
-    "nl_last_vm": None,
-    "lineage_last_vm": None,
-    "qa_last_result": None,
-    "diff_last_vm": None,
-    _NAV_KEY: NavigationIntent(),
-    _FINDING_KEY: None,
-}
-for key, default in _DEFAULTS.items():
-    if key not in st.session_state:
-        st.session_state[key] = default
+# ── Initialize session state via SessionState adapter ────────────────
+_state = SessionState.get()
+_state.migrate()       # Upgrade legacy session data first
+_state.ensure_defaults()  # Then fill in missing keys with defaults
 
 # ── Process navigation intent (consumed once per request) ────────────
-_pending = consume_navigation_intent()
+_pending = _state.consume_navigation_intent()
 if _pending and _pending.is_valid and _pending.target_page in PAGE_MAP:
     st.query_params["page"] = _pending.target_page
     if _pending.action == "open_diff" and _pending.get_payload("source"):
-        st.session_state.diff_src_sql = _pending.get_payload("source")
-        st.session_state.diff_tgt_sql = _pending.get_payload("target")
+        st.session_state.diff_src_sql = _pending.get_payload("source", "")
+        st.session_state.diff_tgt_sql = _pending.get_payload("target", "")
         st.session_state.diff_src_dialect = _pending.get_payload("src_dialect", "postgres")
         st.session_state.diff_tgt_dialect = _pending.get_payload("tgt_dialect", "mysql")
-        st.session_state.diff_last_vm = None
-        st.session_state[_FINDING_KEY] = None
+        _state.diff_last_vm = None
+        _state.clear_finding_selection()
     elif _pending.action == "open_conversion" and _pending.get_payload("sql"):
         st.session_state.convert_src_sql = _pending.get_payload("sql")
         st.session_state.convert_src = _pending.get_payload("dialect", "postgres")
-        st.session_state.convert_target_sql = ""
-        st.session_state.convert_last_vm = None
+        _state.convert_target_sql = ""
+        _state.convert_last_vm = None
     elif _pending.action == "select_finding" and _pending.has_payload("finding_index"):
-        st.session_state[_FINDING_KEY] = _pending.get_payload("finding_index")
+        _state.selected_finding_index = _pending.get_payload("finding_index")
     st.rerun()
 
 
 # ── Theme setup ──────────────────────────────────────────────────────
-theme_name: str = st.session_state.get("sdm_theme", "dark")
+theme_name: str = _state.theme
 if theme_name not in THEMES:
     theme_name = "dark"
-    st.session_state.sdm_theme = "dark"
+    _state.theme = "dark"
 current_theme = THEMES[theme_name]
 
 # Apply CSS
@@ -190,12 +175,11 @@ with st.sidebar:
     with col_theme_btn:
         if st.button("🌙" if theme_name == "dark" else "☀️", key="theme_toggle"):
             new_theme = "light" if theme_name == "dark" else "dark"
-            st.session_state.sdm_theme = new_theme
+            _state.theme = new_theme
             st.rerun()
 
     # History count
-    history = st.session_state.get("sdm_history", [])
-    st.caption(f"{len(history)} conversions")
+    st.caption(f"{_state.history_count()} conversions")
 
 
 # ── Main workspace ───────────────────────────────────────────────────

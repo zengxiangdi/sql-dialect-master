@@ -7,6 +7,7 @@ import streamlit as st
 from frontend.app_context_v2 import DIALECTS, get_dialect_label
 from frontend.core.design_tokens import ColorTokens
 from frontend.core.escaping import esc
+from frontend.core.state import SessionState
 from frontend.core.viewmodels import (
     LineageOutputColumn,
     LineageTable,
@@ -18,6 +19,7 @@ from frontend.core.viewmodels import (
 
 def render_lineage_page(theme: ColorTokens) -> None:
     """Render the Lineage workspace."""
+    state = SessionState.get()
 
     st.markdown(
         f"""
@@ -52,12 +54,12 @@ def render_lineage_page(theme: ColorTokens) -> None:
         else:
             try:
                 vm = _build_lineage(sql, dialect)
-                st.session_state.lineage_last_vm = vm
+                state.lineage_last_vm = vm
                 st.rerun()
             except Exception as e:  # noqa: BLE001
                 st.error(f"Parse error: {esc(str(e))}")
 
-    vm: LineageViewModel | None = st.session_state.get("lineage_last_vm")
+    vm: LineageViewModel | None = state.lineage_last_vm
     if vm is None:
         return
 
