@@ -118,6 +118,73 @@ print(result.sql)
 # Output: SELECT * FROM orders WHERE created_at >= DATE_SUB(CURRENT_DATE, 7)
 ```
 
+#### Relational Query Support (D2)
+
+NL2SQL supports existential relationship queries using `EXISTS` / `NOT EXISTS` subqueries instead of physical `JOIN`s, preserving row count and avoiding duplicate expansion from 1:N relationships.
+
+**Known relationships** (explicit mapping):
+- `users ↔ orders`: `users.id = orders.user_id`
+- `customers ↔ orders`: `customers.id = orders.customer_id`
+- `orders ↔ products`: `orders.product_id = products.id`
+- `employees ↔ departments`: `employees.dept_id = departments.id`
+
+**Examples:**
+```python
+# Positive relational query → EXISTS
+result = generator.generate("find users who have orders", "postgres")
+# Output: SELECT * FROM users WHERE EXISTS (SELECT 1 FROM orders WHERE users.id = orders.user_id)
+
+# Negative relational query → NOT EXISTS
+result = generator.generate("find users without orders", "postgres")
+# Output: SELECT * FROM users WHERE NOT EXISTS (SELECT 1 FROM orders WHERE users.id = orders.user_id)
+```
+
+**Unknown relationships fail safely:**
+```python
+result = generator.generate("find users who have invoices", "postgres")
+# Output: success=False, explanation="Unable to safely infer the relationship..."
+```
+
+Relationship inference uses explicit mapping only — no fabricated foreign keys. Use `table_hint` to specify schema-qualified tables when needed.
+
+#### Date Arithmetic Semantics (D3)
+
+Date expressions follow a **rolling vs calendar-relative** distinction:
+
+| Expression | Semantic | DSL (postgres) |
+|------------|----------|----------------|
+| `today` | current calendar date | `= CURRENT_DATE` |
+| `yesterday` | rolling -1 day | `= DATE_SUB(CURRENT_DATE, 1)` |
+| `tomorrow` | rolling +1 day | `= DATE_ADD(CURRENT_DATE, 1)` |
+| `last N days` | rolling N days | `>= DATE_SUB(CURRENT_DATE, N)` |
+| `last N weeks` | rolling N×7 days | `>= DATE_SUB(CURRENT_DATE, N×7)` |
+| `last week` | rolling 7 days | `>= DATE_SUB(CURRENT_DATE, 7)` |
+| `last N months` | calendar -N months | `>= ADD_MONTHS(CURRENT_DATE, -N)` |
+| `last month` | calendar -1 month | `>= ADD_MONTHS(CURRENT_DATE, -1)` |
+| `last N years` | calendar -N years | `>= ADD_MONTHS(CURRENT_DATE, -N×12)` |
+| `last year` | calendar -1 year | `>= ADD_MONTHS(CURRENT_DATE, -12)` |
+
+**Key distinction:** `last week` uses a rolling 7-day window, while `last month`/`last year` use calendar arithmetic (`ADD_MONTHS`). This means `last month` from March 31 yields February 28/29 (not 30 days prior), and `last year` preserves month/day within the calendar.
+
+Date conditions in combined queries (e.g., "users who have orders from last 7 days") are scoped to the relation table's date column inside the `EXISTS` subquery.
+
+#### Type Mapping with Precision (D1)
+
+TypeMapper now supports parameterized types and precision-aware warnings:
+
+```python
+from backend.core import TypeMapper
+
+mapper = TypeMapper()
+result = mapper.map_type("VARCHAR2(2000)", "oracle", "postgres")
+# Output: source_type="VARCHAR2(n)", target_type="VARCHAR(n)", precision=2000
+
+result = mapper.map_type("VARCHAR2(8000)", "oracle", "postgres")
+# Output: warnings include "exceeds Oracle's default VARCHAR2 limit of 4000"
+```
+
+Supports `VARCHAR`, `VARCHAR2`, `NVARCHAR`, `CHAR` with numeric precision or `MAX`. Unknown parameterized types resolve to the canonical base type.
+
 ## 🏗️ Project Structure
 
 ```

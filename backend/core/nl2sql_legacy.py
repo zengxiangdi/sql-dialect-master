@@ -131,6 +131,7 @@ class NL2SQLGenerator:
         dialect: str,
         table_hint: Optional[str],
         column_hints: Optional[List[str]],
+        text_lower: str = "",
     ) -> NL2SQLResult:
         """Generate SQL from a matched template."""
         confidence = 0.7
@@ -142,6 +143,9 @@ class NL2SQLGenerator:
             confidence += 0.1
         columns = column_hints or analysis["columns"] or ["*"]
         numbers = analysis["numbers"]
+        # Extract date/time conditions so template-based generation can use them
+        match_text = match_groups.get("match", text_lower) if match_groups else text_lower
+        date_conditions = self._extract_conditions_enhanced(text_lower, match_text)
 
         try:
             if template.name == "top_n_query":
@@ -241,6 +245,21 @@ class NL2SQLGenerator:
             else:
                 sql = f"SELECT *\nFROM {table}"
                 explanation_parts.append(f"查询表: {table}")
+
+            # Append date/time conditions if present
+            date_conditions = [
+                c for c in date_conditions
+                if any(kw in text_lower for kw in [
+                    "today", "yesterday", "tomorrow", "last", "past",
+                    "本周", "本月", "本年", "今天", "昨天", "明天"
+                ]) and c not in ["status = 'active'", "status = 'inactive'",
+                                  "is_deleted = 1", "is_deleted = 0"]
+            ]
+            if date_conditions:
+                condition_sql = " AND ".join(date_conditions)
+                sql = f"{sql}\nWHERE {condition_sql}"
+                explanation_parts.append(f"日期条件: {len(date_conditions)}个")
+                confidence += 0.1
 
             sql = f"-- Generated for {dialect.upper()}\n{sql}"
             sql = self._apply_dialect_adjustments(sql, dialect)
@@ -405,9 +424,14 @@ class NL2SQLGenerator:
             )
 
         template, match_groups = self._match_templates(text_lower)
+        # If relational keywords detected (D2), bypass templates and use enhanced path
+        # to ensure EXISTS/NOT EXISTS structure instead of physical JOIN
+        if template and self._has_relational_keyword(text_lower):
+            template = None
+            logger.debug("NL2SQL: Relational keyword detected, bypassing template matching")
         if template:
             result = self._generate_from_template(
-                template, match_groups, analysis, dialect, table_hint, column_hints
+                template, match_groups, analysis, dialect, table_hint, column_hints, text_lower
             )
             if result.success:
                 logger.info(
@@ -421,7 +445,11 @@ class NL2SQLGenerator:
         parsed = self._parse_text(text_lower, text)
         parsed.update(analysis)
         operation = self._detect_operation(text_lower)
-        table = table_hint or self._extract_table(text_lower)
+        # For D2 relational queries, use table_hint if provided, else first detected table
+        if self._has_relational_keyword(text_lower):
+            table = table_hint or self._extract_table_subject(text_lower) or "table_name"
+        else:
+            table = table_hint or self._extract_table(text_lower)
         columns = column_hints if column_hints else self._extract_columns(text_lower)
         conditions = self._extract_conditions_enhanced(text_lower, text)
         aggregations = self._extract_aggregations(text_lower)
@@ -430,6 +458,23 @@ class NL2SQLGenerator:
         limit = self._extract_limit(text_lower)
         joins = self._extract_joins(text_lower)
         distinct = self._check_distinct(text_lower)
+
+        # Check if any relational joins were skipped due to unknown relationships
+        if self._has_relational_keyword(text_lower) and joins:
+            # All joins have valid relationships
+            pass
+        elif self._has_relational_keyword(text_lower):
+            # Relational keywords detected but no valid joins found
+            # This means we have an unknown relationship
+            return NL2SQLResult(
+                success=False,
+                input_text=text,
+                sql=None,
+                dialect=dialect,
+                explanation="Unable to safely infer the relationship between the tables. Please provide the join condition or schema relationship.",
+                confidence=0.0,
+                suggestions=["Specify the relationship between tables, e.g., 'users.id = invoices.user_id'"],
+            )
 
         sql, explanation, confidence = self._build_sql_enhanced(
             operation,
@@ -469,11 +514,14 @@ class NL2SQLGenerator:
             "order": None,
             "joins": [],
         }
+        # Word-boundary matching for tables to avoid false positives like "order" matching "orders"
+        import re as _re
         for pattern, table in self.TABLE_PATTERNS.items():
-            if pattern in text_lower and table not in parsed["tables"]:
+            if _re.search(r'\b' + _re.escape(pattern) + r'\b', text_lower) and table not in parsed["tables"]:
                 parsed["tables"].append(table)
+        # Word-boundary matching for columns
         for pattern, column in self.COLUMN_PATTERNS.items():
-            if pattern in text_lower and column not in parsed["columns"]:
+            if re.search(r'\b' + re.escape(pattern) + r'\b', text_lower) and column not in parsed["columns"]:
                 parsed["columns"].append(column)
         numbers = re.findall(r"\d+", original)
         if numbers:
@@ -497,6 +545,23 @@ class NL2SQLGenerator:
             tables_found.sort(key=lambda item: (-item[2], item[0]))
             return tables_found[0][1]
         return "table_name"
+
+    def _extract_table_subject(self, text: str) -> Optional[str]:
+        """Extract the subject table (first appearing in text) for D2 relational queries.
+
+        For queries like 'users who have orders', returns 'users' (the subject)
+        rather than 'orders' (the relation). Uses first occurrence position.
+        """
+        candidates = []
+        for pattern, table in self.TABLE_PATTERNS.items():
+            if table not in candidates:
+                pos = text.find(pattern)
+                if pos != -1:
+                    candidates.append((pos, table))
+        if candidates:
+            candidates.sort(key=lambda x: x[0])
+            return candidates[0][1]
+        return None
 
     def _extract_columns(self, text: str) -> list:
         """Extract column names from text."""
@@ -603,6 +668,8 @@ class NL2SQLGenerator:
             conditions.append(f"{date_col} = DATE_SUB(CURRENT_DATE, 1)")
         elif "前天" in text or "day before" in text:
             conditions.append(f"{date_col} = DATE_SUB(CURRENT_DATE, 2)")
+        elif "明天" in text or "tomorrow" in text:
+            conditions.append(f"{date_col} = DATE_ADD(CURRENT_DATE, 1)")
 
         time_patterns = [
             (r"(最近|过去|last|past)\s*(\d+)\s*(天|day)", "DAY"),
@@ -623,6 +690,15 @@ class NL2SQLGenerator:
                 elif unit == "YEAR":
                     conditions.append(f"{date_col} >= ADD_MONTHS(CURRENT_DATE, -{int(n) * 12})")
                 break
+
+        # Bare period expressions without explicit count
+        if not any(c for c in conditions if "DATE_SUB" in c or "DATE_ADD" in c or "ADD_MONTHS" in c or "CURRENT_DATE" in c):
+            if ("last week" in text or "本周" in text) and "this week" not in text and "本周" not in text:
+                conditions.append(f"{date_col} >= DATE_SUB(CURRENT_DATE, 7)")
+            if "last month" in text:
+                conditions.append(f"{date_col} >= ADD_MONTHS(CURRENT_DATE, -1)")
+            if "last year" in text:
+                conditions.append(f"{date_col} >= ADD_MONTHS(CURRENT_DATE, -12)")
 
         if "本周" in text or "this week" in text:
             conditions.append(f"WEEKOFYEAR({date_col}) = WEEKOFYEAR(CURRENT_DATE)")
@@ -745,53 +821,107 @@ class NL2SQLGenerator:
         return None
 
     def _extract_joins(self, text: str) -> list:
-        """Extract JOIN information from text."""
+        """Extract JOIN information from text.
+
+        Detects relational existence patterns (e.g., "users who have orders")
+        and returns structured join contexts for EXISTS-based SQL generation.
+        """
         joins = []
-        tables_found = []
+        # Collect unique tables in text-appearance order (first occurrence wins)
+        # Exclude "order" when it's part of "order by" sorting clause
+        table_occurrences = []
         for pattern, table in self.TABLE_PATTERNS.items():
-            if pattern in text and table not in tables_found:
-                tables_found.append(table)
+            # Skip "order" pattern if it's part of "order by" sorting clause
+            if pattern == "order" and re.search(r'\border\b\s+by\b', text, re.IGNORECASE):
+                continue
+            if re.search(r'\b' + re.escape(pattern) + r'\b', text) and table not in [t for _, t in table_occurrences]:
+                table_occurrences.append((text.find(pattern), table))
+        tables_found = [t for _, t in sorted(table_occurrences)]
         if len(tables_found) >= 2:
-            join_type = "JOIN"
-            if any(k in text for k in ["左连接", "left join", "左关联"]):
-                join_type = "LEFT JOIN"
-            elif any(k in text for k in ["右连接", "right join", "右关联"]):
-                join_type = "RIGHT JOIN"
-            elif any(k in text for k in ["内连接", "inner join"]):
-                join_type = "INNER JOIN"
+            # Determine relation type from keywords
+            # Positive relational: "who have", "with", etc. -> EXISTS
+            # Negative relational: "without", "not have", etc. -> NOT EXISTS
+            # Explicit JOIN keywords: physical JOIN
+            if any(k in text for k in [
+                "without", "not have", "no ",
+                "who don't have", "who doesn't have",
+                "who do not have", "who does not have",
+            ]):
+                join_type = "NOT EXISTS"
+            elif any(k in text for k in [
+                "who have", "who has", "that have", "that has",
+                "with orders", "with customers",
+                "with users", "with employees",
+                "with invoices", "with payments", "with transactions",
+                "with suppliers", "with products",
+                "who placed", "who made", "who created", "who submitted",
+                "in departments", "in products", "in orders", "in users",
+            ]):
+                join_type = "EXISTS"
+            elif any(k in text for k in ["left join", "right join",
+                                          "inner join", "outer join",
+                                          "左连接", "右连接", "内连接"]):
+                join_type = text.split()[0].upper() if " " in text else "JOIN"
+            else:
+                join_type = "JOIN"
+
             main_table = tables_found[0]
             for other_table in tables_found[1:]:
-                joins.append(
-                    {
-                        "type": join_type,
-                        "table": other_table,
-                        "condition": self._guess_join_key(main_table, other_table),
-                    }
-                )
+                join_key = self._guess_join_key(main_table, other_table)
+                if join_key is None:
+                    # Unknown relationship - do not generate fabricated condition
+                    continue
+                joins.append({
+                    "type": join_type,
+                    "table": other_table,
+                    "condition": join_key,
+                    # Mark as relational (EXISTS/NOT EXISTS) rather than physical JOIN
+                    "relational": join_type in ("EXISTS", "NOT EXISTS"),
+                })
         return joins
 
-    def _guess_join_key(self, table1: str, table2: str) -> str:
-        """Guess the join key between two tables."""
+    def _guess_join_key(self, table1: str, table2: str) -> Optional[str]:
+        """Guess the join key between two tables.
+
+        Returns None for unknown relationships instead of guessing.
+        """
         join_patterns = {
             ("users", "orders"): "users.id = orders.user_id",
             ("orders", "users"): "orders.user_id = users.id",
             ("users", "transactions"): "users.id = transactions.user_id",
             ("orders", "products"): "orders.product_id = products.id",
             ("products", "orders"): "products.id = orders.product_id",
+            ("users", "products"): "users.id = products.user_id",
+            ("products", "users"): "products.user_id = users.id",
             ("employees", "departments"): "employees.dept_id = departments.id",
             ("departments", "employees"): "departments.id = employees.dept_id",
             ("orders", "payments"): "orders.id = payments.order_id",
             ("customers", "orders"): "customers.id = orders.customer_id",
+            ("orders", "customers"): "orders.customer_id = customers.id",
         }
         key = (table1, table2)
         if key in join_patterns:
             return join_patterns[key]
-        singular = table1.rstrip("s")
-        return f"{table1}.id = {table2}.{singular}_id"
+        # Unknown relationship - do not guess
+        return None
 
     def _check_distinct(self, text: str) -> bool:
         """Check if DISTINCT is needed."""
         return any(k in text for k in ["去重", "唯一", "不重复", "distinct", "unique"])
+
+    def _has_relational_keyword(self, text: str) -> bool:
+        """Check if text contains relational existence keywords (D2)."""
+        relational_patterns = [
+            "who have", "who has", "that have", "that has",
+            "who don't have", "who doesn't have", "who do not have", "who does not have",
+            "without", "no ", "not have", "don't have", "doesn't have",
+            "with orders", "with customers", "with products",
+            "with users", "with employees", "with suppliers",
+            "with invoices", "with payments", "with transactions",
+            "who placed", "who made", "who created", "who submitted",
+            "in departments", "in products", "in orders", "in users",
+        ]
+        return any(pattern in text for pattern in relational_patterns)
 
     def _build_sql_enhanced(
         self,
@@ -830,9 +960,32 @@ class NL2SQLGenerator:
             if table != "table_name":
                 confidence += 0.2
             for join in joins:
-                sql += f"\n{join['type']} {join['table']} ON {join['condition']}"
-                explanation_parts.append(f"关联: {join['table']}")
-                confidence += 0.1
+                if join.get("relational"):
+                    # EXISTS/NOT EXISTS: preserves row count, no duplicates
+                    if join["type"] == "NOT EXISTS":
+                        subquery = f"SELECT 1\n    FROM {join['table']}\n    WHERE {join['condition']}"
+                        # Merge date conditions into subquery if present
+                        if conditions:
+                            cond_sql = conditions if isinstance(conditions, str) else " AND ".join(conditions)
+                            subquery += f"\n    AND {cond_sql}"
+                            conditions = []  # Remove from top-level conditions
+                        sql += f"\nWHERE NOT EXISTS (\n    {subquery}\n)"
+                        explanation_parts.append(f"关联: {join['table']} (NOT EXISTS)")
+                    else:
+                        subquery = f"SELECT 1\n    FROM {join['table']}\n    WHERE {join['condition']}"
+                        # Merge date conditions into subquery if present
+                        if conditions:
+                            cond_sql = conditions if isinstance(conditions, str) else " AND ".join(conditions)
+                            subquery += f"\n    AND {cond_sql}"
+                            conditions = []  # Remove from top-level conditions
+                        sql += f"\nWHERE EXISTS (\n    {subquery}\n)"
+                        explanation_parts.append(f"关联: {join['table']} (EXISTS)")
+                    confidence += 0.1
+                else:
+                    # Physical JOIN (original behavior)
+                    sql += f"\n{join['type']} {join['table']} ON {join['condition']}"
+                    explanation_parts.append(f"关联: {join['table']}")
+                    confidence += 0.1
             if conditions:
                 condition_sql = conditions if isinstance(conditions, str) else " AND ".join(conditions)
                 sql += f"\nWHERE {condition_sql}"

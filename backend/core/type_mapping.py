@@ -9,8 +9,9 @@ Provides comprehensive data type mapping with:
 """
 import json
 import logging
+import re
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, Any, Dict, List
 
 from .config import SUPPORTED_DIALECTS, TYPE_CATEGORIES, TypeMappingInfo
 from .exceptions import ConfigurationError
@@ -35,7 +36,16 @@ class TypeMapper:
     # Explicit aliases preserve deterministic resolution without fuzzy matching.
     TYPE_ALIASES = {
         "INTEGER": "INT",
+        "VARCHAR2": "VARCHAR",
+        "NVARCHAR2": "NVARCHAR",
+        "NVARCHAR": "VARCHAR",
+        "NCHAR": "CHAR",
     }
+    # Regex to extract base type and optional precision from parameterized type strings.
+    # Matches: VARCHAR2(2000), VARCHAR(100), NVARCHAR(MAX), CHAR(), VARCHAR(MAX), etc.
+    PARAMETERIZED_TYPE_RE = re.compile(
+        r"^([A-Z_][A-Z0-9_]*)\s*(?:\(\s*(.*?)\s*\))?$", re.IGNORECASE
+    )
     
     def __init__(self, data_path: Optional[Path] = None):
         """Initialize mapper with type mapping data.
@@ -91,18 +101,77 @@ class TypeMapper:
 
         return data
     
+    def _parse_parameterized_type(self, type_name: str) -> tuple:
+        """Parse a potentially parameterized type string into (base_type, precision).
+
+        Handles cases like 'VARCHAR2(2000)', 'NVARCHAR(MAX)', 'CHAR()', 'VARCHAR'.
+        Uses a minimal regex parser (not sqlglot) to avoid adding a new dependency;
+        the regex is simple enough to be reliable for SQL type declarations.
+
+        Args:
+            type_name: Raw type string, e.g. 'VARCHAR2(2000)' or 'NVARCHAR(MAX)'
+
+        Returns:
+            Tuple of (canonical_base_type, precision_value_or_None)
+            - canonical_base_type: the resolved type name in mappings (e.g. 'VARCHAR')
+            - precision_value: the numeric or string precision (e.g. 2000, 'MAX'), or None
+        """
+        # First try: is it an exact canonical match (no parens)?
+        upper = type_name.upper().strip()
+        if upper in self.mappings:
+            return (upper, None)
+
+        # Try alias match
+        alias = self.TYPE_ALIASES.get(upper)
+        if alias and alias in self.mappings:
+            return (alias, None)
+
+        # Try parameterized match via regex
+        m = self.PARAMETERIZED_TYPE_RE.match(upper)
+        if not m:
+            return (upper, None)  # Cannot parse — treat as unknown
+
+        base_candidate = m.group(1)
+        precision_str = m.group(2)  # None if no parens, '' if empty parens
+
+        # Resolve base candidate through aliases
+        canonical_key = base_candidate  # default to the regex-extracted name
+        if base_candidate in self.mappings:
+            canonical_key = base_candidate
+        elif base_candidate in self.TYPE_ALIASES:
+            canonical_key = self.TYPE_ALIASES[base_candidate]
+        if canonical_key not in self.mappings:
+            return (base_candidate, None)  # Unknown base type
+
+        # Parse precision
+        precision = None
+        if precision_str is not None:
+            # Empty parens: VARCHAR2() → no precision (treat as unbounded)
+            if precision_str.strip() == "":
+                precision = None
+            elif precision_str.strip().upper() == "MAX":
+                precision = "MAX"
+            else:
+                # Try to parse as integer
+                try:
+                    precision = int(precision_str.strip())
+                except ValueError:
+                    # Non-numeric, non-MAX value — treat as literal string
+                    precision = precision_str.strip()
+
+        return (canonical_key, precision)
+
     def map_type(self, type_name: str, source: str, target: str) -> Dict[str, Any]:
         """Map a type from source dialect to target dialect.
-        
+
         Args:
-            type_name: Data type name
+            type_name: Data type name (may be parameterized, e.g. 'VARCHAR2(2000)')
             source: Source dialect
             target: Target dialect
-            
+
         Returns:
             Dictionary with mapping result
         """
-        type_name = type_name.upper()
         source = source.lower()
         target = target.lower()
 
@@ -116,51 +185,50 @@ class TypeMapper:
                     f"Unsupported dialect(s): {', '.join(invalid_dialects)}. "
                     f"Supported: {SUPPORTED_DIALECTS}"
                 ),
-                "source_type": type_name,
+                "source_type": type_name.upper(),
                 "target_type": None,
                 "source_dialect": source,
                 "target_dialect": target,
             }
-        
-        # Resolve exact canonical names first, then only explicitly supported aliases.
-        canonical_type_name = type_name
-        type_info = self.mappings.get(type_name)
-        if not type_info:
-            canonical_type_name = self.TYPE_ALIASES.get(type_name, type_name)
-            type_info = self.mappings.get(canonical_type_name)
-        
+
+        # Parse parameterized type: extract canonical base + precision
+        canonical_type_name, precision = self._parse_parameterized_type(type_name)
+
+        type_info = self.mappings.get(canonical_type_name)
         if not type_info:
             return {
                 "success": False,
                 "error": f"Type {type_name} not found in mappings",
-                "source_type": type_name,
+                "source_type": type_name.upper(),
                 "target_type": None,
                 "source_dialect": source,
                 "target_dialect": target
             }
-        
+
         source_type = type_info.get(source, "N/A")
         target_type = type_info.get(target, "N/A")
         notes = type_info.get("notes", "")
-        
+
         # Check for precision warnings
         warnings = []
         if canonical_type_name in self.precision_warnings:
             warnings.append(self.precision_warnings[canonical_type_name])
-        
-        # Add specific warnings based on type and dialects
+
+        # Add precision-aware warnings for parameterized types
+        warnings.extend(self._get_precision_aware_warnings(canonical_type_name, precision, source, target))
         warnings.extend(self._get_type_specific_warnings(canonical_type_name, source, target))
-        
+
         return {
             "success": True,
-            "type_name": type_name,
+            "type_name": type_name.upper(),
             "source_dialect": source,
             "target_dialect": target,
             "source_type": source_type,
             "target_type": target_type,
             "notes": notes,
             "warnings": warnings,
-            "category": self.get_type_category(canonical_type_name)
+            "category": self.get_type_category(canonical_type_name),
+            "precision": precision,
         }
     
     def _get_type_specific_warnings(
@@ -221,24 +289,114 @@ class TypeMapper:
                 )
         
         return warnings
-    
+
+    def _get_precision_aware_warnings(
+        self,
+        type_name: str,
+        precision,
+        source: str,
+        target: str
+    ) -> List[str]:
+        """Get precision-aware warnings for parameterized types.
+
+        Args:
+            type_name: Canonical type name (e.g. 'VARCHAR')
+            precision: Numeric precision value or 'MAX' or None
+            source: Source dialect
+            target: Target dialect
+
+        Returns:
+            List of precision-specific warning messages
+        """
+        warnings = []
+
+        # VARCHAR/VARCHAR2 precision warnings
+        if type_name == "VARCHAR":
+            oracle_max = 4000
+            oracle_extended = 32767
+            tsql_varchar_max = 8000
+            tsql_nvarchar_max = 4000
+
+            if precision is not None:
+                if isinstance(precision, int):
+                    # Oracle source: warn if precision exceeds Oracle's hard limit
+                    if source == "oracle" and precision > oracle_max:
+                        if precision > oracle_extended:
+                            warnings.append(
+                                f"VARCHAR2({precision}) exceeds Oracle's extended "
+                                f"MAX_STRING_SIZE limit of {oracle_extended}; "
+                                f"will be truncated or require CLOB"
+                            )
+                        else:
+                            warnings.append(
+                                f"VARCHAR2({precision}) exceeds Oracle's default "
+                                f"VARCHAR2 limit of {oracle_max}; ensure "
+                                f"MAX_STRING_SIZE=EXTENDED"
+                            )
+
+                    # TSQL source NVARCHAR: warn if exceeds limit
+                    if source == "tsql" and type_name == "NVARCHAR":
+                        if precision > tsql_nvarchar_max:
+                            warnings.append(
+                                f"NVARCHAR({precision}) exceeds TSQL NVARCHAR "
+                                f"limit of {tsql_nvarchar_max}; consider "
+                                f"NVARCHAR(MAX) or different type"
+                            )
+
+                    # Target-specific warnings
+                    if target == "oracle":
+                        if precision > oracle_max:
+                            if precision > oracle_extended:
+                                warnings.append(
+                                    f"Target Oracle cannot store VARCHAR2({precision}); "
+                                    f"use CLOB for lengths > {oracle_extended}"
+                                )
+                    elif target == "tsql" and type_name == "VARCHAR":
+                        if precision > tsql_varchar_max:
+                            warnings.append(
+                                f"Target TSQL VARCHAR({precision}) exceeds "
+                                f"limit of {tsql_varchar_max}; use VARCHAR(MAX)"
+                            )
+                    elif target == "mysql" and type_name == "VARCHAR":
+                        # MySQL's 65535 is a row-size soft limit, not per-column
+                        if precision > 21845:
+                            warnings.append(
+                                f"VARCHAR({precision}) may exceed MySQL row size "
+                                f"limit when combined with other columns; "
+                                f"consider TEXT"
+                            )
+                elif precision == "MAX":
+                    # Unbounded — suggest checking if CLOB/TEXT is more appropriate
+                    if target == "oracle":
+                        warnings.append(
+                            "VARCHAR2(MAX) in TSQL maps to unbounded length; "
+                            "Oracle uses CLOB for large text data"
+                        )
+                    elif target == "mysql":
+                        warnings.append(
+                            "VARCHAR(MAX) may exceed MySQL row size limits; "
+                            "consider MEDIUMTEXT or LONGTEXT"
+                        )
+
+        return warnings
+
     def get_matrix(
         self,
         source: str = None,
         target: str = None
     ) -> Dict[str, Any]:
         """Get full or filtered type mapping matrix.
-        
+
         Args:
             source: Filter by source dialect
             target: Filter by target dialect
-            
+
         Returns:
             Type mapping matrix
         """
         if source is None and target is None:
             return self.mappings
-        
+
         result = {}
         for type_name, type_map in self.mappings.items():
             entry = {"type": type_name}
@@ -250,9 +408,9 @@ class TypeMapper:
                 entry["notes"] = type_map["notes"]
             entry["category"] = self.get_type_category(type_name)
             result[type_name] = entry
-        
+
         return result
-    
+
     def get_all_types(self) -> List[str]:
         """Get list of all supported type names.
         

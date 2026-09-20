@@ -4,6 +4,12 @@ All notable changes to SQL Dialect Master are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **D1: Parameterized VARCHAR/VARCHAR2 precision support** — TypeMapper now parses `VARCHAR2(2000)`, `NVARCHAR(MAX)`, `CHAR(100)` etc. and returns `precision` field in results. Precision-aware warnings added for Oracle 4000/32767 limits, TSQL NVARCHAR 4000 limit, and MySQL row-size soft limits. `NVARCHAR` and `NCHAR` added as canonical types with full 12-dialect mappings.
+- **D2: Relational NL2SQL queries** — `EXISTS` / `NOT EXISTS` generation for pattern phrases like "users who have orders", "customers with orders", "users without orders". Known relationships (users↔orders, customers↔orders, orders↔products, employees↔departments, users↔transactions, orders↔payments) use explicit join-key mappings. Unknown relationships fail safely with `success=False` and explicit explanation requiring user-provided join condition. Date conditions in combined queries (D2+D3) are scoped inside the EXISTS subquery.
+- **D3: Date arithmetic semantic completion** — Added `tomorrow`/`明天` support. Added bare period expressions: `last week` (rolling 7 days), `last month` (calendar -1 month via `ADD_MONTHS`), `last year` (calendar -1 year). Fixed template path to inject date conditions into generated SQL. Calendar-relative semantics for month/year (`ADD_MONTHS`) vs rolling semantics for days/weeks (`DATE_SUB`) now documented and tested.
+
 ### Security & Architecture
 
 - **Eliminated all runtime monkey patches** — `batch_validation.py`, `input_validation.py` deleted; validation now lives natively in `SQLTranspiler.transpile()`.

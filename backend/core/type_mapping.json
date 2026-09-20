@@ -552,12 +552,42 @@
       "duckdb": "TIMESTAMP",
       "databricks": "TIMESTAMP",
       "notes": "MySQL DATETIME maps to TIMESTAMP in most dialects; precision varies"
+    },
+    "NVARCHAR": {
+      "hive": "VARCHAR(n)",
+      "mysql": "VARCHAR(n)",
+      "oracle": "VARCHAR2(n)",
+      "tsql": "NVARCHAR(n)",
+      "postgres": "VARCHAR(n)",
+      "spark": "VARCHAR(n)",
+      "trino": "VARCHAR(n)",
+      "snowflake": "VARCHAR(n)",
+      "redshift": "VARCHAR(n)",
+      "clickhouse": "String",
+      "duckdb": "VARCHAR(n)",
+      "databricks": "VARCHAR(n)"
+    },
+    "NCHAR": {
+      "hive": "CHAR(n)",
+      "mysql": "CHAR(n)",
+      "oracle": "CHAR(n)",
+      "tsql": "NCHAR(n)",
+      "postgres": "CHAR(n)",
+      "spark": "CHAR(n)",
+      "trino": "CHAR(n)",
+      "snowflake": "CHAR(n)",
+      "redshift": "CHAR(n)",
+      "clickhouse": "FixedString(n)",
+      "duckdb": "CHAR(n)",
+      "databricks": "CHAR(n)"
     }
   },
   "precision_warnings": {
     "DECIMAL": "Precision varies: Oracle NUMBER up to 38 digits, MySQL DECIMAL max 65 digits, SQL Server max 38 digits",
     "TIMESTAMP": "Precision varies: Oracle 9 fractional digits, SQL Server 7 digits, MySQL/PostgreSQL 6 digits",
     "VARCHAR": "Max length varies: MySQL 65535, Oracle 4000 (32767 with MAX_STRING_SIZE=EXTENDED), SQL Server 8000 (NVARCHAR 4000)",
-    "BIGINT": "Range: -9223372036854775808 to 9223372036854775807. Oracle NUMBER(19) may have slight differences at boundaries"
+    "BIGINT": "Range: -9223372036854775808 to 9223372036854775807. Oracle NUMBER(19) may have slight differences at boundaries",
+    "NVARCHAR": "Max length varies: MySQL 65535, Oracle 4000 (32767 with MAX_STRING_SIZE=EXTENDED), SQL Server 8000 (NVARCHAR 4000)",
+    "NCHAR": "Max length varies across dialects"
   }
 }
