@@ -2,7 +2,7 @@
 
 All notable changes to SQL Dialect Master are documented here.
 
-## [Unreleased]
+## [1.1.0] - 2026-09-21
 
 ### Added
 
