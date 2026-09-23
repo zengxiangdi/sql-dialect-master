@@ -12,13 +12,10 @@ duckdb = pytest.importorskip(
     reason="duckdb not installed; skip DuckDB-based runtime semantic tests",
 )
 
-import sqlglot
-from sqlglot import exp
 
 from backend.core.semantic_diff import diff_sql_ast
 from backend.core.transpiler import SQLTranspiler
 from backend.tests.semantic.runtime_helpers import (
-    SemanticCategory,
     create_employees_connection,
     execute_or_skip,
     normalize_rows,

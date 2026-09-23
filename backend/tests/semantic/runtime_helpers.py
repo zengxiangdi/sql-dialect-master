@@ -5,7 +5,7 @@ the broadest subset of SQL syntax across all 12 supported dialects.
 """
 
 import datetime
-from typing import List, Optional, Tuple
+import math
 
 
 def _get_duckdb():
@@ -52,7 +52,7 @@ def create_employees_connection():
     return conn
 
 
-def normalize_rows(rows: List[Tuple]) -> List[Tuple]:
+def normalize_rows(rows) -> list:
     """Normalize rows for comparison: round floats, sort unordered results.
 
     Handles nested types (arrays/lists) by converting to tuples for sorting.
@@ -68,7 +68,7 @@ def normalize_rows(rows: List[Tuple]) -> List[Tuple]:
         for v in row:
             if v is None:
                 normed.append(NULL_SENTINEL)
-            elif isinstance(v, float) and v == v:  # not NaN
+            elif isinstance(v, float) and not math.isnan(v):  # not NaN
                 normed.append(round(float(v), 6))
             elif isinstance(v, datetime.datetime):
                 normed.append(v.strftime("%Y-%m-%d %H:%M:%S"))
@@ -84,7 +84,7 @@ def normalize_rows(rows: List[Tuple]) -> List[Tuple]:
     return sorted(normalized)
 
 
-def execute_or_skip(connection, sql: str) -> Tuple[Optional[List], Optional[str]]:
+def execute_or_skip(connection, sql: str) -> tuple:
     """Execute SQL, returning (rows, None) on success or (None, error) on failure.
 
     Intentional broad catch (BLE001, justified below): this helper

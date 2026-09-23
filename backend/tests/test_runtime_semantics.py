@@ -5,7 +5,6 @@ import pytest
 from backend.core.semantic_diff import diff_sql_ast
 from backend.core.transpiler import SQLTranspiler
 
-
 duckdb = pytest.importorskip("duckdb")
 psycopg = pytest.importorskip("psycopg")
 
