@@ -1,4 +1,13 @@
-# Release Readiness Report
+# Release Readiness Report — v1.0.1 (historical)
+
+> **Status: HISTORICAL RECORD.**
+> This report was generated on 2026-09-15 for the v1.0.1 release commit
+> `41bcff5` on `main`. It describes the state of the repository at that point
+> in time. Some paths referenced here (e.g. `frontend/components.py`) were
+> later replaced by the v2 frontend architecture and no longer exist.
+>
+> The current release is **v1.1.0** (tag `v1.1.0`, release-prepare commit
+> `0602d94`).
 
 **Version:** 1.0.1
 **Commit:** 41bcff5982e2c32974281317115140ad4382ed20

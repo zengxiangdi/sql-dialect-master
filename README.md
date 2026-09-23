@@ -19,12 +19,12 @@ Current release: 1.1.0
 | 🔍 **AST Semantic Diff** | Compare dialect-aware SQL ASTs to detect structural changes introduced by conversion |
 | 🗄️ **Runtime Semantic Tests** | Execute representative conversions against PostgreSQL and DuckDB and compare result sets |
 | 📚 **Function Encyclopedia** | 298 SQL functions with cross-database comparison |
-| 🗂️ **Type Mapping** | 36 data types × 12 databases matrix |
+| 🗂️ **Type Mapping** | 39 data types × 12 databases matrix |
 | 💬 **NL2SQL** | Natural language to SQL (Chinese/English) |
 | 🔧 **Rule Engine** | Deterministic priority ordering, compiled patterns, dialect-aware conflict detection |
 | 🛡️ **Security Validation** | Statement-level stacked-query detection with configurable blocking policy |
 | ⚡ **Performance** | Rule-aware cache versioning, bounded async batch conversion, and reproducible benchmark |
-| 🎨 **Modern UI** | Streamlit interface with 5 themes + Custom Theme Editor |
+| 🎨 **Modern UI** | Streamlit developer workspace: dark / light theme system, sidebar navigation, command palette |
 
 ## 💾 Supported Databases
 
@@ -217,18 +217,34 @@ sql-dialect-master/
 │   │   └── validators.py        # Input validation
 │   │
 │   └── tests/                   # Test suite and regression coverage
-├── frontend/                    # Streamlit UI Components
-│   ├── tabs/                    # Modular Tab Pages
+├── frontend/                    # Streamlit UI Components (v2 architecture)
+│   ├── core/                    # Cross-cutting concerns
+│   │   ├── design_tokens.py     # Theme model (dark/light) + semantic status
+│   │   ├── navigation.py        # NavigationIntent contract
+│   │   ├── state.py             # SessionState adapter
+│   │   ├── themes.py            # Theme switching (dark/light only)
+│   │   ├── styles.py            # CSS generation from design tokens
+│   │   ├── escaping.py          # HTML-safe rendering helpers
+│   │   └── viewmodels.py        # Typed view models
+│   ├── pages/                   # One module per workspace page
 │   │   ├── convert.py
+│   │   ├── nl2sql.py
+│   │   ├── diff.py
+│   │   ├── lineage.py
+│   │   ├── runtime.py
 │   │   ├── functions.py
 │   │   ├── types.py
-│   │   ├── nl2sql.py
-│   │   ├── explain.py
-│   │   └── lineage.py
-│   ├── app_context.py           # Shared Application Context
-│   ├── components.py            # Reusable UI Widgets
-│   ├── themes.py                # Visual Themes
-│   └── templates.py             # SQL Templates
+│   │   ├── templates.py
+│   │   ├── history.py
+│   │   ├── settings.py
+│   │   └── query_analysis.py
+│   ├── ui/                      # Reusable UI widgets
+│   │   ├── command_palette.py
+│   │   ├── diff.py
+│   │   ├── editor.py
+│   │   └── status.py
+│   ├── app_context_v2.py        # Shared application context (v2)
+│   └── templates_v2.py          # SQL templates (v2)
 ├── examples/
 │   ├── api_client.py             # API usage examples
 │   └── basic_usage.py            # SDK usage examples

@@ -1,5 +1,14 @@
 # Release Baseline — v1.0.1
 
+> **Status: HISTORICAL RECORD.**
+> This document was created on 2026-09-15 and describes the repository state
+> at tag `v1.0.1`. It is preserved as the reference baseline for later
+> releases; some paths it references (e.g. `frontend/components.py`) were
+> replaced by the v2 frontend architecture in subsequent work and no longer
+> exist.
+>
+> The current release is **v1.1.0** (tag `v1.1.0`).
+
 **Created:** 2026-09-15  
 **Purpose:** Reference baseline for subsequent 1.0.2 / 1.1.0 comparisons
 
