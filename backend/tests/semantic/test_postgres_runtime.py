@@ -81,7 +81,26 @@ def _prepare_extended(connection):
     4 rows and no name/manager columns. G3 adds a deterministic
     extended fixture mirroring the DuckDB runtime fixture so the
     NULL/JOIN/EXISTS assertions are meaningful. This helper runs
-    after the shared fixture and adds the G3-only data."""
+    after the shared fixture and adds the G3-only data.
+
+    Rows 1-4 are the shared fixture's data with G3's name/manager
+    columns populated:
+
+        id  name   dept        salary   active  manager
+        1   Alice  eng         100000   True    None
+        2   Bob    eng         120000   True    None
+        3   Carol  sales        80000   True    None
+        4   Dave   sales        70000   False   None
+
+    G3-only rows 5-9 (the "extended" half):
+
+        id  name   dept   salary  active  manager
+        5   Eve    eng    None    True    1
+        6   Frank  sales  90000   True    None
+        7   None   hr     60000   True    None
+        8   Gina   eng    95000   True    5
+        9   Hank   sales  55000   False   3
+    """
     with connection.cursor() as cur:
         cur.execute(
             """
@@ -89,6 +108,15 @@ def _prepare_extended(connection):
               ADD COLUMN IF NOT EXISTS name TEXT,
               ADD COLUMN IF NOT EXISTS manager_id INTEGER
             """
+        )
+        cur.executemany(
+            "UPDATE employees SET name = %s WHERE id = %s",
+            [
+                ("Alice", 1),
+                ("Bob", 2),
+                ("Carol", 3),
+                ("Dave", 4),
+            ],
         )
         cur.executemany(
             """
@@ -118,44 +146,45 @@ EMPLOYEE_IDS = [1, 2, 3, 4, 5, 6, 7, 8, 9]
 # Authoritative expected values — derived by hand from the fixture
 # ---------------------------------------------------------------------------
 #
-# _prepare_postgres (shared):
-#   1 Alice engineering 100000 True
-#   2 Bob   engineering 120000 True
-#   3 Carol sales        80000  True
-#   4 Dave  sales        70000  False
-# _prepare_extended (G3-only):
-#   5 Eve   eng   NULL   True  manager 1
-#   6 Frank sales  90000 True  manager None
-#   7 (None) hr   60000  True  manager None
-#   8 Gina  eng   95000  True  manager 5
-#   9 Hank  sales  55000 False manager 3
+# _prepare_postgres (shared, from test_runtime_semantics):
+#   1 engineering 100000 True   → G3 UPDATE names it "Alice"
+#   2 engineering 120000 True   → G3 UPDATE names it "Bob"
+#   3 sales        80000  True   → G3 UPDATE names it "Carol"
+#   4 sales        70000  False  → G3 UPDATE names it "Dave"
+#   (name/manager_id columns are G3-only; shared 4 rows get
+#    manager_id = NULL, names assigned by G3 UPDATE)
+#
+# _prepare_extended (G3-only inserts):
+#   5 Eve   eng     NULL   True  manager 1
+#   6 Frank sales    90000 True  manager None
+#   7 (NULL) hr     60000  True  manager None
+#   8 Gina  eng     95000  True  manager 5
+#   9 Hank  sales    55000 False manager 3
 #
 # Manual derivation of every expected value asserted in this module:
 #
-#   active = TRUE ids          1,2,3,5,6,7,8   (id 4 and 9 are inactive)
-#   name IS NULL              {7}  → COUNT(*)=1, COUNT(name)=8 (of 9)
+#   active = TRUE ids          1,2,3,5,6,7,8  (ids 4 and 9 are inactive)
+#   name IS NULL               {7}  → COUNT(*) = 1, COUNT(name) = 8 (of 9)
 #   salary > 80000 AND <= 120000
-#                              id1(100000), id2(120000), id6(90000), id8(95000)
+#                               id1(100000), id2(120000), id6(90000), id8(95000)
 #   salary BETWEEN 70000 AND 100000
-#                              id1(100000), id3(80000), id4(70000),
-#                              id6(90000), id8(95000)
-#   name LIKE 'A%'            Alice only
-#   manager_id IS NULL        ids 1,2,3,4,6,7  → COUNT = 6
-#   INNER JOIN manager        e5→1(Alice), e8→5(Eve), e9→3(Carol);
-#                              all three managers active → ids {5,8,9}
-#   LEFT JOIN null-fill       the complement: ids {1,2,3,4,6,7}, total 9
-#   EXISTS active mgr         {5,8,9}; NOT EXISTS {1,2,3,4,6,7}
-#   GROUP BY dept
-#     eng:         2 rows, salaries {NULL,95000}  → MIN=MAX=SUM=95000
-#     engineering: 2 rows, salaries {100000,120000} → MIN=100000 SUM=220000
-#     hr:          1 row,  salary {60000}          → 60000
-#     sales:       4 rows, salaries {80000,70000,90000,55000}
-#                                       → MIN=55000 SUM=295000
-#   HAVING COUNT(*)>1         eng(2), engineering(2), sales(4)
-#   AVG(salary) all           (100000+120000+80000+70000+90000+60000+95000+55000)
-#                              / 8 = 670000/8 = 83750.0   (NULL salary id 5 excluded)
+#                               id1(100000), id3(80000), id4(70000),
+#                               id6(90000), id8(95000)
+#   name LIKE 'A%'             Alice only
+#   manager_id IS NULL         ids 1,2,3,4,6,7  → COUNT = 6
+#   INNER JOIN (manager active)  e5→1(Alice,T), e8→5(Eve,T), e9→3(Carol,T)
+#                                 → ids {5,8,9}; NOT EXISTS → {1,2,3,4,6,7}
+#   GROUP BY department (ORDER BY department, case-sensitive):
+#     eng:         2 rows {NULL, 95000}       → COUNT=2 MIN=MAX=SUM=95000
+#     engineering: 2 rows {100000, 120000}    → COUNT=2 MIN=100000 SUM=220000
+#     hr:          1 row {60000}              → COUNT=1 MIN=SUM=60000
+#     sales:       4 rows {80000,70000,90000,55000}
+#                                       → COUNT=4 MIN=55000 MAX=90000 SUM=295000
+#   HAVING COUNT(*) > 1        eng(2), engineering(2), sales(4); hr(1) excluded
+#   AVG(salary) all            (100000+120000+80000+70000+90000+60000+95000+55000)
+#                               / 8 = 670000/8 = 83750.0
 #   LIMIT 3 by salary DESC NULLS LAST
-#                              (2,120000) (1,100000) (8,95000)
+#                               (2,120000) (1,100000) (8,95000)
 #   D3 (REF_DATE = 2026-09-23; shared EVENTS_ROWS constants):
 #     last 7 days  (>= 2026-09-16): in-window {u0,u1,u2}
 #     last 7 weeks (>= 2026-08-05): in-window + rolling-49d + in-prev-month
@@ -298,12 +327,13 @@ class TestAggregationPostgres:
             ORDER BY department
             """,
         )
-        # 9-row fixture:
-        #   eng        ids 5,8        salary: NULL, 95000
-        #   engineering ids 1,2        salary: 100000, 120000
-        #   hr         id  7          salary: 60000
-        #   sales      ids 3,4,6,9    salary: 80000, 70000, 90000, 55000
-        # MIN/SUM ignore NULL (id 5 salary is NULL).
+        # eng: ids 5,8 (salary: NULL, 95000) → MIN=MAX=SUM=95000
+        # engineering: ids 1,2 (salary: 100000, 120000)
+        # hr: id 7 (salary: 60000)
+        # sales: ids 3,4,6,9 (salary: 80000, 70000, 90000, 55000)
+        # NULL salary (id 5) excluded from MIN/MAX/SUM.
+        # PostgreSQL TEXT ordering is case-sensitive (byte-wise):
+        # lowercase 'eng' < 'engineering' < 'hr' < 'sales'.
         assert rows[0][:4] == ("eng", 2, 95000, 95000)
         assert rows[0][4] == 95000  # only id 8; NULL excluded
         assert rows[1][:4] == ("engineering", 2, 100000, 120000)
@@ -323,7 +353,8 @@ class TestAggregationPostgres:
             ORDER BY department
             """,
         )
-        # eng(2), engineering(2), hr(1), sales(4) → HAVING > 1 keeps three
+        # Hand-derived: eng(2), engineering(2), sales(4) have more than
+        # one row; hr(1) is excluded by HAVING COUNT(*) > 1.
         assert [row[0] for row in rows] == ["eng", "engineering", "sales"]
 
     def test_aggregate_ignores_null_salary(self, pg):
