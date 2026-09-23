@@ -124,3 +124,6 @@ jobs:
         run: |
           pytest backend/tests/test_runtime_semantics.py -q
           pytest backend/tests/semantic/test_runtime_semantics.py -q
+          pytest backend/tests/semantic/test_duckdb_runtime.py -q
+          pytest backend/tests/semantic/test_d3_date_runtime.py -q
+          pytest backend/tests/semantic/test_postgres_runtime.py -q

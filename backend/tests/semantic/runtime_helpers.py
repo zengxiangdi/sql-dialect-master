@@ -85,11 +85,19 @@ def normalize_rows(rows: List[Tuple]) -> List[Tuple]:
 
 
 def execute_or_skip(connection, sql: str) -> Tuple[Optional[List], Optional[str]]:
-    """Execute SQL, returning (rows, None) on success or (None, error) on failure."""
+    """Execute SQL, returning (rows, None) on success or (None, error) on failure.
+
+    Intentional broad catch (BLE001, justified below): this helper
+    serves both the in-process DuckDB and psycopg(PostgreSQL) drivers,
+    whose failure classes are disjoint — the narrowest catch shared by
+    both is Exception. The contract is to convert any engine error
+    into the returned (None, error) pair so runtime test suites can
+    inspect it; no exception may escape the helper.
+    """
     try:
         result = connection.execute(sql).fetchall()
         return result, None
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         return None, str(e)
 
 

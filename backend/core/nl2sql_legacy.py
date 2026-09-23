@@ -132,6 +132,7 @@ class NL2SQLGenerator:
         table_hint: Optional[str],
         column_hints: Optional[List[str]],
         text_lower: str = "",
+        text_original: str = "",
     ) -> NL2SQLResult:
         """Generate SQL from a matched template."""
         confidence = 0.7
@@ -143,9 +144,14 @@ class NL2SQLGenerator:
             confidence += 0.1
         columns = column_hints or analysis["columns"] or ["*"]
         numbers = analysis["numbers"]
-        # Extract date/time conditions so template-based generation can use them
-        match_text = match_groups.get("match", text_lower) if match_groups else text_lower
-        date_conditions = self._extract_conditions_enhanced(text_lower, match_text)
+        # The clause-aware merge below combines the branch's own predicates
+        # with any template-external time/status condition without duplicating
+        # a clause the branch owns. The extractor must see the full original
+        # text for number extraction: the template capture alone silently
+        # drops conditions that sit outside the captured window.
+        external_conditions = self._extract_conditions_enhanced(
+            text_lower, text_original or text_lower
+        )
 
         try:
             if template.name == "top_n_query":
@@ -178,16 +184,25 @@ class NL2SQLGenerator:
                 explanation_parts.append(f"按{group_col}分组统计")
                 confidence += 0.1
             elif template.name == "time_range_query":
+                # The canonical D3 semantic expression is the single source of
+                # the date predicate. Other external conditions (comparisons,
+                # status flags) stay template-external and are composed by the
+                # clause-aware merge below, which de-duplicates instead of
+                # re-appending a second WHERE.
                 n = numbers[0] if numbers else "7"
                 date_col = (
                     "created_at"
                     if "created_at" in str(analysis["columns"])
                     else "date"
                 )
-                sql = (
-                    f"SELECT *\nFROM {table}\n"
-                    f"WHERE {date_col} >= DATE_SUB(CURRENT_DATE, {n})"
-                )
+                date_predicate = None
+                for c in external_conditions:
+                    if "DATE_SUB" in c or "ADD_MONTHS" in c or "DATE_ADD" in c:
+                        date_predicate = c
+                        break
+                if date_predicate is None:
+                    date_predicate = f"{date_col} >= DATE_SUB(CURRENT_DATE, {n})"
+                sql = f"SELECT *\nFROM {table}\nWHERE {date_predicate}"
                 explanation_parts.append(f"查询最近{n}天数据")
                 confidence += 0.1
             elif template.name == "aggregate_query":
@@ -220,24 +235,80 @@ class NL2SQLGenerator:
                         op = ">="
                     elif token in ["小于等于", "<="]:
                         op = "<="
-                sql = f"SELECT *\nFROM {table}\nWHERE {col} {op} {value}"
+                condition_predicate = f"{col} {op} {value}"
+                # Fold in template-external conditions that are not already
+                # implied by the branch's own comparison. Date predicates are
+                # recognised by their canonical D3 forms; any other external
+                # condition (status, flags) is appended verbatim.
+                sql = f"SELECT *\nFROM {table}\nWHERE {condition_predicate}"
+                for c in external_conditions:
+                    if c in sql:
+                        continue
+                    if "DATE_SUB" not in c and "ADD_MONTHS" not in c:
+                        sql += f"\nAND {c}"
                 explanation_parts.append(f"条件: {col} {op} {value}")
                 confidence += 0.1
             elif template.name == "join_query":
-                tables = analysis["tables"]
-                if len(tables) >= 2:
-                    t1, t2 = tables[0], tables[1]
-                    join_key = self._guess_join_key(t1, t2)
-                    sql = f"SELECT *\nFROM {t1}\nJOIN {t2} ON {join_key}"
-                    explanation_parts.append(f"关联: {t1} ⟷ {t2}")
-                    confidence += 0.15
-                else:
-                    sql = (
-                        f"SELECT *\nFROM {table}\n"
-                        f"JOIN table2 ON {table}.id = table2.{table.rstrip('s')}_id"
+                # JOIN composition is owned by the enhanced path: route every
+                # join request through _extract_joins, which only yields a
+                # canonical condition for known relationships. The template
+                # must not invent a condition of its own.
+                all_joins = self._extract_joins(text_lower)
+                joins = [j for j in all_joins if j["condition"] is not None]
+                # The join request is only safe when every pair the text names
+                # has a canonical relationship; otherwise fail the request.
+                pairs_blocked = [j for j in all_joins if j["condition"] is None]
+                if pairs_blocked:
+                    blocked = " ⟷ ".join(
+                        [j["subject"] for j in pairs_blocked]
+                        + [j["table"] for j in pairs_blocked]
                     )
-                    explanation_parts.append("关联查询 (请指定第二个表)")
-                    confidence -= 0.1
+                    return NL2SQLResult(
+                        success=False,
+                        input_text=match_groups.get("match", ""),
+                        sql=None,
+                        dialect=dialect,
+                        explanation=(
+                            "Unable to safely infer the relationship between the "
+                            f"table(s) involved ({blocked}). Please provide the "
+                            "join condition or schema relationship."
+                        ),
+                        confidence=0.0,
+                        suggestions=[
+                            "Specify the relationship between tables, "
+                            "e.g., 'users.id = invoices.user_id'"
+                        ],
+                        parsed_elements=analysis,
+                    )
+                if joins:
+                    subject = self._extract_table_subject(text_lower)
+                    subject = subject or joins[0].get("subject")
+                    sql = f"SELECT *\nFROM {subject or joins[0]['table']}"
+                    for join in joins:
+                        sql += f"\nJOIN {join['table']} ON {join['condition']}"
+                        explanation_parts.append(
+                            f"关联: {subject or joins[0]['table']} ⟷ {join['table']}"
+                        )
+                    confidence += 0.15 * len(joins)
+                else:
+                    # No known pair resolvable — fail-safe too.
+                    return NL2SQLResult(
+                        success=False,
+                        input_text=match_groups.get("match", ""),
+                        sql=None,
+                        dialect=dialect,
+                        explanation=(
+                            "Unable to safely infer the relationship between the "
+                            "table(s). Please provide the join condition or "
+                            "schema relationship."
+                        ),
+                        confidence=0.0,
+                        suggestions=[
+                            "Specify the relationship between tables, "
+                            "e.g., 'users.id = invoices.user_id'"
+                        ],
+                        parsed_elements=analysis,
+                    )
             elif template.name == "select_with_columns":
                 cols = ", ".join(columns) if columns != ["*"] else "*"
                 sql = f"SELECT {cols}\nFROM {table}"
@@ -246,19 +317,35 @@ class NL2SQLGenerator:
                 sql = f"SELECT *\nFROM {table}"
                 explanation_parts.append(f"查询表: {table}")
 
-            # Append date/time conditions if present
-            date_conditions = [
-                c for c in date_conditions
-                if any(kw in text_lower for kw in [
-                    "today", "yesterday", "tomorrow", "last", "past",
-                    "本周", "本月", "本年", "今天", "昨天", "明天"
-                ]) and c not in ["status = 'active'", "status = 'inactive'",
-                                  "is_deleted = 1", "is_deleted = 0"]
-            ]
-            if date_conditions:
-                condition_sql = " AND ".join(date_conditions)
-                sql = f"{sql}\nWHERE {condition_sql}"
-                explanation_parts.append(f"日期条件: {len(date_conditions)}个")
+            # Clause-aware predicate composition: add only the time/status
+            # conditions the composed SQL does not already carry. Branches
+            # that own their WHERE clause (time_range/condition) already
+            # folded the external conditions in above; this step then
+            # de-duplicates instead of appending a second WHERE.
+            merged_conditions: List[str] = []
+            for c in external_conditions:
+                base = c.split(" AND ")[0] if " AND " in c else c
+                base = base.strip()
+                if base in sql or c in sql:
+                    continue
+                if not any(
+                    kw in text_lower
+                    for kw in [
+                        "today", "yesterday", "tomorrow", "last", "past",
+                        "本周", "本月", "本年", "今天", "昨天", "明天"
+                    ]
+                ) and c in [
+                    "status = 'active'", "status = 'inactive'",
+                    "is_deleted = 1", "is_deleted = 0"
+                ]:
+                    continue
+                merged_conditions.append(c)
+            if merged_conditions:
+                if "WHERE" in sql.upper():
+                    sql = f"{sql}\nAND {' AND '.join(merged_conditions)}"
+                else:
+                    sql = f"{sql}\nWHERE {' AND '.join(merged_conditions)}"
+                explanation_parts.append(f"日期条件: {len(merged_conditions)}个")
                 confidence += 0.1
 
             sql = f"-- Generated for {dialect.upper()}\n{sql}"
@@ -389,7 +476,16 @@ class NL2SQLGenerator:
             parsed = self._parse_text(text_lower, text)
             parsed.update(analysis)
             operation = self._detect_operation(text_lower)
-            table = table_hint or self._extract_table(text_lower)
+            if self._has_relational_keyword(text_lower):
+                # Relational subject: 'users who have orders where price = 5'
+                # must yield FROM users, not FROM orders.
+                table = (
+                    table_hint
+                    or self._extract_table_subject(text_lower)
+                    or self._extract_table(text_lower)
+                )
+            else:
+                table = table_hint or self._extract_table(text_lower)
             columns = column_hints if column_hints else self._extract_columns(text_lower)
             conditions = self._extract_conditions_enhanced(text_lower, text)
             aggregations = self._extract_aggregations(text_lower)
@@ -411,7 +507,15 @@ class NL2SQLGenerator:
                 distinct,
                 dialect,
             )
-            suggestions = self._generate_suggestions(text, sql, dialect)
+            if sql is None:
+                # Fail-closed: _build_sql_enhanced rejected an unresolved
+                # relationship. Surface an actionable suggestion.
+                suggestions = [
+                    "Specify the relationship between tables, e.g., "
+                    "'users.id = invoices.user_id'",
+                ]
+            else:
+                suggestions = self._generate_suggestions(text, sql, dialect)
             return NL2SQLResult(
                 success=sql is not None,
                 input_text=text,
@@ -431,7 +535,8 @@ class NL2SQLGenerator:
             logger.debug("NL2SQL: Relational keyword detected, bypassing template matching")
         if template:
             result = self._generate_from_template(
-                template, match_groups, analysis, dialect, table_hint, column_hints, text_lower
+                template, match_groups, analysis, dialect, table_hint, column_hints,
+                text_lower, text,
             )
             if result.success:
                 logger.info(
@@ -445,11 +550,6 @@ class NL2SQLGenerator:
         parsed = self._parse_text(text_lower, text)
         parsed.update(analysis)
         operation = self._detect_operation(text_lower)
-        # For D2 relational queries, use table_hint if provided, else first detected table
-        if self._has_relational_keyword(text_lower):
-            table = table_hint or self._extract_table_subject(text_lower) or "table_name"
-        else:
-            table = table_hint or self._extract_table(text_lower)
         columns = column_hints if column_hints else self._extract_columns(text_lower)
         conditions = self._extract_conditions_enhanced(text_lower, text)
         aggregations = self._extract_aggregations(text_lower)
@@ -459,22 +559,45 @@ class NL2SQLGenerator:
         joins = self._extract_joins(text_lower)
         distinct = self._check_distinct(text_lower)
 
-        # Check if any relational joins were skipped due to unknown relationships
-        if self._has_relational_keyword(text_lower) and joins:
-            # All joins have valid relationships
-            pass
-        elif self._has_relational_keyword(text_lower):
-            # Relational keywords detected but no valid joins found
-            # This means we have an unknown relationship
-            return NL2SQLResult(
-                success=False,
-                input_text=text,
-                sql=None,
-                dialect=dialect,
-                explanation="Unable to safely infer the relationship between the tables. Please provide the join condition or schema relationship.",
-                confidence=0.0,
-                suggestions=["Specify the relationship between tables, e.g., 'users.id = invoices.user_id'"],
-            )
+        # Table-name ownership (G1): a request that mentions two or more
+        # tables is a relational/join request; it only succeeds when every
+        # pair between the mentioned tables has a canonical relationship.
+        named_tables = self._named_tables(text_lower)
+        if len(named_tables) >= 2:
+            table = table_hint or named_tables[0]
+            unresolved = [
+                j for j in joins if j.get("condition") is None
+            ]
+            if unresolved:
+                # Use the subject carried by each join entry so the pair
+                # description is accurate even when the final table variable
+                # was resolved differently.
+                pair_desc = " ⟷ ".join(
+                    [j.get("subject") or table for j in unresolved]
+                    + [j["table"] for j in unresolved]
+                )
+                return NL2SQLResult(
+                    success=False,
+                    input_text=text,
+                    sql=None,
+                    dialect=dialect,
+                    explanation=(
+                        "Unable to safely infer the relationship between the "
+                        f"table(s) involved ({pair_desc}). Please provide the join "
+                        "condition or schema relationship."
+                    ),
+                    confidence=0.0,
+                    suggestions=[
+                        "Specify the relationship between tables, e.g., "
+                        "'users.id = invoices.user_id'",
+                    ],
+                )
+        else:
+            # For D2 relational queries, use table_hint if provided, else first detected table
+            if self._has_relational_keyword(text_lower):
+                table = table_hint or self._extract_table_subject(text_lower) or "table_name"
+            else:
+                table = table_hint or self._extract_table(text_lower)
 
         sql, explanation, confidence = self._build_sql_enhanced(
             operation,
@@ -489,7 +612,16 @@ class NL2SQLGenerator:
             distinct,
             dialect,
         )
-        suggestions = self._generate_suggestions(text, sql, dialect)
+        if sql is None:
+            # Fail-closed: _build_sql_enhanced rejected an unresolved
+            # relationship (e.g. single-table path where the join table
+            # has no canonical FK). Surface an actionable suggestion.
+            suggestions = [
+                "Specify the relationship between tables, e.g., "
+                "'users.id = invoices.user_id'",
+            ]
+        else:
+            suggestions = self._generate_suggestions(text, sql, dialect)
 
         return NL2SQLResult(
             success=sql is not None,
@@ -562,6 +694,19 @@ class NL2SQLGenerator:
             candidates.sort(key=lambda x: x[0])
             return candidates[0][1]
         return None
+
+    def _named_tables(self, text: str) -> list:
+        """Return the distinct table names the text mentions, in order of first appearance."""
+        occurrences = []
+        seen = set()
+        for pattern, table in self.TABLE_PATTERNS.items():
+            if table in seen:
+                continue
+            pos = text.find(pattern)
+            if pos != -1:
+                occurrences.append((pos, table))
+                seen.add(table)
+        return [t for _, t in sorted(occurrences)]
 
     def _extract_columns(self, text: str) -> list:
         """Extract column names from text."""
@@ -869,11 +1014,22 @@ class NL2SQLGenerator:
             for other_table in tables_found[1:]:
                 join_key = self._guess_join_key(main_table, other_table)
                 if join_key is None:
-                    # Unknown relationship - do not generate fabricated condition
+                    # Unknown relationship - do not generate fabricated condition.
+                    # Carry both sides of the pair so downstream fail-closed
+                    # messages can name the actual unresolved relationship
+                    # rather than re-deriving it from the final table variable.
+                    joins.append({
+                        "type": join_type,
+                        "table": other_table,
+                        "subject": main_table,
+                        "condition": None,
+                        "relational": join_type in ("EXISTS", "NOT EXISTS"),
+                    })
                     continue
                 joins.append({
                     "type": join_type,
                     "table": other_table,
+                    "subject": main_table,
                     "condition": join_key,
                     # Mark as relational (EXISTS/NOT EXISTS) rather than physical JOIN
                     "relational": join_type in ("EXISTS", "NOT EXISTS"),
@@ -937,7 +1093,35 @@ class NL2SQLGenerator:
         distinct,
         dialect,
     ) -> tuple:
-        """Build SQL statement from extracted components."""
+        """Build SQL statement from extracted components.
+
+        Fail-closed: any join entry with ``condition is None`` (an
+        unresolved/unknown relationship) immediately returns
+        ``(None, explanation, 0.0)`` so the caller observes
+        ``success=False``.  The relationship is never silently dropped.
+        """
+        # ------------------------------------------------------------------
+        # Structural guard: reject unresolved joins at the entry point.
+        # This is the single canonical fail-closed check; it covers every
+        # call site of _build_sql_enhanced (early boolean/null path,
+        # ordinary enhanced fallback, and any future caller) without
+        # requiring each caller to duplicate the check.
+        # ------------------------------------------------------------------
+        for join in joins:
+            if join.get("condition") is None:
+                # Use the subject/table context carried by the join entry
+                # (populated by _extract_joins) so the pair is named from
+                # the actual relationship structure, not from the final
+                # `table` variable which may have been resolved differently.
+                subject = join.get("subject") or table
+                pair_desc = f"{subject} ⟷ {join['table']}"
+                explanation = (
+                    "Unable to safely infer the relationship between the "
+                    f"table(s) involved ({pair_desc}). Please provide the "
+                    "join condition or schema relationship."
+                )
+                return None, explanation, 0.0
+
         explanation_parts = []
         confidence = 0.5
         if operation == "SELECT":
@@ -960,6 +1144,12 @@ class NL2SQLGenerator:
             if table != "table_name":
                 confidence += 0.2
             for join in joins:
+                # Join conditions are only ever emitted from a resolved
+                # canonical relationship (G1). Unresolved pairs are blocked
+                # upstream by generate(); keep a structural guard so a join
+                # can never be composed with a missing condition.
+                if join.get("condition") is None:
+                    continue
                 if join.get("relational"):
                     # EXISTS/NOT EXISTS: preserves row count, no duplicates
                     if join["type"] == "NOT EXISTS":

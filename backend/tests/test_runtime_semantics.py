@@ -98,7 +98,9 @@ def postgres_connection():
     connection = None
     try:
         connection = psycopg.connect(POSTGRES_DSN)
-    except Exception as exc:
+    except psycopg.OperationalError as exc:
+        # Service absence (no local PostgreSQL / unreachable DSN) →
+        # explicit class-B skip; CI always provides the service.
         pytest.skip(f"PostgreSQL runtime test database unavailable: {exc}")
 
     try:

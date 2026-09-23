@@ -300,7 +300,7 @@ class TypeMapper:
         """Get precision-aware warnings for parameterized types.
 
         Args:
-            type_name: Canonical type name (e.g. 'VARCHAR')
+            type_name: Canonical type name (e.g. 'VARCHAR', 'NVARCHAR')
             precision: Numeric precision value or 'MAX' or None
             source: Source dialect
             target: Target dialect
@@ -310,8 +310,18 @@ class TypeMapper:
         """
         warnings = []
 
-        # VARCHAR/VARCHAR2 precision warnings
-        if type_name == "VARCHAR":
+        # VARCHAR/VARCHAR2/NVARCHAR/NVARCHAR2 precision warnings.
+        #
+        # 'NVARCHAR' is itself a canonical mappings key (NVARCHAR2 aliases
+        # to it), so guarding this branch on type_name == "VARCHAR" alone
+        # skipped it for every NVARCHAR input — and the nested
+        # `type_name == "NVARCHAR"` T-SQL rule below could never be true.
+        # Widening the branch to both canonical character types makes the
+        # T-SQL NVARCHAR rule reachable again. Rules whose messages are
+        # VARCHAR-specific (VARCHAR2/VARCHAR text, MAX notes) keep an
+        # explicit `type_name == "VARCHAR"` guard so their behavior is
+        # unchanged for every input.
+        if type_name in ("VARCHAR", "NVARCHAR"):
             oracle_max = 4000
             oracle_extended = 32767
             tsql_varchar_max = 8000
@@ -320,7 +330,11 @@ class TypeMapper:
             if precision is not None:
                 if isinstance(precision, int):
                     # Oracle source: warn if precision exceeds Oracle's hard limit
-                    if source == "oracle" and precision > oracle_max:
+                    if (
+                        source == "oracle"
+                        and type_name == "VARCHAR"
+                        and precision > oracle_max
+                    ):
                         if precision > oracle_extended:
                             warnings.append(
                                 f"VARCHAR2({precision}) exceeds Oracle's extended "
@@ -334,7 +348,8 @@ class TypeMapper:
                                 f"MAX_STRING_SIZE=EXTENDED"
                             )
 
-                    # TSQL source NVARCHAR: warn if exceeds limit
+                    # TSQL source NVARCHAR: warn if exceeds limit. Reachable
+                    # now that the outer branch covers canonical NVARCHAR.
                     if source == "tsql" and type_name == "NVARCHAR":
                         if precision > tsql_nvarchar_max:
                             warnings.append(
@@ -344,7 +359,7 @@ class TypeMapper:
                             )
 
                     # Target-specific warnings
-                    if target == "oracle":
+                    if target == "oracle" and type_name == "VARCHAR":
                         if precision > oracle_max:
                             if precision > oracle_extended:
                                 warnings.append(
@@ -365,7 +380,7 @@ class TypeMapper:
                                 f"limit when combined with other columns; "
                                 f"consider TEXT"
                             )
-                elif precision == "MAX":
+                elif precision == "MAX" and type_name == "VARCHAR":
                     # Unbounded — suggest checking if CLOB/TEXT is more appropriate
                     if target == "oracle":
                         warnings.append(
