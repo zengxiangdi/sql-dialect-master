@@ -19,7 +19,17 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import sqlglot
 
 from .column_hint_validation import validate_column_hints
+from .nl2sql_components.aggregations import extract_aggregations as _extract_aggregations_impl
 from .nl2sql_components.boolean_conditions import extract_boolean_conditions
+from .nl2sql_components.core_extract import (
+    check_distinct as _check_distinct_impl,
+    detect_operation as _detect_operation_impl,
+    extract_columns as _extract_columns_impl,
+    extract_limit as _extract_limit_impl,
+    extract_table as _extract_table_impl,
+    extract_table_subject as _extract_table_subject_impl,
+    named_tables as _named_tables_impl,
+)
 from .nl2sql_components.mappings import (
     COLUMN_PATTERNS as MAPPING_COLUMN_PATTERNS,
 )
@@ -29,6 +39,12 @@ from .nl2sql_components.mappings import (
 from .nl2sql_components.mappings import (
     TABLE_PATTERNS as MAPPING_TABLE_PATTERNS,
 )
+from .nl2sql_components.relations import (
+    extract_joins as _extract_joins_impl,
+    guess_join_key as _guess_join_key_impl,
+    has_relational_keyword as _has_relational_keyword_impl,
+)
+from .nl2sql_components.evidence import GenerationEvidence
 from .nl2sql_components.templates import DEFAULT_QUERY_TEMPLATES, QueryTemplate
 from .nl2sql_components.tokenizer import Tokenizer
 
@@ -45,6 +61,10 @@ class NL2SQLResult:
     dialect: str = ""
     explanation: str = ""
     confidence: float = 0.0
+    # Structured evidence trail backing ``confidence``. Optional and
+    # backward-compatible: consumers that only need the scalar score can
+    # ignore this field.
+    evidence: Optional[GenerationEvidence] = None
     suggestions: list = field(default_factory=list)
     parsed_elements: dict = field(default_factory=dict)
 
@@ -134,16 +154,41 @@ class NL2SQLGenerator:
         text_lower: str = "",
         text_original: str = "",
     ) -> NL2SQLResult:
-        """Generate SQL from a matched template."""
-        confidence = 0.7
+        """Generate SQL from a matched template.
+
+        Accumulates a structured GenerationEvidence trail whose weights
+        mirror the legacy heuristic exactly so the final score is
+        unchanged while the items explain it.
+        """
+        from .nl2sql_components.evidence import (
+            EVIDENCE_AGGREGATION_PRESENT,
+            EVIDENCE_CONDITIONS_PRESENT,
+            EVIDENCE_GROUP_BY,
+            EVIDENCE_JOIN_KNOWN,
+            EVIDENCE_LIMIT,
+            EVIDENCE_PARSE_FAIL,
+            EVIDENCE_PARSE_OK,
+            EVIDENCE_TABLE_KNOWN,
+            EVIDENCE_TEMPLATE_MATCHED,
+            EvidenceItem,
+        )
+
         explanation_parts = []
         table = table_hint or (
             analysis["tables"][0] if analysis["tables"] else "table_name"
         )
-        if table != "table_name":
-            confidence += 0.1
         columns = column_hints or analysis["columns"] or ["*"]
         numbers = analysis["numbers"]
+        # Structured evidence trail; weights mirror the heuristic exactly.
+        evidence = GenerationEvidence()
+        evidence.items.append(
+            EvidenceItem("base", "Base confidence for template match", 0.7)
+        )
+        if table != "table_name":
+            evidence.items.append(EvidenceItem(
+                EVIDENCE_TABLE_KNOWN,
+                f"Table resolved to known name: {table}", 0.1, detail=table,
+            ))
         # The clause-aware merge below combines the branch's own predicates
         # with any template-external time/status condition without duplicating
         # a clause the branch owns. The extractor must see the full original
@@ -172,7 +217,10 @@ class NL2SQLGenerator:
                     f"ORDER BY {order_col} {order_dir}"
                 )
                 sql = self._add_limit(base_sql, int(n), dialect)
-                confidence += 0.1
+                evidence.items.append(EvidenceItem(
+                    EVIDENCE_LIMIT,
+                    f"Template limit applied: {n}", 0.1, detail=str(n),
+                ))
             elif template.name == "count_by_group":
                 group_col = (
                     analysis["columns"][0] if analysis["columns"] else "category"
@@ -182,7 +230,10 @@ class NL2SQLGenerator:
                     f"FROM {table}\nGROUP BY {group_col}"
                 )
                 explanation_parts.append(f"按{group_col}分组统计")
-                confidence += 0.1
+                evidence.items.append(EvidenceItem(
+                    EVIDENCE_GROUP_BY,
+                    f"Template GROUP BY on {group_col}", 0.1, detail=group_col,
+                ))
             elif template.name == "time_range_query":
                 # The canonical D3 semantic expression is the single source of
                 # the date predicate. Other external conditions (comparisons,
@@ -204,7 +255,10 @@ class NL2SQLGenerator:
                     date_predicate = f"{date_col} >= DATE_SUB(CURRENT_DATE, {n})"
                 sql = f"SELECT *\nFROM {table}\nWHERE {date_predicate}"
                 explanation_parts.append(f"查询最近{n}天数据")
-                confidence += 0.1
+                evidence.items.append(EvidenceItem(
+                    EVIDENCE_CONDITIONS_PRESENT,
+                    f"Template time range: {date_predicate}", 0.1, detail=table,
+                ))
             elif template.name == "aggregate_query":
                 agg_func = "COUNT"
                 for token in analysis["tokens"]:
@@ -219,7 +273,10 @@ class NL2SQLGenerator:
                 col = analysis["columns"][0] if analysis["columns"] else "*"
                 sql = f"SELECT {agg_func}({col}) AS result\nFROM {table}"
                 explanation_parts.append(f"计算{agg_func}({col})")
-                confidence += 0.1
+                evidence.items.append(EvidenceItem(
+                    EVIDENCE_AGGREGATION_PRESENT,
+                    f"Template aggregation: {agg_func}({col})", 0.1, detail=agg_func,
+                ))
             elif template.name == "condition_query":
                 col = analysis["columns"][0] if analysis["columns"] else "column"
                 value = numbers[0] if numbers else "0"
@@ -247,7 +304,10 @@ class NL2SQLGenerator:
                     if "DATE_SUB" not in c and "ADD_MONTHS" not in c:
                         sql += f"\nAND {c}"
                 explanation_parts.append(f"条件: {col} {op} {value}")
-                confidence += 0.1
+                evidence.items.append(EvidenceItem(
+                    EVIDENCE_CONDITIONS_PRESENT,
+                    f"Template condition: {col} {op} {value}", 0.1,
+                ))
             elif template.name == "join_query":
                 # JOIN composition is owned by the enhanced path: route every
                 # join request through _extract_joins, which only yields a
@@ -274,6 +334,7 @@ class NL2SQLGenerator:
                             "join condition or schema relationship."
                         ),
                         confidence=0.0,
+                        evidence=GenerationEvidence(),
                         suggestions=[
                             "Specify the relationship between tables, "
                             "e.g., 'users.id = invoices.user_id'"
@@ -289,7 +350,11 @@ class NL2SQLGenerator:
                         explanation_parts.append(
                             f"关联: {subject or joins[0]['table']} ⟷ {join['table']}"
                         )
-                    confidence += 0.15 * len(joins)
+                        evidence.items.append(EvidenceItem(
+                            EVIDENCE_JOIN_KNOWN,
+                            f"Join in template: {join['table']} ON {join['condition']}",
+                            0.15, detail=join["condition"],
+                        ))
                 else:
                     # No known pair resolvable — fail-safe too.
                     return NL2SQLResult(
@@ -303,6 +368,7 @@ class NL2SQLGenerator:
                             "schema relationship."
                         ),
                         confidence=0.0,
+                        evidence=GenerationEvidence(),
                         suggestions=[
                             "Specify the relationship between tables, "
                             "e.g., 'users.id = invoices.user_id'"
@@ -346,11 +412,33 @@ class NL2SQLGenerator:
                 else:
                     sql = f"{sql}\nWHERE {' AND '.join(merged_conditions)}"
                 explanation_parts.append(f"日期条件: {len(merged_conditions)}个")
-                confidence += 0.1
+                evidence.items.append(EvidenceItem(
+                    EVIDENCE_CONDITIONS_PRESENT,
+                    f"Merged {len(merged_conditions)} external condition(s)",
+                    0.1,
+                ))
 
             sql = f"-- Generated for {dialect.upper()}\n{sql}"
             sql = self._apply_dialect_adjustments(sql, dialect)
-            confidence += self._validate_generated_sql(sql, dialect)
+            parse_adjustment = self._validate_generated_sql(sql, dialect)
+
+            evidence.items.append(EvidenceItem(
+                EVIDENCE_TEMPLATE_MATCHED,
+                f"Template matched: {template.name}", 0.0, detail=template.name,
+            ))
+            if parse_adjustment > 0:
+                evidence.items.append(EvidenceItem(
+                    EVIDENCE_PARSE_OK,
+                    "Target dialect parser accepted the generated SQL",
+                    parse_adjustment,
+                ))
+            elif parse_adjustment < 0:
+                evidence.items.append(EvidenceItem(
+                    EVIDENCE_PARSE_FAIL,
+                    "Target dialect parser rejected the generated SQL",
+                    parse_adjustment,
+                ))
+
             suggestions = self._generate_suggestions_for_template(
                 template, table, columns, dialect
             )
@@ -361,7 +449,8 @@ class NL2SQLGenerator:
                 sql=sql,
                 dialect=dialect,
                 explanation=" | ".join(explanation_parts),
-                confidence=min(max(confidence, 0.0), 1.0),
+                confidence=evidence.score,
+                evidence=evidence,
                 suggestions=suggestions,
                 parsed_elements=analysis,
             )
@@ -373,6 +462,7 @@ class NL2SQLGenerator:
                 dialect=dialect,
                 explanation=f"Template error: {exc}",
                 confidence=0.0,
+                evidence=GenerationEvidence(),
             )
 
     def _generate_suggestions_for_template(
@@ -422,6 +512,7 @@ class NL2SQLGenerator:
                 dialect=normalized_dialect,
                 explanation=column_hints_error,
                 confidence=0.0,
+                evidence=GenerationEvidence(),
             )
         # Length guard (from production_hardening)
         from .config import settings
@@ -433,6 +524,7 @@ class NL2SQLGenerator:
                 dialect=normalized_dialect,
                 explanation=f"Input text exceeds maximum length of {max_input_length} characters",
                 suggestions=["Please shorten the natural-language query and try again."],
+                evidence=GenerationEvidence(),
             )
         dialect = normalized_dialect
         table_hint = normalized_table_hint
@@ -443,6 +535,7 @@ class NL2SQLGenerator:
                 dialect=dialect,
                 explanation=column_hints_error,
                 confidence=0.0,
+                evidence=GenerationEvidence(),
             )
         text_lower = text.lower()
 
@@ -494,7 +587,7 @@ class NL2SQLGenerator:
             limit = self._extract_limit(text_lower)
             joins = self._extract_joins(text_lower)
             distinct = self._check_distinct(text_lower)
-            sql, explanation, confidence = self._build_sql_enhanced(
+            sql, explanation, confidence, evidence = self._build_sql_enhanced(
                 operation,
                 table,
                 columns,
@@ -523,6 +616,7 @@ class NL2SQLGenerator:
                 dialect=dialect,
                 explanation=explanation,
                 confidence=confidence,
+                evidence=evidence,
                 suggestions=suggestions,
                 parsed_elements=parsed,
             )
@@ -587,6 +681,7 @@ class NL2SQLGenerator:
                         "condition or schema relationship."
                     ),
                     confidence=0.0,
+                    evidence=GenerationEvidence(),
                     suggestions=[
                         "Specify the relationship between tables, e.g., "
                         "'users.id = invoices.user_id'",
@@ -599,7 +694,7 @@ class NL2SQLGenerator:
             else:
                 table = table_hint or self._extract_table(text_lower)
 
-        sql, explanation, confidence = self._build_sql_enhanced(
+        sql, explanation, confidence, evidence = self._build_sql_enhanced(
             operation,
             table,
             columns,
@@ -630,6 +725,7 @@ class NL2SQLGenerator:
             dialect=dialect,
             explanation=explanation,
             confidence=confidence,
+            evidence=evidence,
             suggestions=suggestions,
             parsed_elements=parsed,
         )
@@ -661,60 +757,27 @@ class NL2SQLGenerator:
         return parsed
 
     def _detect_operation(self, text: str) -> str:
-        """Detect SQL operation type from text."""
-        for keyword, op in self.KEYWORDS.items():
-            if keyword in text and op in ["SELECT", "INSERT", "UPDATE", "DELETE"]:
-                return op
-        return "SELECT"
+        """Detect SQL operation type from text. Delegates to core_extract."""
+        return _detect_operation_impl(text, self.KEYWORDS)
 
     def _extract_table(self, text: str) -> str:
-        """Extract table name from text."""
-        tables_found = []
-        for pattern, table in self.TABLE_PATTERNS.items():
-            if pattern in text:
-                tables_found.append((text.find(pattern), table, len(pattern)))
-        if tables_found:
-            tables_found.sort(key=lambda item: (-item[2], item[0]))
-            return tables_found[0][1]
-        return "table_name"
+        """Extract table name from text. Delegates to core_extract."""
+        return _extract_table_impl(text, self.TABLE_PATTERNS)
 
     def _extract_table_subject(self, text: str) -> Optional[str]:
         """Extract the subject table (first appearing in text) for D2 relational queries.
 
-        For queries like 'users who have orders', returns 'users' (the subject)
-        rather than 'orders' (the relation). Uses first occurrence position.
+        Delegates to core_extract.extract_table_subject.
         """
-        candidates = []
-        for pattern, table in self.TABLE_PATTERNS.items():
-            if table not in candidates:
-                pos = text.find(pattern)
-                if pos != -1:
-                    candidates.append((pos, table))
-        if candidates:
-            candidates.sort(key=lambda x: x[0])
-            return candidates[0][1]
-        return None
+        return _extract_table_subject_impl(text, self.TABLE_PATTERNS)
 
     def _named_tables(self, text: str) -> list:
-        """Return the distinct table names the text mentions, in order of first appearance."""
-        occurrences = []
-        seen = set()
-        for pattern, table in self.TABLE_PATTERNS.items():
-            if table in seen:
-                continue
-            pos = text.find(pattern)
-            if pos != -1:
-                occurrences.append((pos, table))
-                seen.add(table)
-        return [t for _, t in sorted(occurrences)]
+        """Return the distinct table names the text mentions. Delegates to core_extract."""
+        return _named_tables_impl(text, self.TABLE_PATTERNS)
 
     def _extract_columns(self, text: str) -> list:
-        """Extract column names from text."""
-        columns = []
-        for pattern, column in self.COLUMN_PATTERNS.items():
-            if pattern in text and column not in columns:
-                columns.append(column)
-        return columns if columns else ["*"]
+        """Extract column names from text. Delegates to core_extract."""
+        return _extract_columns_impl(text, self.COLUMN_PATTERNS)
 
     def _extract_conditions_enhanced(self, text: str, original: str) -> list:
         """Extract WHERE conditions with enhanced parsing including boolean expressions."""
@@ -876,25 +939,8 @@ class NL2SQLGenerator:
         return conditions
 
     def _extract_aggregations(self, text: str) -> list:
-        """Extract aggregation functions from text."""
-        aggs = []
-        agg_column = None
-        for pattern, column in self.COLUMN_PATTERNS.items():
-            if pattern in text:
-                agg_column = column
-                break
-        col = agg_column or "amount"
-        if any(k in text for k in ["统计", "计数", "数量", "多少", "几个", "count", "total", "how many"]):
-            aggs.append("COUNT(*)")
-        if any(k in text for k in ["求和", "总和", "合计", "总计", "sum", "total of"]):
-            aggs.append(f"SUM({col})")
-        if any(k in text for k in ["平均", "均值", "平均值", "average", "avg", "mean"]):
-            aggs.append(f"AVG({col})")
-        if any(k in text for k in ["最大", "最高", "最多", "max", "maximum", "highest", "largest"]):
-            aggs.append(f"MAX({col})")
-        if any(k in text for k in ["最小", "最低", "最少", "min", "minimum", "lowest", "smallest"]):
-            aggs.append(f"MIN({col})")
-        return aggs
+        """Extract aggregation functions from text. Delegates to aggregations module."""
+        return _extract_aggregations_impl(text, self.COLUMN_PATTERNS)
 
     def _extract_group_by(self, text: str) -> list:
         """Extract GROUP BY columns from text."""
@@ -953,131 +999,31 @@ class NL2SQLGenerator:
         return None
 
     def _extract_limit(self, text: str) -> Optional[int]:
-        """Extract LIMIT value from text."""
-        patterns = [
-            r"前\s*(\d+)", r"top\s*(\d+)", r"limit\s*(\d+)",
-            r"first\s*(\d+)", r"(\d+)\s*条", r"(\d+)\s*个",
-            r"(\d+)\s*行", r"(\d+)\s*rows?", r"only\s*(\d+)",
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, text, re.IGNORECASE)
-            if match:
-                return int(match.group(1))
-        return None
+        """Extract LIMIT value from text. Delegates to core_extract."""
+        return _extract_limit_impl(text)
 
     def _extract_joins(self, text: str) -> list:
-        """Extract JOIN information from text.
+        """Extract JOIN information from text. Delegates to relations module.
 
         Detects relational existence patterns (e.g., "users who have orders")
         and returns structured join contexts for EXISTS-based SQL generation.
         """
-        joins = []
-        # Collect unique tables in text-appearance order (first occurrence wins)
-        # Exclude "order" when it's part of "order by" sorting clause
-        table_occurrences = []
-        for pattern, table in self.TABLE_PATTERNS.items():
-            # Skip "order" pattern if it's part of "order by" sorting clause
-            if pattern == "order" and re.search(r'\border\b\s+by\b', text, re.IGNORECASE):
-                continue
-            if re.search(r'\b' + re.escape(pattern) + r'\b', text) and table not in [t for _, t in table_occurrences]:
-                table_occurrences.append((text.find(pattern), table))
-        tables_found = [t for _, t in sorted(table_occurrences)]
-        if len(tables_found) >= 2:
-            # Determine relation type from keywords
-            # Positive relational: "who have", "with", etc. -> EXISTS
-            # Negative relational: "without", "not have", etc. -> NOT EXISTS
-            # Explicit JOIN keywords: physical JOIN
-            if any(k in text for k in [
-                "without", "not have", "no ",
-                "who don't have", "who doesn't have",
-                "who do not have", "who does not have",
-            ]):
-                join_type = "NOT EXISTS"
-            elif any(k in text for k in [
-                "who have", "who has", "that have", "that has",
-                "with orders", "with customers",
-                "with users", "with employees",
-                "with invoices", "with payments", "with transactions",
-                "with suppliers", "with products",
-                "who placed", "who made", "who created", "who submitted",
-                "in departments", "in products", "in orders", "in users",
-            ]):
-                join_type = "EXISTS"
-            elif any(k in text for k in ["left join", "right join",
-                                          "inner join", "outer join",
-                                          "左连接", "右连接", "内连接"]):
-                join_type = text.split()[0].upper() if " " in text else "JOIN"
-            else:
-                join_type = "JOIN"
-
-            main_table = tables_found[0]
-            for other_table in tables_found[1:]:
-                join_key = self._guess_join_key(main_table, other_table)
-                if join_key is None:
-                    # Unknown relationship - do not generate fabricated condition.
-                    # Carry both sides of the pair so downstream fail-closed
-                    # messages can name the actual unresolved relationship
-                    # rather than re-deriving it from the final table variable.
-                    joins.append({
-                        "type": join_type,
-                        "table": other_table,
-                        "subject": main_table,
-                        "condition": None,
-                        "relational": join_type in ("EXISTS", "NOT EXISTS"),
-                    })
-                    continue
-                joins.append({
-                    "type": join_type,
-                    "table": other_table,
-                    "subject": main_table,
-                    "condition": join_key,
-                    # Mark as relational (EXISTS/NOT EXISTS) rather than physical JOIN
-                    "relational": join_type in ("EXISTS", "NOT EXISTS"),
-                })
-        return joins
+        return _extract_joins_impl(text, self.TABLE_PATTERNS)
 
     def _guess_join_key(self, table1: str, table2: str) -> Optional[str]:
-        """Guess the join key between two tables.
+        """Guess the join key between two tables. Delegates to relations module.
 
         Returns None for unknown relationships instead of guessing.
         """
-        join_patterns = {
-            ("users", "orders"): "users.id = orders.user_id",
-            ("orders", "users"): "orders.user_id = users.id",
-            ("users", "transactions"): "users.id = transactions.user_id",
-            ("orders", "products"): "orders.product_id = products.id",
-            ("products", "orders"): "products.id = orders.product_id",
-            ("users", "products"): "users.id = products.user_id",
-            ("products", "users"): "products.user_id = users.id",
-            ("employees", "departments"): "employees.dept_id = departments.id",
-            ("departments", "employees"): "departments.id = employees.dept_id",
-            ("orders", "payments"): "orders.id = payments.order_id",
-            ("customers", "orders"): "customers.id = orders.customer_id",
-            ("orders", "customers"): "orders.customer_id = customers.id",
-        }
-        key = (table1, table2)
-        if key in join_patterns:
-            return join_patterns[key]
-        # Unknown relationship - do not guess
-        return None
+        return _guess_join_key_impl(table1, table2)
 
     def _check_distinct(self, text: str) -> bool:
-        """Check if DISTINCT is needed."""
-        return any(k in text for k in ["去重", "唯一", "不重复", "distinct", "unique"])
+        """Check if DISTINCT is needed. Delegates to core_extract."""
+        return _check_distinct_impl(text)
 
     def _has_relational_keyword(self, text: str) -> bool:
-        """Check if text contains relational existence keywords (D2)."""
-        relational_patterns = [
-            "who have", "who has", "that have", "that has",
-            "who don't have", "who doesn't have", "who do not have", "who does not have",
-            "without", "no ", "not have", "don't have", "doesn't have",
-            "with orders", "with customers", "with products",
-            "with users", "with employees", "with suppliers",
-            "with invoices", "with payments", "with transactions",
-            "who placed", "who made", "who created", "who submitted",
-            "in departments", "in products", "in orders", "in users",
-        ]
-        return any(pattern in text for pattern in relational_patterns)
+        """Check if text contains relational existence keywords (D2). Delegates to relations module."""
+        return _has_relational_keyword_impl(text)
 
     def _build_sql_enhanced(
         self,
@@ -1120,10 +1066,25 @@ class NL2SQLGenerator:
                     f"table(s) involved ({pair_desc}). Please provide the "
                     "join condition or schema relationship."
                 )
-                return None, explanation, 0.0
+                return None, explanation, 0.0, GenerationEvidence()
+
+        from .nl2sql_components.evidence import (
+            EVIDENCE_AGGREGATION_PRESENT,
+            EVIDENCE_COLUMNS_EXPLICIT,
+            EVIDENCE_CONDITIONS_PRESENT,
+            EVIDENCE_GROUP_BY,
+            EVIDENCE_JOIN_KNOWN,
+            EVIDENCE_LIMIT,
+            EVIDENCE_PARSE_FAIL,
+            EVIDENCE_PARSE_OK,
+            EVIDENCE_TABLE_KNOWN,
+            EvidenceItem,
+        )
 
         explanation_parts = []
-        confidence = 0.5
+        evidence = GenerationEvidence()
+        evidence.items.append(EvidenceItem("base", "Base confidence for generated SQL", 0.5))
+
         if operation == "SELECT":
             distinct_kw = "DISTINCT " if distinct else ""
             if aggregations:
@@ -1133,16 +1094,28 @@ class NL2SQLGenerator:
                 else:
                     select_clause = ", ".join(aggregations)
                 explanation_parts.append(f"聚合: {', '.join(aggregations)}")
-                confidence += 0.15
+                evidence.items.append(EvidenceItem(
+                    EVIDENCE_AGGREGATION_PRESENT,
+                    f"Explicit aggregation requested: {', '.join(aggregations)}",
+                    0.15, detail=aggregations[0],
+                ))
             else:
                 select_clause = ", ".join(columns)
                 if columns != ["*"]:
                     explanation_parts.append(f"列: {', '.join(columns)}")
-                    confidence += 0.1
+                    evidence.items.append(EvidenceItem(
+                        EVIDENCE_COLUMNS_EXPLICIT,
+                        "Explicit columns requested", 0.1,
+                        detail=columns[0],
+                    ))
             sql = f"SELECT {distinct_kw}{select_clause}\nFROM {table}"
             explanation_parts.append(f"表: {table}")
             if table != "table_name":
-                confidence += 0.2
+                evidence.items.append(EvidenceItem(
+                    EVIDENCE_TABLE_KNOWN,
+                    f"Table resolved to known name: {table}", 0.2,
+                    detail=table,
+                ))
             for join in joins:
                 # Join conditions are only ever emitted from a resolved
                 # canonical relationship (G1). Unresolved pairs are blocked
@@ -1170,22 +1143,37 @@ class NL2SQLGenerator:
                             conditions = []  # Remove from top-level conditions
                         sql += f"\nWHERE EXISTS (\n    {subquery}\n)"
                         explanation_parts.append(f"关联: {join['table']} (EXISTS)")
-                    confidence += 0.1
+                    evidence.items.append(EvidenceItem(
+                        EVIDENCE_JOIN_KNOWN,
+                        f"Known relationship: {join['subject']} → {join['table']}",
+                        0.1, detail=join["condition"],
+                    ))
                 else:
                     # Physical JOIN (original behavior)
                     sql += f"\n{join['type']} {join['table']} ON {join['condition']}"
                     explanation_parts.append(f"关联: {join['table']}")
-                    confidence += 0.1
+                    evidence.items.append(EvidenceItem(
+                        EVIDENCE_JOIN_KNOWN,
+                        f"Physical join: {join['table']} ON {join['condition']}",
+                        0.1, detail=join["condition"],
+                    ))
             if conditions:
                 condition_sql = conditions if isinstance(conditions, str) else " AND ".join(conditions)
                 sql += f"\nWHERE {condition_sql}"
                 count = len(conditions) if not isinstance(conditions, str) else 1
                 explanation_parts.append(f"条件: {count}个")
-                confidence += 0.1
+                evidence.items.append(EvidenceItem(
+                    EVIDENCE_CONDITIONS_PRESENT,
+                    f"{count} explicit predicate(s) in WHERE clause",
+                    0.1,
+                ))
             if group_by:
                 sql += f"\nGROUP BY {', '.join(group_by)}"
                 explanation_parts.append(f"分组: {', '.join(group_by)}")
-                confidence += 0.1
+                evidence.items.append(EvidenceItem(
+                    EVIDENCE_GROUP_BY,
+                    f"GROUP BY clause: {', '.join(group_by)}", 0.1,
+                ))
             elif aggregations and columns != ["*"]:
                 group_cols = [c for c in columns if c != "*"]
                 if group_cols:
@@ -1196,7 +1184,10 @@ class NL2SQLGenerator:
             if limit:
                 sql = self._add_limit(sql, limit, dialect)
                 explanation_parts.append(f"限制: {limit}条")
-                confidence += 0.1
+                evidence.items.append(EvidenceItem(
+                    EVIDENCE_LIMIT,
+                    f"Explicit limit: {limit}", 0.1, detail=str(limit),
+                ))
         elif operation == "INSERT":
             cols = columns if columns != ["*"] else ["col1", "col2"]
             placeholders = ", ".join(["?"] * len(cols))
@@ -1222,12 +1213,26 @@ class NL2SQLGenerator:
             explanation_parts.append(f"删除: {table}")
         else:
             sql = f"-- 无法解析: {operation}"
-            confidence = 0.0
+            # Unknown operation — clear all evidence; score will be 0.0.
+            evidence = GenerationEvidence()
 
         sql = f"-- Generated for {dialect.upper()}\n{sql}"
         sql = self._apply_dialect_adjustments(sql, dialect)
-        confidence += self._validate_generated_sql(sql, dialect)
-        return sql, " | ".join(explanation_parts), min(max(confidence, 0.0), 1.0)
+        parse_adjustment = self._validate_generated_sql(sql, dialect)
+        if parse_adjustment > 0:
+            evidence.items.append(EvidenceItem(
+                EVIDENCE_PARSE_OK,
+                "Target dialect parser accepted the generated SQL",
+                parse_adjustment,
+            ))
+        elif parse_adjustment < 0:
+            evidence.items.append(EvidenceItem(
+                EVIDENCE_PARSE_FAIL,
+                "Target dialect parser rejected the generated SQL",
+                parse_adjustment,
+            ))
+        confidence = evidence.score
+        return sql, " | ".join(explanation_parts), confidence, evidence
 
     def _validate_generated_sql(self, sql: str, dialect: str) -> float:
         """Validate generated SQL syntax and return confidence adjustment."""

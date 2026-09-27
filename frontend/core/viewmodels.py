@@ -115,6 +115,12 @@ class ConversionViewModel:
         return enriched
 
 
+    @property
+    def success(self) -> bool:
+        """Whether the conversion produced a usable result."""
+        return self.status == "valid"
+
+
 # ── Batch Conversion ViewModel ─────────────────────────────────────────
 
 @dataclass
@@ -177,6 +183,9 @@ class NL2SQLViewModel:
     confidence: float
     suggestions: list[str]
     parsed_elements: dict[str, Any]
+    # Structured evidence trail backing the confidence score.
+    # Each entry is a dict with keys: evidence_id, label, weight, detail.
+    evidence_items: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def status(self) -> StatusKind:
@@ -198,6 +207,14 @@ class NL2SQLViewModel:
             "review": "Review recommended",
             "low": "Low confidence",
         }[self.confidence_level]
+
+    @property
+    def evidence_summary(self) -> str:
+        """Human-readable one-line summary of the evidence trail."""
+        if not self.evidence_items:
+            return ""
+        parts = [item["label"] for item in self.evidence_items if item.get("weight", 0.0) != 0.0]
+        return "; ".join(parts) if parts else ""
 
     @property
     def tables(self) -> list[str]:
@@ -227,6 +244,18 @@ class NL2SQLViewModel:
 
     @classmethod
     def from_nl2sql_result(cls, result: Any) -> NL2SQLViewModel:
+        evidence = getattr(result, "evidence", None)
+        evidence_items = []
+        if evidence is not None:
+            evidence_items = [
+                {
+                    "evidence_id": item.evidence_id,
+                    "label": item.label,
+                    "weight": item.weight,
+                    "detail": item.detail,
+                }
+                for item in evidence.items
+            ]
         return cls(
             success=result.success,
             input_text=result.input_text,
@@ -236,6 +265,7 @@ class NL2SQLViewModel:
             confidence=result.confidence,
             suggestions=list(result.suggestions),
             parsed_elements=dict(result.parsed_elements),
+            evidence_items=evidence_items,
         )
 
     def clean_sql(self) -> str:

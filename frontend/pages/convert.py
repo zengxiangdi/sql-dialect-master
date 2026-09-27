@@ -8,6 +8,8 @@ splitting to the canonical backend API.
 """
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import streamlit as st
 
 from frontend.app_context_v2 import (
@@ -262,7 +264,6 @@ def _add_to_history(
     """Add a successful conversion to session history via SessionState."""
     if not vm.success:
         return
-    from datetime import UTC
     state.add_history_entry(
         sql=vm.source_sql,
         source_dialect=vm.source_dialect,

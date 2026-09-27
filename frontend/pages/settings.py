@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import streamlit as st
 
+from backend.core import metadata as meta
 from frontend.core.design_tokens import ColorTokens
 from frontend.core.state import SessionState
 
@@ -44,13 +45,16 @@ def render_settings_page(theme: ColorTokens) -> None:
     # About
     st.markdown("---")
     st.markdown("##### About")
-    st.markdown("""
-    **SQL Dialect Master v2.0**
+    st.markdown(
+        f"""
+        **SQL Dialect Master {meta.PROJECT_VERSION}**
 
-    Professional SQL conversion workspace powered by sqlglot and semantic analysis.
+        Professional SQL conversion workspace (Frontend v{meta.FRONTEND_ARCHITECTURE_VERSION})
+        powered by sqlglot and semantic analysis.
 
-    - 12 supported dialects
-    - 298+ functions indexed
-    - 36+ type mappings
-    - Semantic diff analysis
-    """)
+        - {meta.SUPPORTED_DIALECTS_COUNT} supported dialects
+        - {meta.FUNCTION_COUNT}+ functions indexed
+        - {meta.TYPE_COUNT}+ type mappings
+        - Semantic diff analysis
+        """
+    )

@@ -133,6 +133,38 @@ class TestNL2SQLViewModel:
         assert vm.success is False
         assert vm.sql is None
         assert vm.status == "error"
+        # No evidence attached → empty list.
+        assert vm.evidence_items == []
+
+    def test_from_result_with_evidence(self) -> None:
+        """ViewModel surfaces structured evidence items from the result."""
+        from backend.core.nl2sql_components.evidence import (
+            EvidenceItem,
+            GenerationEvidence,
+        )
+        evidence = GenerationEvidence()
+        evidence.items.append(EvidenceItem("base", "Base confidence for template match", 0.7))
+        evidence.items.append(EvidenceItem("table_known", "Table resolved: users", 0.1, detail="users"))
+        result = NL2SQLResult(
+            success=True,
+            input_text="Get all users",
+            sql="SELECT * FROM users",
+            dialect="postgres",
+            explanation="Simple select",
+            confidence=0.8,
+            evidence=evidence,
+            suggestions=[],
+            parsed_elements={"tables": ["users"]},
+        )
+        vm = NL2SQLViewModel.from_nl2sql_result(result)
+        assert len(vm.evidence_items) == 2
+        assert vm.evidence_items[0]["evidence_id"] == "base"
+        assert vm.evidence_items[0]["weight"] == 0.7
+        assert vm.evidence_items[1]["evidence_id"] == "table_known"
+        assert vm.evidence_items[1]["detail"] == "users"
+        # evidence_summary excludes zero-weight items and joins the rest.
+        assert "Base confidence" in vm.evidence_summary
+        assert "Table resolved: users" in vm.evidence_summary
 
 
 class TestBatchConversionViewModel:

@@ -187,6 +187,8 @@ class TranspileResultDict(TypedDict, total=False):
 # Application Settings (Pydantic)
 # =============================================================================
 
+from backend.core.metadata import API_VERSION as _METADATA_API_VERSION
+
 class AppSettings(BaseSettings):
     """Application settings using Pydantic.
     
@@ -201,7 +203,7 @@ class AppSettings(BaseSettings):
     )
 
     # API settings
-    api_version: str = "1.0.1"
+    api_version: str = _METADATA_API_VERSION
     api_title: str = "SQL Dialect Master API"
     allowed_origins: str = (
         "http://localhost:8501,http://localhost:8000,"

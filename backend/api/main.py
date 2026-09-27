@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """FastAPI Backend for SQL Dialect Master.
 
-Enterprise-grade multi-database SQL conversion API with:
-- 12 database dialects support
-- 298 SQL functions encyclopedia
-- 36 data type mappings
-- 40 conversion rules
+Enterprise-grade multi-database SQL conversion API:
+- 12 database dialects
+- SQL functions encyclopedia
+- data type mappings
+- conversion rules
 - Natural language to SQL generation
+
+Exact counts are derived from the canonical data files at runtime —
+see backend.core.metadata — and must not be restated here.
 """
 import logging
 import time
@@ -19,6 +22,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.core.config import get_dialect_api_info, settings, setup_logging
+from backend.core import metadata as meta
 from backend.core.functions_lookup import FunctionEncyclopedia
 from backend.core.nl2sql import NL2SQLGenerator
 from backend.core.parser import SUPPORTED_DIALECTS, SQLParser
@@ -34,7 +38,7 @@ api_logger = logging.getLogger(__name__)
 # API metadata
 API_VERSION = settings.api_version
 API_TITLE = settings.api_title
-API_DESCRIPTION = """
+API_DESCRIPTION = f"""
 # 🔄 SQL Dialect Master API
 
 Enterprise-grade multi-database SQL conversion engine.
@@ -43,9 +47,9 @@ Enterprise-grade multi-database SQL conversion engine.
 
 | Feature | Description |
 |---------|-------------|
-| 🔄 **SQL Conversion** | Convert SQL between 12 database dialects |
-| 📚 **Function Encyclopedia** | 298 SQL functions with cross-database comparison |
-| 🗂️ **Type Mapping** | 36 data type mappings × 12 databases matrix |
+| 🔄 **SQL Conversion** | Convert SQL between {meta.SUPPORTED_DIALECTS_COUNT} database dialects |
+| 📚 **Function Encyclopedia** | {meta.FUNCTION_COUNT} SQL functions with cross-database comparison |
+| 🗂️ **Type Mapping** | {meta.TYPE_COUNT} data type mappings × {meta.SUPPORTED_DIALECTS_COUNT} databases matrix |
 | 💬 **NL2SQL** | Natural language to SQL (Chinese/English) |
 
 ## 💾 Supported Databases
@@ -63,17 +67,17 @@ Enterprise-grade multi-database SQL conversion engine.
 import requests
 
 # Convert SQL
-response = requests.post("http://localhost:8000/api/convert", json={
+response = requests.post("http://localhost:8000/api/convert", json={{
     "sql": "SELECT DATE_FORMAT(created_at, '%Y-%m-%d') FROM orders",
     "source_dialect": "mysql",
     "target_dialect": "postgres"
-})
+}})
 print(response.json()["target_sql"])
 ```
 
 ## 📖 API Endpoints
 
-- `POST /api/convert` - Convert SQL between 12 database dialects
+- `POST /api/convert` - Convert SQL between {meta.SUPPORTED_DIALECTS_COUNT} database dialects
 - `GET /api/functions` - Search SQL functions
 - `GET /api/types` - Get type mapping matrix
 - `POST /api/nl2sql` - Generate SQL from natural language
@@ -98,11 +102,11 @@ app = FastAPI(
         },
         {
             "name": "functions",
-            "description": "📚 SQL function encyclopedia with 298 functions"
+            "description": f"📚 SQL function encyclopedia with {meta.FUNCTION_COUNT} functions"
         },
         {
             "name": "types",
-            "description": "🗂️ Data type mapping matrix (36 types × 12 databases)"
+            "description": f"🗂️ Data type mapping matrix ({meta.TYPE_COUNT} types × {meta.SUPPORTED_DIALECTS_COUNT} databases)"
         },
         {
             "name": "nl2sql",
@@ -496,7 +500,7 @@ async def list_types(
     """
     Get type mapping matrix.
 
-    Returns complete 36 types × 12 databases mapping matrix.
+    Returns the complete type mapping matrix (canonical type count × 12 databases).
 
     **Type Categories:**
     - String: STRING, VARCHAR, CHAR, TEXT, etc.

@@ -12,11 +12,14 @@ ROOT = Path(__file__).resolve().parents[1]
 README = ROOT / "README.md"
 PYPROJECT = ROOT / "pyproject.toml"
 CONFIG = ROOT / "backend" / "core" / "config.py"
+METADATA = ROOT / "backend" / "core" / "metadata.py"
 BENCHMARK = ROOT / "backend" / "benchmarks" / "transpiler_benchmark.py"
 DESIGN_TOKENS = ROOT / "frontend" / "core" / "design_tokens.py"
 FRONTEND = ROOT / "frontend"
 TYPE_MAPPING = ROOT / "backend" / "core" / "type_mapping.json"
 FUNCTIONS_DB = ROOT / "backend" / "core" / "functions_db.json"
+ENV_EXAMPLE = ROOT / ".env.example"
+SETTINGS_PAGE = ROOT / "frontend" / "pages" / "settings.py"
 
 
 def fail(message: str) -> None:
@@ -157,6 +160,65 @@ def main() -> None:
         claim = re.search(r"(\d+)\s+SQL functions with cross-database comparison", readme)
         if claim and int(claim.group(1)) != n_functions:
             fail(f"README claims {claim.group(1)} SQL functions, source has {n_functions}")
+
+    # ── Version / API consistency across all public surfaces ─────────
+    # The metadata module is the single source of truth for version
+    # facts. config.py must import from it; .env.example must match;
+    # the frontend settings page must use the project version.
+
+    metadata_text = METADATA.read_text(encoding="utf-8") if METADATA.is_file() else ""
+    if not METADATA.is_file():
+        fail("backend/core/metadata.py is missing — canonical version source not found")
+
+    # PROJECT_VERSION in metadata must match pyproject version.
+    proj_version_match = re.search(r"PROJECT_VERSION\s*=\s*[\"']([^\"']+)[\"']", metadata_text)
+    if not proj_version_match:
+        fail("backend/core/metadata.py: PROJECT_VERSION not found")
+    if proj_version_match.group(1) != version:
+        fail(
+            f"metadata.py PROJECT_VERSION={proj_version_match.group(1)!r} "
+            f"does not match pyproject version={version!r}"
+        )
+
+    # config.py must import api_version from metadata (not hardcode "1.0.1").
+    config_text = CONFIG.read_text(encoding="utf-8")
+    if re.search(r'api_version:\s*str\s*=\s*"1\.0\.1"', config_text):
+        fail(
+            "config.py still hardcodes api_version=\"1.0.1\" — "
+            "must import from backend.core.metadata"
+        )
+    if "from backend.core.metadata import" not in config_text:
+        fail(
+            "config.py does not import from backend.core.metadata — "
+            "api_version must be sourced from the metadata module"
+        )
+
+    # .env.example must carry the same API version as the metadata module.
+    if ENV_EXAMPLE.is_file():
+        env_text = ENV_EXAMPLE.read_text(encoding="utf-8")
+        api_version_match = re.search(r"SDM_API_VERSION=([^\n]+)", env_text)
+        if not api_version_match:
+            fail(".env.example: SDM_API_VERSION not found")
+        if api_version_match.group(1).strip() != version:
+            fail(
+                f".env.example SDM_API_VERSION={api_version_match.group(1)!r} "
+                f"does not match project version={version!r}"
+            )
+
+    # The frontend settings page must not display the product version as
+    # "v2.0" (frontend architecture v2 != product release v2.0).
+    if SETTINGS_PAGE.is_file():
+        settings_text = SETTINGS_PAGE.read_text(encoding="utf-8")
+        if "SQL Dialect Master v2.0" in settings_text:
+            fail(
+                "frontend/pages/settings.py still claims 'SQL Dialect Master v2.0' — "
+                "must use metadata.PROJECT_VERSION"
+            )
+        if "meta.PROJECT_VERSION" not in settings_text:
+            fail(
+                "frontend/pages/settings.py does not reference meta.PROJECT_VERSION — "
+                "must use the canonical version constant"
+            )
 
     print(
         "README consistency check passed: "
