@@ -5,7 +5,7 @@ import hashlib
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import sqlglot
 from sqlglot import exp
@@ -207,8 +207,16 @@ class SQLTranspiler:
             )
 
         try:
-            transpiled = sqlglot.transpile(sql, read=source, write=target, pretty=pretty)[0]
+            ast_notes: List[str] = []
+            if source == "oracle" and target in ("postgres", "mysql", "hive", "spark"):
+                ast = sqlglot.parse_one(sql, read=source)
+                ast, ast_notes = self._ast_rownum_to_limit(ast, target)
+                transpiled = ast.sql(dialect=target, pretty=pretty)
+            else:
+                transpiled = sqlglot.transpile(sql, read=source, write=target, pretty=pretty)[0]
             final_sql, transformations = self.post_processor.process(transpiled, source, target)
+            if ast_notes:
+                transformations = ast_notes + transformations
             compat_notes = self._get_compatibility_notes(source, target, sql)
             if executable_sql is not None:
                 warnings = security_warnings + self._generate_warnings_masked(
@@ -263,6 +271,80 @@ class SQLTranspiler:
             return len(sqlglot.parse(sql)) > 1
         except Exception:
             return False
+
+    def _ast_rownum_to_limit(self, ast: exp.Expression, target: str) -> Tuple[exp.Expression, List[str]]:
+        """AST-first ROWNUM -> LIMIT migration (G6-A1).
+
+        Operates purely on the parsed AST (no string scanning). Migrates the
+        legacy safe ROWNUM -> LIMIT semantics: for a single-SELECT Oracle
+        statement with exactly one qualifying ``ROWNUM <= N`` predicate
+        (bare integer literal N) as the LHS of a comparison, and no ORDER BY /
+        GROUP BY / HAVING / DISTINCT / OR / set operations, remove that
+        predicate from WHERE (keeping any AND-companions) and set LIMIT to N.
+        Returns ``(ast, notes)`` where ``notes`` is empty unless the
+        transformation fired.
+        """
+        # Only single-SELECT shapes are in scope; set operations are out.
+        if not isinstance(ast, exp.Select):
+            return ast, []
+
+        # Conservative guards: any of these present means we must skip.
+        if ast.args.get("order") or ast.args.get("group") or ast.args.get("having"):
+            return ast, []
+        if ast.args.get("distinct"):
+            return ast, []
+
+        where = ast.args.get("where")
+        if where is None:
+            return ast, []
+        where = where.this
+
+        # OR anywhere in the WHERE subtree is out of scope.
+        if any(isinstance(node, exp.Or) for node in where.walk()):
+            return ast, []
+
+        # Collect every qualifying predicate: LHS is the ROWNUM column,
+        # operator is <=, RHS is a bare integer literal.
+        qualifying = []
+        for node in where.walk():
+            if not isinstance(node, exp.LTE):
+                continue
+            lhs = node.this
+            rhs = node.expression
+            if not isinstance(lhs, exp.Column) or lhs.name.upper() != "ROWNUM":
+                continue
+            if not isinstance(rhs, exp.Literal) or rhs.is_string or rhs.is_int is False:
+                continue
+            qualifying.append((node, rhs))
+
+        # Exactly one qualifying predicate is required.
+        if len(qualifying) != 1:
+            return ast, []
+        pred, bound = qualifying[0]
+
+        # Detach the predicate from the WHERE tree, keeping AND-companions.
+        # ``limit`` returns a new expression; capture the result explicitly.
+        self._remove_predicate_from_where(ast, where, pred)
+        ast = ast.limit(bound)
+        note = f"ROWNUM <= {bound.this} converted to LIMIT {bound.this} (AST)"
+        return ast, [note]
+
+    @staticmethod
+    def _remove_predicate_from_where(
+        ast: exp.Expression, where: exp.Expression, pred: exp.Expression
+    ) -> None:
+        """Remove ``pred`` from the WHERE clause of ``ast``.
+
+        If ``pred`` is the whole WHERE, drop the WHERE entirely. If it is one
+        branch of a top-level ``And``, keep the other branch.
+        """
+        parent = pred.parent
+        if parent is not None and isinstance(parent, exp.And):
+            companion = parent.expression if parent.this is pred else parent.this
+            where.replace(companion)
+        else:
+            # pred is the entire WHERE expression.
+            ast.set("where", None)
 
     def _rule_cache_state(self):
         """Return a mutation-sensitive structural signature for the current rules."""
