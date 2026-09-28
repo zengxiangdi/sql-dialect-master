@@ -1,7 +1,6 @@
 import asyncio
 
 from backend.api import readiness
-from backend.core.post_processor import PostProcessor
 from backend.core.transpiler import SQLTranspiler
 
 
@@ -26,27 +25,6 @@ def test_transpiler_accepts_one_statement_with_terminal_semicolon():
 
     assert result.success is True
     assert result.target_sql
-
-
-def test_top_conversion_does_not_rewrite_sql_literal():
-    processor = PostProcessor()
-    sql = "SELECT 'SELECT TOP 5 value' AS message"
-
-    result, notes = processor._convert_top_to_limit(sql)
-
-    assert result == sql
-    assert notes == []
-
-
-def test_group_concat_conversion_does_not_rewrite_sql_literal():
-    processor = PostProcessor()
-    sql = "SELECT 'GROUP_CONCAT(name)' AS message"
-
-    result, notes = processor._fix_group_concat_default_separator(sql)
-
-    assert result == sql
-    assert notes == []
-
 
 def test_readiness_probe_is_cached_and_single_flight(monkeypatch):
     async def exercise():

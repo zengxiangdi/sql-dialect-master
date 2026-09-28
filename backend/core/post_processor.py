@@ -5,8 +5,7 @@ Uses the rule engine for declarative transformations and handles
 complex cases that require custom logic.
 """
 import logging
-import re
-from typing import Tuple, List, Callable, Optional
+from typing import Tuple, List, Callable
 
 import sqlglot
 from sqlglot import exp
@@ -38,167 +37,14 @@ class PostProcessor:
     def _apply_custom_transformations(self, sql: str, source: str, target: str) -> Tuple[str, List[str]]:
         result = sql
         notes = []
-        if source == "oracle" and target != "oracle":
-            result, decode_notes = self._convert_decode_to_case(result)
-            notes.extend(decode_notes)
-        if source == "mysql" and target == "postgres":
-            result, date_notes = self._convert_mysql_date_format(result)
-            notes.extend(date_notes)
-        if source == "postgres" and target == "mysql":
-            result, date_notes = self._convert_postgres_to_char(result)
-            notes.extend(date_notes)
-        if source == "tsql" and target in ("mysql", "postgres", "hive", "spark"):
-            result, top_notes = self._convert_top_to_limit(result)
-            notes.extend(top_notes)
         if source == "oracle" and target in ("hive", "spark", "databricks"):
             result, listagg_notes = self._convert_listagg_to_array_join(result)
             notes.extend(listagg_notes)
-        if source == "mysql" and target == "postgres":
-            result, gc_notes = self._fix_group_concat_default_separator(result)
-            notes.extend(gc_notes)
         return result, notes
 
     def _replace_function_calls(self, sql: str, function_name: str, replacer: Callable[[str, str], str]) -> str:
         """Replace function calls using the shared quote/comment-aware scanner."""
         return replace_function_calls(sql, function_name, replacer)
-
-    def _convert_decode_to_case(self, sql: str) -> Tuple[str, List[str]]:
-        notes = []
-        if "DECODE" not in mask_non_executable(sql).upper():
-            return sql, notes
-
-        def decode_to_case(args_str: str, original: str) -> str:
-            args = self._parse_function_args(args_str)
-            if len(args) < 3:
-                return original
-            col = args[0]
-            pairs = args[1:]
-            case_parts = []
-            i = 0
-            while i < len(pairs) - 1:
-                value = pairs[i]
-                comparator = "IS NULL" if value.strip().upper() == "NULL" else f"= {value}"
-                case_parts.append(f"WHEN {col} {comparator} THEN {pairs[i + 1]}")
-                i += 2
-            default = pairs[-1] if len(pairs) % 2 == 1 else "NULL"
-            return f"CASE {' '.join(case_parts)} ELSE {default} END"
-
-        result = self._replace_function_calls(sql, "DECODE", decode_to_case)
-        if result != sql:
-            notes.append("Converted DECODE to CASE WHEN")
-        return result, notes
-
-    def _parse_function_args(self, args_str: str) -> List[str]:
-        args = []
-        current = ""
-        depth = 0
-        quote = False
-        i = 0
-        while i < len(args_str):
-            char = args_str[i]
-            if char == "'":
-                current += char
-                if quote and i + 1 < len(args_str) and args_str[i + 1] == "'":
-                    current += args_str[i + 1]
-                    i += 2
-                    continue
-                quote = not quote
-            elif not quote and char == '(':
-                depth += 1
-                current += char
-            elif not quote and char == ')':
-                depth -= 1
-                current += char
-            elif not quote and char == ',' and depth == 0:
-                args.append(current.strip())
-                current = ""
-            else:
-                current += char
-            i += 1
-        if current.strip():
-            args.append(current.strip())
-        return args
-
-    def _convert_mysql_date_format(self, sql: str) -> Tuple[str, List[str]]:
-        notes = []
-        if "DATE_FORMAT" not in mask_non_executable(sql).upper():
-            return sql, notes
-        def convert_format(args_str: str, original: str) -> str:
-            args = self._parse_function_args(args_str)
-            if len(args) != 2:
-                return original
-            expr, fmt = args
-            if len(fmt) < 2 or fmt[0] != "'" or fmt[-1] != "'":
-                return original
-            fmt = fmt[1:-1]
-            pg_fmt = fmt.replace('%Y', 'YYYY').replace('%y', 'YY').replace('%m', 'MM').replace('%d', 'DD').replace('%H', 'HH24').replace('%h', 'HH12').replace('%i', 'MI').replace('%s', 'SS').replace('%p', 'AM').replace('%W', 'Day').replace('%M', 'Month')
-            return f"TO_CHAR({expr}, '{pg_fmt.replace(chr(39), chr(39) * 2)}')"
-        result = self._replace_function_calls(sql, "DATE_FORMAT", convert_format)
-        if result != sql:
-            notes.append("Converted DATE_FORMAT to TO_CHAR")
-        return result, notes
-
-    def _convert_postgres_to_char(self, sql: str) -> Tuple[str, List[str]]:
-        notes = []
-        if "TO_CHAR" not in mask_non_executable(sql).upper():
-            return sql, notes
-        def convert_format(args_str: str, original: str) -> str:
-            args = self._parse_function_args(args_str)
-            if len(args) != 2:
-                return original
-            expr, fmt = args
-            if len(fmt) < 2 or fmt[0] != "'" or fmt[-1] != "'":
-                return original
-            fmt = fmt[1:-1]
-            my_fmt = fmt.replace('YYYY', '%Y').replace('YY', '%y').replace('MM', '%m').replace('DD', '%d').replace('HH24', '%H').replace('HH12', '%h').replace('HH', '%H').replace('MI', '%i').replace('SS', '%s').replace('AM', '%p').replace('Day', '%W').replace('Month', '%M')
-            return f"DATE_FORMAT({expr}, '{my_fmt.replace(chr(39), chr(39) * 2)}')"
-        result = self._replace_function_calls(sql, "TO_CHAR", convert_format)
-        if result != sql:
-            notes.append("Converted TO_CHAR to DATE_FORMAT")
-        return result, notes
-
-    @staticmethod
-    def _single_rewrite(sql: str, pattern: str, replacement: Callable[[re.Match], str]):
-        """Apply one regex match against scanner-masked SQL and splice into original text."""
-        masked = mask_non_executable(sql)
-        match = re.search(pattern, masked, re.IGNORECASE)
-        if not match:
-            return sql, None
-        start, end = match.span()
-        original_match = sql[start:end]
-        proxy = re.match(pattern, original_match, re.IGNORECASE)
-        if proxy is None:
-            return sql, None
-        return sql[:start] + replacement(proxy) + sql[end:], match
-
-    def _convert_top_to_limit(self, sql: str) -> Tuple[str, List[str]]:
-        masked = mask_non_executable(sql)
-        match = re.search(r"SELECT\s+TOP\s+(\d+)", masked, re.IGNORECASE)
-        if not match:
-            return sql, []
-        n = match.group(1)
-        start, end = match.span()
-        result = sql[:start] + "SELECT" + sql[end:]
-        if "LIMIT" not in mask_non_executable(result).upper():
-            if result.endswith("\n"):
-                result += f" LIMIT {n}"
-            else:
-                line_comment = re.search(r"--[^\n]*$", result)
-                if line_comment:
-                    result = result[:line_comment.start()].rstrip() + f" LIMIT {n} " + result[line_comment.start():]
-                else:
-                    result = result.rstrip(';').rstrip() + f" LIMIT {n}"
-        return result, [f"Converted TOP {n} to LIMIT {n}"]
-
-    def _fix_group_concat_default_separator(self, sql: str) -> Tuple[str, List[str]]:
-        masked = mask_non_executable(sql)
-        match = re.search(r"GROUP_CONCAT\s*\((\w+)\)(?!\s+SEPARATOR)", masked, re.IGNORECASE)
-        if not match:
-            return sql, []
-        col = match.group(1)
-        start, end = match.span()
-        result = sql[:start] + f"STRING_AGG({col}::TEXT, ',')" + sql[end:]
-        return result, ["Converted GROUP_CONCAT to STRING_AGG with default separator"]
 
     def _check_warnings(self, sql: str, source: str, target: str) -> List[str]:
         warnings = []
@@ -278,10 +124,6 @@ class PostProcessor:
         return {
             "rule_engine": self.engine.get_stats(),
             "custom_handlers": [
-                "DECODE to CASE",
-                "DATE_FORMAT conversion",
-                "TOP to LIMIT",
-                "GROUP_CONCAT separator fix",
                 "LISTAGG to ARRAY_JOIN (Hive)",
             ],
         }

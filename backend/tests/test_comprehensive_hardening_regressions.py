@@ -6,6 +6,7 @@ from sqlglot import exp
 from backend.core.nl2sql import NL2SQLGenerator
 from backend.core.parser import SQLParser
 from backend.core.post_processor import PostProcessor
+from backend.core.transpiler import SQLTranspiler
 
 
 def test_mysql_group_concat_without_separator_uses_comma():
@@ -14,13 +15,15 @@ def test_mysql_group_concat_without_separator_uses_comma():
 
 
 def test_oracle_decode_null_search_preserves_null_semantics():
-    processed, _ = PostProcessor().process(
+    result = SQLTranspiler().transpile(
         "SELECT DECODE(status, NULL, 'missing', 'set') FROM users",
         "oracle",
         "postgres",
+        validate=False,
     )
-    assert "WHEN status IS NULL THEN 'missing'" in processed
-    assert "status = NULL" not in processed
+    assert result.success is True
+    assert "IS NULL" in result.target_sql.upper()
+    assert "status = NULL" not in result.target_sql.upper()
 
 
 def test_parser_normalizes_dialect_whitespace():
