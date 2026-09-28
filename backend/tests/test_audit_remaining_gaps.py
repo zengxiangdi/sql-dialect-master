@@ -11,17 +11,6 @@ from backend.core.post_processor import PostProcessor
 PROBE_HEADERS = {"X-Health-Probe-Token": "test-health-token"}
 
 
-def test_rownum_custom_transform_does_not_rewrite_literals_or_comments():
-    processor = PostProcessor()
-    for sql in (
-        "SELECT 'ROWNUM <= 5' AS message",
-        "SELECT 1 AS x -- ROWNUM <= 5\n",
-    ):
-        result, notes = processor._convert_rownum_to_limit(sql)
-        assert result == sql
-        assert notes == []
-
-
 def test_column_hints_reject_invalid_identifier_syntax():
     generator = NL2SQLGenerator()
     result = generator.generate(

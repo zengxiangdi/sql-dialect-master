@@ -25,30 +25,39 @@ def test_english_inclusive_comparison_preserves_lte():
 
 
 def test_simple_rownum_is_converted_to_limit():
-    processed, notes = PostProcessor().process(
+    result = SQLTranspiler().transpile(
         "SELECT * FROM users WHERE status = 'ACTIVE' AND ROWNUM <= 10",
         "oracle",
         "postgres",
     )
-    assert "LIMIT 10" in processed
-    assert "ROWNUM" not in processed
-    assert any("ROWNUM <= 10" in note for note in notes)
+    assert result.success is True
+    norm = " ".join(result.target_sql.split())
+    assert "LIMIT 10" in norm
+    assert "ROWNUM" not in result.target_sql.upper()
+    assert "status = 'ACTIVE'" in result.target_sql.replace("\n", " ")
+    assert any("ROWNUM <= 10" in note and "LIMIT 10" in note for note in result.transformations)
 
 
 def test_rownum_with_order_by_is_not_silently_rewritten():
-    sql = "SELECT * FROM users WHERE ROWNUM <= 10 ORDER BY created_at DESC"
-    processed, notes = PostProcessor().process(sql, "oracle", "postgres")
-    assert "ROWNUM <= 10" in processed
-    assert "LIMIT 10" not in processed
-    assert any("not provably LIMIT-equivalent" in note for note in notes)
+    result = SQLTranspiler().transpile(
+        "SELECT * FROM users WHERE ROWNUM <= 10 ORDER BY created_at DESC",
+        "oracle",
+        "postgres",
+    )
+    assert result.success is True
+    assert "ROWNUM <= 10" in result.target_sql.upper()
+    assert "LIMIT 10" not in result.target_sql.upper()
 
 
 def test_rownum_or_predicate_is_not_silently_rewritten():
-    sql = "SELECT * FROM users WHERE status = 'ACTIVE' OR ROWNUM <= 10"
-    processed, notes = PostProcessor().process(sql, "oracle", "postgres")
-    assert "ROWNUM <= 10" in processed
-    assert "LIMIT 10" not in processed
-    assert any("not provably LIMIT-equivalent" in note for note in notes)
+    result = SQLTranspiler().transpile(
+        "SELECT * FROM users WHERE status = 'ACTIVE' OR ROWNUM <= 10",
+        "oracle",
+        "postgres",
+    )
+    assert result.success is True
+    assert "ROWNUM <= 10" in result.target_sql.upper()
+    assert "LIMIT 10" not in result.target_sql.upper()
 
 
 def test_security_ignores_strings_and_comments():

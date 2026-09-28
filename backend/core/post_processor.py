@@ -13,64 +13,9 @@ from sqlglot import exp
 
 from .rules import rule_engine, RuleEngine
 from .function_call_scanner import replace_function_calls
-from .p1_sql_scanner import mask_non_executable, executable_segments
+from .p1_sql_scanner import mask_non_executable
 
 logger = logging.getLogger(__name__)
-
-
-def _simple_rownum_transform(sql: str) -> Tuple[str, Optional[str]]:
-    """Convert simple Oracle ROWNUM <= N to LIMIT N with safety checks.
-
-    Returns (transformed_sql, note_or_None). note is None when no
-    ROWNUM predicate is found.  Unsafe query shapes (OR, UNION,
-    ORDER BY, GROUP BY, HAVING, DISTINCT, multiple SELECT) are
-    returned unchanged with a descriptive note.
-    """
-    masked = mask_non_executable(sql)
-    upper = masked.upper()
-    if "ROWNUM" not in upper:
-        return sql, None
-    if (
-        len(re.findall(r"\bSELECT\b", upper)) != 1
-        or any(token in upper for token in (
-            " OR ", " UNION ", " INTERSECT ", " EXCEPT ",
-            " ORDER BY ", " GROUP BY ", " HAVING ", " DISTINCT ",
-        ))
-    ):
-        return sql, (
-            "Skipped automatic ROWNUM conversion because query shape is not "
-            "provably LIMIT-equivalent"
-        )
-    match = re.search(r"\bROWNUM\s*<=\s*(\d+)\b", masked, re.IGNORECASE)
-    if not match:
-        return sql, (
-            "Skipped automatic ROWNUM conversion because query shape is not "
-            "provably LIMIT-equivalent"
-        )
-    n = match.group(1)
-    for pattern, replacement in [
-        (re.compile(r"\s+AND\s+ROWNUM\s*<=\s*\d+\b", re.IGNORECASE), ""),
-        (re.compile(r"\bWHERE\s+ROWNUM\s*<=\s*\d+\s+AND\s+", re.IGNORECASE), "WHERE "),
-        (re.compile(r"\bWHERE\s+ROWNUM\s*<=\s*\d+\b", re.IGNORECASE), ""),
-    ]:
-        parts = []
-        cursor = 0
-        for start, end in executable_segments(sql):
-            parts.append(sql[cursor:start])
-            segment = sql[start:end]
-            segment, count = pattern.subn(replacement, segment)
-            parts.append(segment)
-            cursor = end
-        parts.append(sql[cursor:])
-        result = "".join(parts)
-        if result != sql:
-            return result.rstrip(';').rstrip() + f" LIMIT {n}", (
-                f"Converted simple ROWNUM <= {n} to LIMIT {n}"
-            )
-    return sql, (
-        "Skipped automatic ROWNUM conversion because predicate shape was not "
-        "safely removable"
-    )
 
 
 class PostProcessor:
@@ -105,9 +50,6 @@ class PostProcessor:
         if source == "tsql" and target in ("mysql", "postgres", "hive", "spark"):
             result, top_notes = self._convert_top_to_limit(result)
             notes.extend(top_notes)
-        if source == "oracle" and target in ("mysql", "postgres", "hive", "spark"):
-            result, rownum_notes = self._convert_rownum_to_limit(result)
-            notes.extend(rownum_notes)
         if source == "oracle" and target in ("hive", "spark", "databricks"):
             result, listagg_notes = self._convert_listagg_to_array_join(result)
             notes.extend(listagg_notes)
@@ -248,10 +190,6 @@ class PostProcessor:
                     result = result.rstrip(';').rstrip() + f" LIMIT {n}"
         return result, [f"Converted TOP {n} to LIMIT {n}"]
 
-    def _convert_rownum_to_limit(self, sql: str) -> Tuple[str, List[str]]:
-        result, note = _simple_rownum_transform(sql)
-        return result, ([note] if note else [])
-
     def _fix_group_concat_default_separator(self, sql: str) -> Tuple[str, List[str]]:
         masked = mask_non_executable(sql)
         match = re.search(r"GROUP_CONCAT\s*\((\w+)\)(?!\s+SEPARATOR)", masked, re.IGNORECASE)
@@ -343,7 +281,6 @@ class PostProcessor:
                 "DECODE to CASE",
                 "DATE_FORMAT conversion",
                 "TOP to LIMIT",
-                "ROWNUM to LIMIT",
                 "GROUP_CONCAT separator fix",
                 "LISTAGG to ARRAY_JOIN (Hive)",
             ],

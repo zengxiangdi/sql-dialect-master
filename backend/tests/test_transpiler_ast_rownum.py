@@ -200,11 +200,11 @@ class TestProductionPipeline:
     def test_order_by_rownum_not_migrated(self) -> None:
         r = self.t.transpile("SELECT * FROM t WHERE ROWNUM <= 5 ORDER BY id", source="oracle", target="postgres")
         assert r.success is True
-        # The AST path correctly declines ORDER BY. The legacy post-processor
-        # _simple_rownum_transform still matches the ORDER-BY shape and appends
-        # LIMIT 5 (residual legacy behavior, removed in G6-A2). This test only
-        # asserts the AST transform did NOT fire: no AST note is recorded.
+        # The AST path correctly declines ORDER BY; no ROWNUM → LIMIT
+        # conversion happens anywhere in the pipeline.
         assert not any("(AST)" in note for note in r.transformations)
+        assert "ROWNUM <= 5" in r.target_sql.upper()
+        assert "LIMIT 5" not in r.target_sql.upper()
 
     def test_rejected_shape_leaves_limit_absent(self) -> None:
         r = self.t.transpile("SELECT * FROM t WHERE ROWNUM = 5", source="oracle", target="postgres")
@@ -229,69 +229,76 @@ class TestProductionPipeline:
         assert "'ROWNUM'" in r.target_sql
         assert not any("(AST)" in note for note in r.transformations)
 
-    def test_float_bound_not_migrated_by_ast_path(self) -> None:
-        """``ROWNUM <= 5.0`` must not be migrated by the AST path.
+class TestFloatBoundaryBehavior:
+    """After G6-A2 removed the legacy ROWNUM handler, the float-boundary
+    case must pass through the pipeline cleanly:
 
-        The AST path correctly declines the float boundary: no ``(AST)``
-        note is recorded. This is a helper-level assertion about the
-        transform, not about the production pipeline.
-        """
-        r = self.t.transpile("SELECT * FROM t WHERE ROWNUM <= 5.0", source="oracle", target="postgres", validate=False)
-        assert not any("(AST)" in note for note in r.transformations)
-
-
-class TestFloatBoundaryProductionRegression:
-    """Documents the pre-existing legacy post-processor defect (G6-A2) that
-    corrupts ``ROWNUM <= 5.0`` on the production pipeline.
-
-    The AST transform correctly skips the float boundary. The legacy
-    ``_simple_rownum_transform`` regex then matches ``\\d+`` inside ``5.0``,
-    strips the ``5``, and appends ``LIMIT 5``, leaving a stray ``.0`` token:
-
-        input : SELECT * FROM users WHERE ROWNUM <= 5.0
-        output: SELECT * FROM users .0 LIMIT 5   ← corrupted
-
-    This causes the target parser gate to reject the output and the
-    production result to have ``success=False``. This test records that
-    behavior explicitly so it is not confused with an AST-transform defect.
+    * AST transform skips it (float literal is not a bare integer).
+    * No post-processor ROWNUM rewriting remains.
+    * The target parser gate accepts the unchanged string.
+    * The production result is ``success=True`` with the original ROWNUM
+      predicate intact.
     """
 
     @classmethod
     def setup_class(cls) -> None:
         cls.t = SQLTranspiler()
 
-    def test_float_bound_production_result_is_validation_failed(self) -> None:
-        """Production pipeline: legacy handler corrupts float-bound case →
-        target parser rejects → success=False. This is the G6-A2 known issue."""
+    def test_float_bound_not_migrated_by_ast_path(self) -> None:
+        """``ROWNUM <= 5.0`` must not be migrated by the AST path.
+
+        No ``(AST)`` note is recorded because the RHS is a float literal,
+        not a bare integer.
+        """
+        r = self.t.transpile("SELECT * FROM t WHERE ROWNUM <= 5.0", source="oracle", target="postgres")
+        assert r.success is True
+        assert not any("(AST)" in note for note in r.transformations)
+
+    def test_float_bound_survives_pipeline_unchanged(self) -> None:
+        """The float-bound predicate must survive the production pipeline
+        intact — no corruption, no stray ``.0`` token, no spurious LIMIT.
+        The legacy handler that previously corrupted this case has been
+        removed (G6-A2), so the result is a clean pass-through.
+        """
         r = self.t.transpile(
             "SELECT * FROM users WHERE ROWNUM <= 5.0",
             source="oracle",
             target="postgres",
             validate=True,
         )
-        assert r.success is False, (
-            "float-bound case should fail production validation due to the "
-            "pre-existing legacy ROWNUM handler defect (G6-A2)"
-        )
-        assert r.error_code == "VALIDATION_FAILED"
-        # The legacy note is recorded; no AST note is recorded.
-        assert any("Converted simple ROWNUM" in note for note in r.transformations)
+        assert r.success is True, f"float-bound case should now succeed: {r.error}"
+        norm = " ".join((r.target_sql or "").split())
+        assert "ROWNUM <= 5.0" in norm, f"expected ROWNUM predicate preserved, got {norm!r}"
         assert not any("(AST)" in note for note in r.transformations)
+        # No stray '.0' token detached from the ROWNUM predicate.
+        assert ".0 LIMIT" not in norm
+        assert "LIMIT 5" not in norm
 
-    def test_float_bound_with_validate_off_exposes_corrupted_string(self) -> None:
-        """With validate=False the corruption string is visible: a stray
-        ``.0`` token remains after the table name. G6-A2 must fix the legacy
-        handler so this cannot occur."""
+
+class TestDoubleRownumBehavior:
+    """Two ROWNUM <= N predicates are a reject case for the AST path
+    (exactly-one-predicate rule). After G6-A2 removed the legacy handler,
+    both predicates must survive the pipeline unchanged — the old residual
+    ``WHERE ROWNUM <= 5 LIMIT 5`` must not appear.
+    """
+
+    @classmethod
+    def setup_class(cls) -> None:
+        cls.t = SQLTranspiler()
+
+    def test_double_rownum_not_migrated(self) -> None:
         r = self.t.transpile(
-            "SELECT * FROM users WHERE ROWNUM <= 5.0",
+            "SELECT * FROM users WHERE ROWNUM <= 5 AND ROWNUM <= 3",
             source="oracle",
             target="postgres",
-            validate=False,
+            validate=True,
         )
         assert r.success is True
         norm = " ".join((r.target_sql or "").split())
-        assert ".0" in norm, f"expected stray .0 token in {norm!r}"
-        assert "LIMIT 5" in norm
+        assert "ROWNUM <= 5" in norm, f"expected first predicate preserved, got {norm!r}"
+        assert "ROWNUM <= 3" in norm, f"expected second predicate preserved, got {norm!r}"
+        assert "LIMIT" not in norm.upper()
+        assert not any("(AST)" in note for note in r.transformations)
 
 
 if __name__ == "__main__":

@@ -31,12 +31,6 @@ from backend.core.post_processor import PostProcessor
             "TOP 99",
         ),
         (
-            "_convert_rownum_to_limit",
-            "SELECT * FROM t WHERE ROWNUM <= 10 AND note = 'ROWNUM <= 99' /* ROWNUM <= 88 */",
-            "LIMIT 10",
-            "ROWNUM <= 99",
-        ),
-        (
             "_fix_group_concat_default_separator",
             "SELECT GROUP_CONCAT(name), 'GROUP_CONCAT(fake)' FROM t",
             "STRING_AGG(name::TEXT, ',')",
