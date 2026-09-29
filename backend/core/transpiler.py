@@ -208,9 +208,15 @@ class SQLTranspiler:
 
         try:
             ast_notes: List[str] = []
-            if source == "oracle" and target in ("postgres", "mysql", "hive", "spark"):
-                ast = sqlglot.parse_one(sql, read=source)
-                ast, ast_notes = self._ast_rownum_to_limit(ast, target)
+            if source == "clickhouse" and target == "postgres":
+                ast = sqlglot.parse_one(sql, read="clickhouse")
+                ast, group_notes = self._ast_grouparray_to_arrayagg(ast, target)
+                ast_notes.extend(group_notes)
+                transpiled = ast.sql(dialect="postgres", pretty=pretty)
+            elif source == "oracle" and target in ("postgres", "mysql", "hive", "spark"):
+                ast = sqlglot.parse_one(sql, read="oracle")
+                ast, rownum_notes = self._ast_rownum_to_limit(ast, target)
+                ast_notes.extend(rownum_notes)
                 transpiled = ast.sql(dialect=target, pretty=pretty)
             else:
                 transpiled = sqlglot.transpile(sql, read=source, write=target, pretty=pretty)[0]
@@ -328,6 +334,36 @@ class SQLTranspiler:
         ast = ast.limit(bound)
         note = f"ROWNUM <= {bound.this} converted to LIMIT {bound.this} (AST)"
         return ast, [note]
+
+    def _ast_grouparray_to_arrayagg(self, ast: exp.Expression, target: str) -> Tuple[exp.Expression, List[str]]:
+        """AST-first groupArray → ARRAY_AGG migration (clickhouse → postgres, G6-R2).
+
+        Walks the parsed AST and replaces every ``exp.AnonymousAggFunc`` whose
+        function name (case-insensitive) is ``groupArray`` with
+        ``exp.ArrayAgg(this=node.expressions[0])``.  ``node.expressions[0]`` is
+        passed directly as ``this``:
+
+        - simple argument (``Column``)         → ``ARRAY_AGG(x)``
+        - DISTINCT argument (``Distinct``)     → ``ARRAY_AGG(DISTINCT x)``  (preserved)
+        - nested expression (``Anonymous``)    → ``ARRAY_AGG(nested_expr)``
+        - multiple groupArray calls            → one ArrayAgg per call
+
+        Returns ``(ast, notes)`` where ``notes`` is empty unless at least one
+        transformation fired.
+        """
+        found = False
+
+        def _transform(node):
+            nonlocal found
+            if isinstance(node, exp.AnonymousAggFunc) and node.this.upper() == "GROUPARRAY":
+                found = True
+                return exp.ArrayAgg(this=node.expressions[0])
+            return node
+
+        ast = ast.transform(_transform)
+        if found:
+            return ast, ["Converted groupArray to ARRAY_AGG"]
+        return ast, []
 
     @staticmethod
     def _remove_predicate_from_where(
