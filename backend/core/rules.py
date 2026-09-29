@@ -464,19 +464,6 @@ TRANSFORM_RULES: List[TransformRule] = [
         function_name="STRING_AGG",
         structured_replacer=_replace_string_agg_to_group_concat,
     ),
-    TransformRule(
-        name="clickhouse_group_array_to_postgres",
-        source="clickhouse",
-        target="postgres",
-        pattern=r'groupArray\s*\(([^)]+)\)',
-        replacement=r'ARRAY_AGG(\1)',
-        note="Converted groupArray to ARRAY_AGG",
-        category=RuleCategory.AGGREGATION,
-        priority=60,
-        function_name="groupArray",
-        structured_replacement="ARRAY_AGG({0})",
-    ),
-
     # =========================================================================
     # NULL HANDLING Rules
     # =========================================================================
