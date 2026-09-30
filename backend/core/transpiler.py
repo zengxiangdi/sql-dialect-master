@@ -218,6 +218,11 @@ class SQLTranspiler:
                 ast, rownum_notes = self._ast_rownum_to_limit(ast, target)
                 ast_notes.extend(rownum_notes)
                 transpiled = ast.sql(dialect=target, pretty=pretty)
+            elif source == "duckdb" and target in ("hive", "spark"):
+                ast = sqlglot.parse_one(sql, read="duckdb")
+                ast, list_notes = self._ast_duckdb_list_to_array(ast, target)
+                ast_notes.extend(list_notes)
+                transpiled = ast.sql(dialect=target, pretty=pretty)
             else:
                 transpiled = sqlglot.transpile(sql, read=source, write=target, pretty=pretty)[0]
             final_sql, transformations = self.post_processor.process(transpiled, source, target)
@@ -363,6 +368,43 @@ class SQLTranspiler:
         ast = ast.transform(_transform)
         if found:
             return ast, ["Converted groupArray to ARRAY_AGG"]
+        return ast, []
+
+    def _ast_duckdb_list_to_array(self, ast: exp.Expression, target: str) -> tuple[exp.Expression, list[str]]:
+        """AST-first DuckDB LIST datatype → ARRAY migration (duckdb → hive/spark, G6-L).
+
+        Walks the parsed AST and replaces every ``exp.DataType`` whose
+        ``node.this`` is ``exp.DataType.Type.LIST`` with
+        ``exp.DataType.build("ARRAY", expressions=node.expressions)``.
+        Inner type parameters are preserved:
+
+        - ``LIST``                  → ``ARRAY``
+        - ``LIST(INT)``             → ``ARRAY<INT>``
+        - ``LIST(VARCHAR(10))``     → ``ARRAY<STRING>``   (VARCHAR→STRING mapping is native)
+        - ``LIST(INTERVAL)``        → ``ARRAY<INTERVAL>``
+        - nested / multiple casts    → each LIST node rewritten independently
+
+        Function forms ``LIST(x)`` / ``LIST(DISTINCT x)`` parse as
+        ``exp.ArrayAgg``, not ``exp.DataType``, and are never touched by this
+        transform; they remain on the sqlglot-native path.
+        """
+        found = False
+
+        def _transform(node):
+            nonlocal found
+            if isinstance(node, exp.DataType) and node.this == exp.DataType.Type.LIST:
+                found = True
+                inner = node.expressions
+                return (
+                    exp.DataType.build("ARRAY", expressions=inner)
+                    if inner
+                    else exp.DataType.build("ARRAY")
+                )
+            return node
+
+        ast = ast.transform(_transform)
+        if found:
+            return ast, ["Converted LIST to ARRAY (AST)"]
         return ast, []
 
     @staticmethod
