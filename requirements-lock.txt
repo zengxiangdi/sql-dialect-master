@@ -67,6 +67,6 @@ boolean.py==5.0
 defusedxml==0.7.1
 msgpack==1.2.2
 filelock==3.32.6
-pyparsing==3.3.2
+pyparsing==3.3.3
 markdown-it-py==4.2.0
 mdurl==0.1.2
