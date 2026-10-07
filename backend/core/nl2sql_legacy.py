@@ -50,6 +50,24 @@ from .nl2sql_components.tokenizer import Tokenizer
 
 logger = logging.getLogger(__name__)
 
+def _join_sql_kind(join: Dict) -> str:
+    """Return the SQL JOIN keyword for a physical join record.
+
+    A structured ``join_spec`` from the relations module wins; an
+    unqualified join or a missing spec falls back to INNER.  Physical
+    join kinds never include EXISTS/NOT EXISTS — those are relational.
+    """
+    spec = join.get("join_spec")
+    if spec is not None:
+        kind = spec.kind
+        return "INNER" if kind == "JOIN" else kind
+    join_type = join.get("type", "JOIN")
+    if join_type in ("EXISTS", "NOT EXISTS"):
+        return "INNER"
+    return "INNER" if join_type in ("JOIN", "INNER") else join_type
+
+
+
 
 @dataclass
 class NL2SQLResult:
@@ -346,7 +364,11 @@ class NL2SQLGenerator:
                     subject = subject or joins[0].get("subject")
                     sql = f"SELECT *\nFROM {subject or joins[0]['table']}"
                     for join in joins:
-                        sql += f"\nJOIN {join['table']} ON {join['condition']}"
+                        # Emit the structured join kind from JoinSpec when
+                        # the user asked for a physical join (LEFT/RIGHT/
+                        # INNER/OUTER); an unqualified join stays INNER.
+                        kind = _join_sql_kind(join)
+                        sql += f"\n{kind} JOIN {join['table']} ON {join['condition']}"
                         explanation_parts.append(
                             f"关联: {subject or joins[0]['table']} ⟷ {join['table']}"
                         )
@@ -1149,8 +1171,9 @@ class NL2SQLGenerator:
                         0.1, detail=join["condition"],
                     ))
                 else:
-                    # Physical JOIN (original behavior)
-                    sql += f"\n{join['type']} {join['table']} ON {join['condition']}"
+                    # Physical JOIN — kind comes from the structured JoinSpec
+                    # (LEFT/RIGHT/INNER/OUTER), never a first-token guess.
+                    sql += f"\n{_join_sql_kind(join)} JOIN {join['table']} ON {join['condition']}"
                     explanation_parts.append(f"关联: {join['table']}")
                     evidence.items.append(EvidenceItem(
                         EVIDENCE_JOIN_KNOWN,

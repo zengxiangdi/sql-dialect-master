@@ -31,9 +31,11 @@ from .core_extract import (
 )
 from .mappings import COLUMN_PATTERNS, KEYWORDS, TABLE_PATTERNS
 from .relations import (
+    JoinSpec,
     extract_joins,
     guess_join_key,
     has_relational_keyword,
+    parse_join_spec,
 )
 from .templates import DEFAULT_QUERY_TEMPLATES, QueryTemplate
 from .tokenizer import JIEBA_AVAILABLE, Tokenizer
@@ -61,6 +63,8 @@ __all__ = [
     "extract_joins",
     "guess_join_key",
     "has_relational_keyword",
+    "JoinSpec",
+    "parse_join_spec",
     # aggregations
     "extract_aggregations",
     # boolean conditions
