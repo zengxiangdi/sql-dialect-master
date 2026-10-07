@@ -223,6 +223,11 @@ class SQLTranspiler:
                 ast, list_notes = self._ast_duckdb_list_to_array(ast, target)
                 ast_notes.extend(list_notes)
                 transpiled = ast.sql(dialect=target, pretty=pretty)
+            elif source == "mysql" and target == "oracle":
+                ast = sqlglot.parse_one(sql, read="mysql")
+                ast, now_notes = self._ast_mysql_now_to_sysdate(ast, target)
+                ast_notes.extend(now_notes)
+                transpiled = ast.sql(dialect="oracle", pretty=pretty)
             else:
                 transpiled = sqlglot.transpile(sql, read=source, write=target, pretty=pretty)[0]
             final_sql, transformations = self.post_processor.process(transpiled, source, target)
@@ -405,6 +410,43 @@ class SQLTranspiler:
         ast = ast.transform(_transform)
         if found:
             return ast, ["Converted LIST to ARRAY (AST)"]
+        return ast, []
+
+    def _ast_mysql_now_to_sysdate(self, ast: exp.Expression, target: str) -> tuple[exp.Expression, list[str]]:
+        """AST-first MySQL NOW() → Oracle SYSDATE migration (mysql → oracle, G6-R1).
+
+        Walks the parsed AST and replaces every ``exp.Anonymous`` whose function
+        name (case-insensitive) is ``NOW`` and which has **no arguments** with
+        ``exp.CurrentTimestamp(sysdate=True, join_mark=False)``.
+
+        ``CurrentTimestamp(sysdate=True)`` is a standard sqlglot expression whose
+        Oracle-dialect serialization emits bare ``SYSDATE`` — no serializer hack,
+        no custom expression class, no dialect modification.
+
+        - ``NOW()``                 → ``SYSDATE``
+        - ``NOW(6)`` (precision)    → **not matched** (``node.expressions`` non-empty)
+        - string literal ``'NOW()'`` → **not matched** (literal is not ``exp.Anonymous``)
+        - SQL comment ``-- NOW()``   → **not matched** (comment text is not in the AST)
+
+        Returns ``(ast, notes)`` where ``notes`` is empty unless at least one
+        transformation fired.
+        """
+        found = False
+
+        def _transform(node):
+            nonlocal found
+            if (
+                isinstance(node, exp.Anonymous)
+                and node.this.upper() == "NOW"
+                and not node.expressions
+            ):
+                found = True
+                return exp.CurrentTimestamp(sysdate=True, join_mark=False)
+            return node
+
+        ast = ast.transform(_transform)
+        if found:
+            return ast, ["Converted NOW to SYSDATE (AST)"]
         return ast, []
 
     @staticmethod
