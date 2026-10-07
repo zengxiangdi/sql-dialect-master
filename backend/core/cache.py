@@ -55,6 +55,7 @@ class TTLCache:
         self._hits = 0
         self._misses = 0
         self._evictions = 0
+        self._cleanup_thread: Optional[threading.Thread] = None
     
     def _make_key(self, *args, **kwargs) -> str:
         """Create cache key; hashing is explicitly non-security use."""
@@ -165,14 +166,22 @@ class TTLCache:
             return not self._cache[key].is_expired()
     
     def get_or_set(self, key: str, factory: Callable[[], Any], ttl: int = None) -> Any:
-        """Get cached value or atomically compute and cache it."""
+        """Get cached value or compute and cache it.
+
+        The factory is invoked *outside* the cache lock so that expensive
+        computation (e.g. a transpile or an LLM call) does not block every
+        other thread that reads from or writes to the cache.  The value is
+        written back under the lock, so concurrent callers that miss at
+        the same time may each compute once — that is an acceptable,
+        documented trade-off for a non-idempotent-safe cache.
+        """
         with self._lock:
             found, value = self._get_value(key)
             if found:
                 return value
-            value = factory()
-            self.set(key, value, ttl)
-            return value
+        value = factory()
+        self.set(key, value, ttl)
+        return value
     
     async def get_async(self, key: str) -> Optional[Any]:
         """Async version of get."""
@@ -187,9 +196,21 @@ class TTLCache:
         await loop.run_in_executor(None, lambda: self.set(key, value, ttl))
     
     def start_background_cleanup(self, interval: int = 60) -> threading.Thread:
-        """Start a background daemon thread for periodic cache cleanup."""
+        """Start a background daemon thread for periodic cache cleanup.
+
+        Repeated calls are rejected with ``RuntimeError`` rather than
+        spawning a second (or third…) thread.  The cleanup loop is
+        idempotent — one thread is enough — and silently restarting would
+        leak a thread per call and eventually starve the GIL.
+        """
         if interval <= 0:
             raise ValueError("interval must be positive")
+
+        with self._lock:
+            if self._cleanup_thread is not None and self._cleanup_thread.is_alive():
+                raise RuntimeError(
+                    "background cleanup is already running for this cache"
+                )
 
         def cleanup_loop():
             while True:
@@ -200,8 +221,10 @@ class TTLCache:
                         logger.info(f"Background cleanup removed {removed} expired entries")
                 except Exception as e:
                     logger.error(f"Background cleanup error: {e}")
-        
+
         thread = threading.Thread(target=cleanup_loop, daemon=True, name="CacheCleanup")
+        with self._lock:
+            self._cleanup_thread = thread
         thread.start()
         logger.info(f"Started background cache cleanup (interval={interval}s)")
         return thread

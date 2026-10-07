@@ -40,11 +40,21 @@ def setup_logging(
         format_string = (
             "%(asctime)s | %(levelname)-8s | %(name)s:%(funcName)s:%(lineno)d | %(message)s"
         )
-    
+
     formatter = logging.Formatter(format_string, datefmt="%Y-%m-%d %H:%M:%S")
     root_logger = logging.getLogger("backend")
     root_logger.setLevel(level)
-    root_logger.handlers.clear()
+    # Replacing setup_logging() must not silently drop handlers a caller
+    # attached to the "backend" logger.  Remove only the handler types this
+    # function manages — the stdout console handler and any file handler it
+    # previously installed — so a second call is idempotent without clearing
+    # the caller's own logging config.
+    for existing in list(root_logger.handlers):
+        if isinstance(existing, logging.StreamHandler) and not isinstance(existing, logging.FileHandler):
+            if getattr(existing, "stream", None) in (sys.stdout, sys.stderr, None):
+                root_logger.removeHandler(existing)
+        elif isinstance(existing, logging.FileHandler):
+            root_logger.removeHandler(existing)
     
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(level)

@@ -320,3 +320,12 @@ cp .env.example .env
 
 Key settings (prefixed with `SDM_`):
 - `SDM_CACHE_ENABLED` - Enable/disable caching
+
+### Rate limiting deployment
+
+Rate limiting is on by default. The two backends are:
+
+- `SDM_RATE_LIMIT_BACKEND=memory` (default) — per-process, thread-safe. Limits are **per instance**, not shared. Run this only when the API is served by a single process; in a multi-worker or multi-instance deployment each worker enforces its own limit, so the effective ceiling is `workers × SDM_RATE_LIMIT_REQUESTS`.
+- `SDM_RATE_LIMIT_BACKEND=redis` — shared, atomic limits across all workers. Set `SDM_REDIS_URL` when using this backend. The store connects and pings Redis at startup and fails fast if it is unreachable; the `redis` package is required (install with `pip install redis`).
+
+`SDM_RATE_LIMIT_ENABLED=false` disables enforcement entirely. Use the in-memory backend for local development and the Redis backend for any deployment with more than one worker or instance that must enforce a single global limit.

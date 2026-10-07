@@ -75,3 +75,22 @@ def test_redis_store_requires_url(monkeypatch):
     monkeypatch.delenv("SDM_REDIS_URL", raising=False)
     with pytest.raises(ValueError, match="Redis URL is required"):
         create_rate_limit_store()
+
+
+def test_readme_documents_rate_limit_deployment() -> None:
+    """Lock the user-facing memory-vs-Redis deployment guidance in README.
+
+    Without this, the two backends' scoping (per-process vs. global) is
+    documented only in ``.env.example`` and can silently drift.
+    """
+    from pathlib import Path
+
+    readme = Path(__file__).resolve().parents[2] / "README.md"
+    text = readme.read_text(encoding="utf-8")
+    # Both backends are named.
+    assert "SDM_RATE_LIMIT_BACKEND=memory" in text
+    assert "SDM_RATE_LIMIT_BACKEND=redis" in text
+    # The scoping contract is stated, not just implied.
+    assert "per instance" in text.lower() or "per-process" in text.lower()
+    assert "SDM_REDIS_URL" in text
+

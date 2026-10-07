@@ -198,6 +198,70 @@ class TestTTLCache:
         assert len(errors) == 0
 
 
+class TestGetOrSet:
+    """get_or_set contract: factory runs outside the lock, value is cached."""
+
+    def test_get_or_set_caches_miss_value(self):
+        cache = TTLCache(ttl=60)
+        calls = []
+
+        def factory():
+            calls.append(1)
+            return "computed"
+
+        assert cache.get_or_set("k", factory) == "computed"
+        assert calls == [1]
+        # Second call is a hit — factory must not run again.
+        assert cache.get_or_set("k", factory) == "computed"
+        assert calls == [1]
+
+    def test_get_or_set_hits_do_not_call_factory(self):
+        cache = TTLCache(ttl=60)
+        cache.set("preset", "preloaded")
+        assert cache.get_or_set("preset", lambda: "should_not_run") == "preloaded"
+
+    def test_factory_runs_without_holding_the_lock(self):
+        """A concurrent reader must not be blocked for the factory's duration.
+
+        If ``get_or_set`` still ran the factory under the lock, a reader on
+        another thread calling ``get`` would wait for the whole factory to
+        finish.  We measure the reader's wall-time against a factory that
+        sleeps, and assert the reader acquired the lock promptly.
+        """
+        cache = TTLCache(ttl=60)
+        factory_started = threading.Event()
+        reader_elapsed_box: list = []
+
+        def slow_factory():
+            factory_started.set()
+            time.sleep(0.25)
+            return "done"
+
+        def reader():
+            while not factory_started.is_set():
+                time.sleep(0.001)
+            # Give the factory a beat to enter and start sleeping so the
+            # reader's get() lands squarely inside the factory window.
+            time.sleep(0.05)
+            start = time.perf_counter()
+            cache.get("unrelated")
+            reader_elapsed_box.append(time.perf_counter() - start)
+
+        main_start = time.perf_counter()
+        t = threading.Thread(target=reader)
+        t.start()
+        result = cache.get_or_set("k", slow_factory)
+        main_wall = time.perf_counter() - main_start
+        t.join()
+        assert result == "done"
+        # The main thread still waited for the factory to compute the value
+        # (it is the caller), but the reader was not serialized behind it.
+        assert main_wall >= 0.25, "main thread unexpectedly fast"
+        assert reader_elapsed_box and reader_elapsed_box[0] < 0.2, (
+            "reader was blocked on the cache lock during factory compute"
+        )
+
+
 class TestCachedFunction:
     def test_decorator_caches_result(self):
         call_count = 0
