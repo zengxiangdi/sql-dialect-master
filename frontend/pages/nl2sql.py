@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from frontend.app_context_v2 import DIALECTS, generate_nl2sql, get_dialect_label
+from frontend.app_context_v2 import DIALECTS, copy_sql, generate_nl2sql, get_dialect_label
 from frontend.core.design_tokens import ColorTokens
 from frontend.core.escaping import esc
 from frontend.core.state import SessionState
@@ -112,6 +112,7 @@ def _render_input_section(theme: ColorTokens) -> None:
 
 def _run_generation(theme: ColorTokens) -> None:
     """Run NL2SQL generation and store result."""
+    state = SessionState.get()
     nl_input = st.session_state.get("nl_input_text", "")
     dialect = st.session_state.get("nl_dialect", "postgres")
     table_hint = st.session_state.get("nl_table_hint", "")
@@ -271,7 +272,7 @@ def _render_action_buttons(vm: NL2SQLViewModel, theme: ColorTokens) -> None:
     col_copy, col_dl, col_convert, col_diff = st.columns(4)
 
     with col_copy:
-        st.copy_button("Copy", data=sql)
+        copy_sql(sql)
 
     with col_dl:
         st.download_button("Download", sql, "generated.sql", mime="text/sql")

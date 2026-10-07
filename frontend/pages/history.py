@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 
 import streamlit as st
 
+from frontend.app_context_v2 import copy_sql
 from frontend.core.design_tokens import ColorTokens
 from frontend.core.escaping import esc
 from frontend.core.state import SessionState
@@ -111,7 +112,7 @@ def _render_history_entry(
                 st.rerun()
         with col_copy:
             if st.button("Copy", key=f"hist_copy_{identity}"):
-                st.copy_button("Copy SQL", data=entry.get("sql", ""))
+                copy_sql(entry.get("sql", ""), key=f"hist_copy_sql_{identity}")
         with col_fav:
             if not state.is_favorite(identity):
                 if st.button("☆", key=f"hist_fav_{identity}"):

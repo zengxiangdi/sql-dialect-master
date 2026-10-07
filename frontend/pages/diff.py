@@ -120,6 +120,7 @@ def _render_input_section(theme: ColorTokens) -> None:
 
 def _run_comparison(theme: ColorTokens) -> None:
     """Run semantic diff and store result in session state."""
+    state = SessionState.get()
     src_sql = st.session_state.get("diff_src_sql", "")
     tgt_sql = st.session_state.get("diff_tgt_sql", "")
     src_dialect = st.session_state.get("diff_src_dialect", "postgres")

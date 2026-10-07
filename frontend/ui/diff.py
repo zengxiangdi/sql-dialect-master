@@ -124,7 +124,7 @@ def _render_finding_list(vm: SemanticDiffViewModel, selected_idx: int | None, th
                  style="padding:10px 12px; margin-bottom:4px; background:{bg};
                         border:1px solid {border_color}; border-radius:6px;
                         cursor:pointer; transition:all 0.15s;"
-                 onmouseover="this.style.background='{theme.hover}'"
+                 onmouseover="this.style.background='{theme.hover_bg}'"
                  onmouseout="this.style.background='{bg}'">
                 <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
                     <span style="color:{icon_color}; font-size:10px;">{icon}</span>

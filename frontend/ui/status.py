@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import streamlit as st
 
+from frontend.app_context_v2 import copy_sql
 from frontend.core.design_tokens import ColorTokens
 from frontend.core.escaping import esc
 
@@ -87,7 +88,7 @@ def render_result_panel(
         "error": (theme.danger, f"background:{theme.danger}15; color:{theme.danger}; border-color:{theme.danger}40;"),
         "warning": (theme.warning, f"background:{theme.warning}15; color:{theme.warning}; border-color:{theme.warning}40;"),
     }
-    badge_style = status_colors.get(semantic_status, (theme.text_muted, f"background:{theme.hover}; color:{theme.text_muted}; border-color:{theme.border};"))[1]
+    badge_style = status_colors.get(semantic_status, (theme.text_muted, f"background:{theme.hover_bg}; color:{theme.text_muted}; border-color:{theme.border};"))[1]
     badge_text = esc(semantic_label) if semantic_status != "pending" else "Pending"
 
     if error_message:
@@ -130,9 +131,15 @@ def render_result_panel(
     # Action buttons
     col_copy, col_dl, col_diff = st.columns([1, 1, 1])
     with col_copy:
-        st.copy_button("Copy", key=_stable_copy_key(sql), data=sql)
+        copy_sql(sql, key=_stable_copy_key(sql))
     with col_dl:
-        st.download_button("Download", sql, "converted.sql", mime="text/sql")
+        st.download_button(
+            "Download",
+            sql,
+            "converted.sql",
+            mime="text/sql",
+            key="download_result_panel",
+        )
     with col_diff:
         if st.button("Semantic Diff", key="to_diff_btn"):
             from frontend.core.navigation import create_navigation_intent

@@ -16,6 +16,7 @@ from frontend.app_context_v2 import (
     DIALECTS,
     batch_convert_sql,
     convert_sql,
+    copy_sql,
     format_sql_local,
     split_sql_statements,
 )
@@ -105,9 +106,15 @@ def render_convert_page(theme: ColorTokens) -> None:
             st.code(target_sql_display, language="sql")
             col_copy, col_dl = st.columns([1, 1])
             with col_copy:
-                st.copy_button("Copy", key="copy_tgt", data=target_sql_display)
+                copy_sql(target_sql_display, key="copy_tgt")
             with col_dl:
-                st.download_button("Download", target_sql_display, "converted.sql", mime="text/sql")
+                st.download_button(
+                    "Download",
+                    target_sql_display,
+                    "converted.sql",
+                    mime="text/sql",
+                    key="download_tgt_sql",
+                )
         else:
             st.markdown(
                 f'<div style="border:1px dashed {theme.border}; border-radius:6px; '

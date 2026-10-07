@@ -89,6 +89,43 @@ def generate_nl2sql(nl: str, dialect: str, table_hint: str | None = None) -> NL2
     return gen.generate(nl, dialect=dialect, table_hint=table_hint)
 
 
+def _stable_key(sql: str) -> str:
+    """Process-independent widget key (str.hash is salted per-process)."""
+    import hashlib
+
+    return f"copy_result_{hashlib.sha1(sql.encode('utf-8')).hexdigest()[:8]}"
+
+
+def _html_attr(text: str) -> str:
+    """Escape text for a double-quoted HTML attribute value."""
+    return (
+        text.replace("&", "&amp;")
+        .replace('"', "&quot;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+
+def copy_sql(sql: str, key: str | None = None) -> None:
+    """Copy SQL to the clipboard.
+
+    Uses Streamlit's native ``copy_button`` when available; otherwise falls
+    back to a small HTML snippet with a Web-Clipboard call so result panels
+    keep a working copy affordance.
+    """
+    if hasattr(st, "copy_button"):
+        st.copy_button("Copy", key=key or _stable_key(sql), data=sql)
+        return
+    snippet = (
+        '<div style="display:flex;justify-content:flex-end;margin:4px 0;">'
+        '<button onclick="navigator.clipboard.writeText(this.dataset.sql).then('
+        '()=>{this.textContent=\'Copied\';setTimeout(()=>this.textContent=\'Copy\',1500)})" '
+        f'data-sql="{_html_attr(sql)}" '
+        'style="padding:4px 10px;font-size:11px;cursor:pointer;">Copy</button></div>'
+    )
+    st.markdown(snippet, unsafe_allow_html=True)
+
+
 # ---------------------------------------------------------------------------
 # Static data
 # ---------------------------------------------------------------------------
