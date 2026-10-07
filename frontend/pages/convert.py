@@ -148,6 +148,7 @@ def render_convert_page(theme: ColorTokens) -> None:
             semantic_label=vm.semantic_label,
             semantic_status=vm.semantic_status,
             theme=theme,
+            target_validation_state=vm.target_validation_state,
         )
 
         # Navigate to Diff workspace

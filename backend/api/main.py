@@ -221,6 +221,17 @@ class ConvertResponse(BaseModel):
     compatibility_notes: List[str] = Field(default_factory=list, description="Compatibility notes")
     transformations: List[str] = Field(default_factory=list, description="Applied transformations")
     warnings: List[str] = Field(default_factory=list, description="Conversion warnings")
+    target_validation_state: str = Field(
+        "target_valid",
+        description=(
+            "Target-dialect parse status of the produced output. "
+            '"target_valid": target parser accepted the output; '
+            '"generic_only": target parser rejected it but the generic parser '
+            'accepted it — the conversion is retained with a warning and must '
+            'not be read as target-validated; '
+            '"invalid": neither parser accepts the output.'
+        ),
+    )
     timestamp: str = Field(default_factory=lambda: datetime.now().isoformat(), description="Response timestamp")
 
 class NL2SQLRequest(BaseModel):
@@ -406,7 +417,8 @@ async def convert_sql(request: ConvertRequest):
         error_code=result.error_code,
         compatibility_notes=result.compatibility_notes,
         transformations=result.transformations,
-        warnings=result.warnings
+        warnings=result.warnings,
+        target_validation_state=result.target_validation_state,
     )
 
 @app.post("/api/parse", tags=["conversion"])

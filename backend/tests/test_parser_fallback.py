@@ -15,13 +15,14 @@ def test_validate_output_falls_back_to_generic_parser(monkeypatch):
 
     monkeypatch.setattr(sqlglot, "parse_one", fake_parse_one)
 
-    error, warning = transpiler._validate_output_detailed(
+    error, warning, state = transpiler._validate_output_detailed(
         "SELECT 1", "postgres"
     )
 
     assert error is None
     assert warning is not None
     assert "generic SQL parser accepted" in warning
+    assert state == "generic_only"
     assert calls == ["postgres", None]
     assert transpiler._validate_output("SELECT 1", "postgres") is None
 
@@ -34,7 +35,8 @@ def test_validate_output_fails_when_target_and_generic_parser_reject(monkeypatch
 
     monkeypatch.setattr(sqlglot, "parse_one", always_fail)
 
-    error, warning = transpiler._validate_output_detailed("SELECT FROM", "postgres")
+    error, warning, state = transpiler._validate_output_detailed("SELECT FROM", "postgres")
 
     assert error is not None
     assert warning is None
+    assert state == "invalid"

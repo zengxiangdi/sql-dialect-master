@@ -61,6 +61,7 @@ def render_result_panel(
     semantic_label: str,
     semantic_status: str,
     theme: ColorTokens | None = None,
+    target_validation_state: str = "target_valid",
 ) -> None:
     """Render the full conversion result panel.
 
@@ -129,7 +130,7 @@ def render_result_panel(
     # Action buttons
     col_copy, col_dl, col_diff = st.columns([1, 1, 1])
     with col_copy:
-        st.copy_button("Copy", key=f"copy_result_{hash(sql) % 10000}", data=sql)
+        st.copy_button("Copy", key=_stable_copy_key(sql), data=sql)
     with col_dl:
         st.download_button("Download", sql, "converted.sql", mime="text/sql")
     with col_diff:
@@ -178,6 +179,22 @@ def render_result_panel(
         )
         for note in compatibility_notes:
             st.info(esc(note))
+
+    # Target-dialect validation state: a generic-only fallback must be
+    # visibly distinguished from a target-validated conversion.
+    if target_validation_state == "generic_only":
+        st.warning(
+            "Output was not accepted by the target-dialect parser and is "
+            "retained via generic-parser fallback. Verify it against the "
+            "target database before relying on it.",
+        )
+
+
+def _stable_copy_key(sql: str) -> str:
+    """Process-independent copy-button key (str.hash is salted)."""
+    import hashlib
+
+    return f"copy_result_{hashlib.sha1(sql.encode('utf-8')).hexdigest()[:8]}"
 
 
 def render_batch_result(

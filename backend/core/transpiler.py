@@ -55,7 +55,19 @@ def _dml_without_where(sql: str, parsed_statements=None):
 
 @dataclass
 class TranspileResult:
-    """Result of SQL transpilation."""
+    """Result of SQL transpilation.
+
+    ``target_validation_state`` is one of:
+
+    - ``"target_valid"``  — output parses cleanly under the target dialect
+      (or validation was disabled via ``validate=False``).
+    - ``"generic_only"``  — target-dialect parser rejected the output but the
+      generic SQL parser accepted it.  The conversion is retained with a
+      compatibility warning, but the success flag must NOT read as a
+      target-validated conversion.
+    - ``"invalid"``       — neither the target parser nor the generic parser
+      accepts the output; ``success`` is ``False``.
+    """
     success: bool
     source_sql: str
     target_sql: Optional[str] = None
@@ -66,6 +78,7 @@ class TranspileResult:
     compatibility_notes: List[str] = field(default_factory=list)
     transformations: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
+    target_validation_state: str = "target_valid"
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -78,7 +91,8 @@ class TranspileResult:
             "error_code": self.error_code,
             "compatibility_notes": self.compatibility_notes,
             "transformations": self.transformations,
-            "warnings": self.warnings
+            "warnings": self.warnings,
+            "target_validation_state": self.target_validation_state,
         }
 
 
@@ -192,6 +206,9 @@ class SQLTranspiler:
             cached = self._cache.get(cache_key)
             if cached:
                 logger.info("Returning cached result")
+                # Guard against stale cache entries from before the
+                # target_validation_state field existed.
+                cached.setdefault("target_validation_state", "target_valid")
                 return TranspileResult(**cached)
 
         if multiple_statements is None:
@@ -241,8 +258,13 @@ class SQLTranspiler:
             else:
                 warnings = security_warnings + self._generate_warnings(sql, source, target)
 
+            target_validation_state = "target_valid"
             if validate:
-                validation_error, validation_warning = self._validate_output_detailed(final_sql, target)
+                (
+                    validation_error,
+                    validation_warning,
+                    target_validation_state,
+                ) = self._validate_output_detailed(final_sql, target)
                 if validation_warning:
                     warnings.append(validation_warning)
                 if validation_error:
@@ -250,7 +272,8 @@ class SQLTranspiler:
                     return TranspileResult(
                         success=False, source_sql=sql, source_dialect=source, target_dialect=target,
                         error=validation_error, error_code=ErrorCode.VALIDATION_FAILED.value,
-                        compatibility_notes=compat_notes, transformations=transformations, warnings=warnings
+                        compatibility_notes=compat_notes, transformations=transformations, warnings=warnings,
+                        target_validation_state="invalid",
                     )
 
             result = TranspileResult(
@@ -261,7 +284,8 @@ class SQLTranspiler:
                 target_dialect=target,
                 compatibility_notes=compat_notes,
                 transformations=transformations,
-                warnings=warnings
+                warnings=warnings,
+                target_validation_state=target_validation_state,
             )
 
             if self._cache_enabled:
@@ -578,22 +602,34 @@ class SQLTranspiler:
 
     def _validate_output(self, sql: str, dialect: str) -> Optional[str]:
         """Validate target SQL, preserving the original error-only interface."""
-        error, _ = self._validate_output_detailed(sql, dialect)
+        error, _, _ = self._validate_output_detailed(sql, dialect)
         return error
 
     def _validate_output_detailed(
         self, sql: str, dialect: str
-    ) -> tuple[Optional[str], Optional[str]]:
-        """Validate target SQL with a generic-parser compatibility fallback."""
+    ) -> tuple[Optional[str], Optional[str], str]:
+        """Validate target SQL with a generic-parser compatibility fallback.
+
+        Returns ``(error, warning, target_validation_state)`` where
+        ``target_validation_state`` is one of ``"target_valid"`` (target
+        parser accepted the output), ``"generic_only"`` (target parser
+        rejected it but the generic parser accepted it — the conversion is
+        retained, never presented as target-validated), or ``"invalid"``
+        (neither parser accepts the output).
+        """
         try:
             sqlglot.parse_one(sql, read=dialect)
-            return None, None
+            return None, None, "target_valid"
         except Exception as target_error:
             target_message = str(target_error)[:100]
             try:
                 sqlglot.parse_one(sql)
             except Exception:
-                return f"⚠️ Output SQL may have syntax issues: {target_message}", None
+                return (
+                    f"⚠️ Output SQL may have syntax issues: {target_message}",
+                    None,
+                    "invalid",
+                )
 
             warning = (
                 "⚠️ Target dialect parser rejected the output, but the generic "
@@ -601,7 +637,7 @@ class SQLTranspiler:
                 f"compatibility warning. Target parser error: {target_message}"
             )
             logger.warning("Generic parser fallback used for %s output: %s", dialect, target_message)
-            return None, warning
+            return None, warning, "generic_only"
 
     def _validate_security(self, sql: str) -> Dict[str, Any]:
         result = {"blocked": False, "reason": None, "warnings": [], "executable_sql": None}

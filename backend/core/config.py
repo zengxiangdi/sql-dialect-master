@@ -181,6 +181,7 @@ class TranspileResultDict(TypedDict, total=False):
     compatibility_notes: List[str]
     transformations: List[str]
     warnings: List[str]
+    target_validation_state: str
 
 
 # =============================================================================

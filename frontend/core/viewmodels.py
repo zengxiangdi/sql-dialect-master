@@ -35,6 +35,7 @@ class ConversionViewModel:
     semantic_status: SemanticStatus
     semantic_label: str = ""
     runtime_status: RuntimeStatus = "not_executed"
+    target_validation_state: str = "target_valid"
     warnings: list[str] = field(default_factory=list)
     transformations: list[str] = field(default_factory=list)
     compatibility_notes: list[str] = field(default_factory=list)
@@ -67,6 +68,7 @@ class ConversionViewModel:
             ast_status="ok" if result.success else "error",
             semantic_status=semantic_status,
             semantic_label=semantic_label,
+            target_validation_state=getattr(result, "target_validation_state", "target_valid"),
             warnings=list(result.warnings),
             transformations=list(result.transformations),
             compatibility_notes=list(result.compatibility_notes),
@@ -106,6 +108,7 @@ class ConversionViewModel:
             ast_status=base.ast_status,
             semantic_status=new_semantic,
             semantic_label=label,
+            target_validation_state=base.target_validation_state,
             warnings=base.warnings,
             transformations=base.transformations,
             compatibility_notes=base.compatibility_notes,
