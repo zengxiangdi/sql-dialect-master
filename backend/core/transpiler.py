@@ -229,6 +229,8 @@ class SQLTranspiler:
                 ast = sqlglot.parse_one(sql, read="clickhouse")
                 ast, group_notes = self._ast_grouparray_to_arrayagg(ast, target)
                 ast_notes.extend(group_notes)
+                ast, arrayjoin_notes = self._ast_clickhouse_array_join_to_unnest(ast, target)
+                ast_notes.extend(arrayjoin_notes)
                 transpiled = ast.sql(dialect="postgres", pretty=pretty)
             elif source == "oracle" and target in ("postgres", "mysql", "hive", "spark"):
                 ast = sqlglot.parse_one(sql, read="oracle")
@@ -397,6 +399,57 @@ class SQLTranspiler:
         ast = ast.transform(_transform)
         if found:
             return ast, ["Converted groupArray to ARRAY_AGG"]
+        return ast, []
+
+    def _ast_clickhouse_array_join_to_unnest(self, ast: exp.Expression, target: str) -> tuple[exp.Expression, list[str]]:
+        """AST-first ClickHouse ARRAY JOIN → UNNEST migration (clickhouse → postgres, P5).
+
+        ClickHouse's ``ARRAY JOIN`` is a collection-join construct with no
+        Postgres equivalent; ``sqlglot.transpile`` passes it through
+        verbatim, leaving output that the target dialect cannot execute.
+        This transform rewrites every ``exp.Join`` with ``kind == "ARRAY"``
+        into a ``CROSS JOIN UNNEST(<collection>) AS <alias>(value)``:
+
+        - bare form (``ARRAY JOIN arr``)         → ``CROSS JOIN UNNEST(arr) AS t(value)``
+        - explicit alias (``ARRAY JOIN arr AS x``) → ``CROSS JOIN UNNEST(arr) AS x(value)``
+        - qualified column (``o.tags``)          → alias preserved, column kept qualified
+
+        The rewritten ``CROSS JOIN UNNEST(...)`` output is Postgres-valid
+        and carries the same per-element expansion semantics.
+        """
+        found = False
+
+        def _build_unnest_join(join_node: exp.Join) -> exp.Join:
+            node = join_node.this
+            if isinstance(node, exp.Alias):
+                user_alias = node.alias
+                col = node.this
+            else:
+                user_alias = None
+                col = node
+            alias = (
+                exp.TableAlias(
+                    this=exp.Identifier(this=user_alias),
+                    columns=[exp.Identifier(this="value")],
+                )
+                if user_alias
+                else exp.TableAlias(
+                    this=exp.Identifier(this="t"),
+                    columns=[exp.Identifier(this="value")],
+                )
+            )
+            return exp.Join(kind="CROSS", this=exp.Unnest(expressions=[col], alias=alias, offset=False))
+
+        def _transform(node):
+            nonlocal found
+            if isinstance(node, exp.Join) and node.kind == "ARRAY":
+                found = True
+                return _build_unnest_join(node)
+            return node
+
+        ast = ast.transform(_transform)
+        if found:
+            return ast, ["Converted ARRAY JOIN to CROSS JOIN UNNEST"]
         return ast, []
 
     def _ast_duckdb_list_to_array(self, ast: exp.Expression, target: str) -> tuple[exp.Expression, list[str]]:

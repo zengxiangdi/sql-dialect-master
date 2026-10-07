@@ -373,16 +373,6 @@ TRANSFORM_RULES: List[TransformRule] = [
         priority=80
     ),
     TransformRule(
-        name="clickhouse_array_join_to_postgres",
-        source="clickhouse",
-        target="postgres",
-        pattern=r'ARRAY\s+JOIN\s+(\w+)(?:\s+AS\s+(\w+))?',
-        replacement=r'CROSS JOIN LATERAL UNNEST(\1) AS t(value)',
-        note="Converted ARRAY JOIN to UNNEST",
-        category=RuleCategory.ARRAY,
-        priority=80
-    ),
-    TransformRule(
         name="hive_size_to_postgres",
         source="hive,spark",
         target="postgres",
