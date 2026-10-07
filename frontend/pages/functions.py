@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import streamlit as st
 
+from frontend.app_context_v2 import get_page_data
 from frontend.core.design_tokens import ColorTokens
 from frontend.core.escaping import esc
 
@@ -21,8 +22,15 @@ CATEGORY_ICONS = {
 }
 
 
-def render_functions_page(funcs_data: dict, theme: ColorTokens) -> None:
-    """Render the Function Library page."""
+def render_functions_page(theme: ColorTokens) -> None:
+    """Render the Function Library page.
+
+    Data is injected by the page registry via ``get_page_data()`` — the
+    renderer keeps the unified PageRenderer contract of receiving only
+    the active theme.
+    """
+    data = get_page_data()
+    funcs_data = data.funcs_data
 
     st.markdown(
         f"""

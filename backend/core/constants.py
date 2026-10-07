@@ -72,7 +72,13 @@ DANGEROUS_PATTERNS = [
 # =============================================================================
 # Version Info
 # =============================================================================
+#
+# Canonical product version lives in backend.core.metadata.  This module
+# re-exports it for backward compatibility — it must NOT carry its own
+# hardcoded number (an earlier drift bug pinned this file to 1.0.0 while
+# the release was 1.1.0).
+from backend.core.metadata import PROJECT_VERSION as _CANONICAL_VERSION
 
-VERSION = "1.0.0"
+VERSION = _CANONICAL_VERSION
 APP_NAME = "SQL Dialect Master"
 APP_DESCRIPTION = "Enterprise-grade multi-database SQL conversion platform"

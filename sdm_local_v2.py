@@ -26,6 +26,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ── Import new architecture ──────────────────────────────────────────
+from backend.core import metadata as _meta
 from frontend.app_context_v2 import load_data_v2
 from frontend.core.design_tokens import THEMES
 from frontend.core.navigation import (
@@ -120,7 +121,7 @@ with st.sidebar:
             </div>
             <div style="font-size:10px; color:{current_theme.text_muted}; margin-top:2px;
                         font-family:monospace;">
-                v2.0 · Developer Workspace
+                Frontend v{_meta.FRONTEND_ARCHITECTURE_VERSION} · Developer Workspace
             </div>
         </div>
         """,
@@ -196,7 +197,7 @@ st.markdown("---")
 st.markdown(
     f"""
     <div style="text-align:center; padding:8px; opacity:0.6; font-size:11px; color:{current_theme.text_muted};">
-        SQL Dialect Master v2.0 · Professional SQL Developer Workspace
+        SQL Dialect Master v{_meta.PROJECT_VERSION} · Professional SQL Developer Workspace
     </div>
     """,
     unsafe_allow_html=True,

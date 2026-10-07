@@ -198,6 +198,7 @@ def _render_toolbar(theme: ColorTokens) -> None:
 
 def _render_batch_section(src_dialect: str, tgt_dialect: str, theme: ColorTokens) -> None:
     """Render the batch conversion section."""
+    state = SessionState.get()
     st.markdown(
         '<div style="font-size:11px; font-weight:600; letter-spacing:0.06em; '
         'text-transform:uppercase; color:' + theme.text_muted + '; margin-bottom:8px;">'

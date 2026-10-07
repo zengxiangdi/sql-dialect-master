@@ -110,7 +110,26 @@ def get_dialect_label(dialect: str) -> str:
 # Static data loading
 # ---------------------------------------------------------------------------
 import json
+from dataclasses import dataclass
 from pathlib import Path
+
+
+@dataclass(frozen=True)
+class AppData:
+    """Registry-injected static data for data-dependent pages.
+
+    The unified PageRenderer contract is ``Callable[[ColorTokens], None]`` —
+    a renderer receives only the active theme.  Pages that need static
+    data (Functions / Types) read it from this container instead of a
+    positional argument, which keeps every PAGE_MAP entry callable with
+    the same signature.
+    """
+
+    types_data: dict
+    funcs_data: dict
+
+
+_app_data: AppData | None = None
 
 
 @st.cache_data
@@ -132,3 +151,14 @@ def load_data_v2() -> tuple[dict, dict]:
     types = json.loads(types_path.read_text(encoding="utf-8"))
     funcs = json.loads(funcs_path.read_text(encoding="utf-8"))
     return types, funcs
+
+
+def get_page_data() -> AppData:
+    """Return the lazily loaded static data container.
+
+    Loaded once per process; Streamlit reruns share it.
+    """
+    global _app_data
+    if _app_data is None:
+        _app_data = AppData(*load_data_v2())
+    return _app_data

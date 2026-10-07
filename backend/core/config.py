@@ -225,10 +225,17 @@ class AppSettings(BaseSettings):
     # NL2SQL settings
     nl2sql_confidence_threshold: float = 0.6
     nl2sql_max_suggestions: int = 5
-    
-    # Transpiler settings
+    nl2sql_max_input_length: int = 8192
+
+    # SQL Transpiler / Parser settings
+    #
+    # Canonical maximum SQL input length.  ``parser_max_sql_length`` is a
+    # compatibility alias (the .env example ships both names) and falls back
+    # to ``transpiler_max_sql_length``.  Business code must read the
+    # settings object — never ``os.getenv`` directly.
     transpiler_pretty_default: bool = True
     transpiler_max_sql_length: int = 100000
+    parser_max_sql_length: int = 100000
     
     # Function encyclopedia
     function_search_limit: int = 50

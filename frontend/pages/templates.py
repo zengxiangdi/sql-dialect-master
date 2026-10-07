@@ -25,13 +25,13 @@ def render_templates_page(theme: ColorTokens) -> None:
         unsafe_allow_html=True,
     )
 
-    # Group by category
+    # Group by category (TEMPLATES maps category -> list of (label, sql)).
     categories: dict[str, list[tuple[str, str]]] = {}
-    for name, sql in TEMPLATES.items():
-        cat = name.split(" · ")[0] if " · " in name else "Other"
-        if cat not in categories:
-            categories[cat] = []
-        categories[cat].append((name, sql))
+    for cat, items in TEMPLATES.items():
+        if isinstance(items, list):
+            categories[cat] = list(items)
+        else:
+            categories[cat] = [(cat, items)]
 
     for cat, items in categories.items():
         st.markdown(f"##### {esc(cat)}")
@@ -39,8 +39,26 @@ def render_templates_page(theme: ColorTokens) -> None:
             short_label = label.replace(f"{cat} · ", "")
             with st.expander(f"{esc(short_label)}", expanded=False):
                 st.code(esc(sql), language="sql")
-                st.button("Use in Convert", key=f"tpl_{hash(sql) % 10000}",
-                          on_click=_load_template, args=(sql,))
+                st.button(
+                    "Use in Convert",
+                    key=_deterministic_key("tpl", f"{cat}::{label}"),
+                    on_click=_load_template,
+                    args=(sql,),
+                )
+
+
+def _deterministic_key(prefix: str, value: str) -> str:
+    """Build a stable, process-independent widget key.
+
+    ``str.hash`` is salted per process on CPython, so it must never be
+    used for Streamlit widget keys.  The previous code also applied
+    ``hash()`` to a list of template tuples, which is unhashable and
+    crashed the page at runtime.
+    """
+    import hashlib
+
+    digest = hashlib.sha1(value.encode("utf-8")).hexdigest()[:8]
+    return f"{prefix}_{digest}"
 
 
 def _load_template(sql: str) -> None:

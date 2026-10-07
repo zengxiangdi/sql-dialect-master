@@ -56,20 +56,6 @@ class SQLParser:
                 error=f"SQL exceeds maximum length of {max_sql_length} characters",
                 dialect=self.dialect,
             )
-        # Reject oversized input (production_hardening guard)
-        import os
-        raw = os.getenv("SDM_PARSER_MAX_SQL_LENGTH")
-        if raw is not None and raw.strip():
-            try:
-                env_limit = int(raw)
-                if env_limit > 0 and len(sql) > env_limit:
-                    return ParseResult(
-                        success=False,
-                        error=f"SQL exceeds maximum length of {env_limit} characters",
-                        dialect=self.dialect,
-                    )
-            except ValueError:
-                pass
         if not sql or not sql.strip():
             return ParseResult(
                 success=False,

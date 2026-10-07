@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from frontend.app_context_v2 import DIALECTS, get_dialect_label
+from frontend.app_context_v2 import DIALECTS, get_dialect_label, get_page_data
 from frontend.core.design_tokens import ColorTokens
 from frontend.core.escaping import esc
 
@@ -18,8 +18,15 @@ TYPE_CATEGORIES = {
 }
 
 
-def render_types_page(types_data: dict, theme: ColorTokens) -> None:
-    """Render the Type Mapping page."""
+def render_types_page(theme: ColorTokens) -> None:
+    """Render the Type Mapping page.
+
+    Data is injected by the page registry via ``get_page_data()`` — the
+    renderer keeps the unified PageRenderer contract of receiving only
+    the active theme.
+    """
+    data = get_page_data()
+    types_data = data.types_data
 
     st.markdown(
         f"""
