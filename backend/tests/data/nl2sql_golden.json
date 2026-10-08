@@ -1,0 +1,945 @@
+{
+  "matrix": {
+    "mysql::查询所有用户": {
+      "success": true,
+      "sql": "-- Generated for MYSQL\nSELECT *\nFROM users",
+      "explanation": "查询: *",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询所有用户"
+    },
+    "mysql::find top 10 products by price": {
+      "success": true,
+      "sql": "-- Generated for MYSQL\nSELECT *\nFROM products\nORDER BY price DESC\nLIMIT 10",
+      "explanation": "查询前10条记录",
+      "suggestions": [],
+      "input_text": "find top 10 products by price"
+    },
+    "mysql::calculate average price for products grouped by category": {
+      "success": true,
+      "sql": "-- Generated for MYSQL\nSELECT category, AVG(age)\nFROM products\nGROUP BY category",
+      "explanation": "聚合: AVG(age) | 表: products | 分组: category",
+      "suggestions": [
+        "💡 可以添加 HAVING 子句过滤分组结果"
+      ],
+      "input_text": "calculate average price for products grouped by category"
+    },
+    "mysql::查询最近7天的订单": {
+      "success": true,
+      "sql": "-- Generated for MYSQL\nSELECT *\nFROM orders\nWHERE date >= DATE_SUB(CURRENT_DATE, INTERVAL 7 DAY)",
+      "explanation": "查询最近7天数据",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询最近7天的订单"
+    },
+    "mysql::find users who have orders": {
+      "success": true,
+      "sql": "-- Generated for MYSQL\nSELECT *\nFROM users\nWHERE EXISTS (\n    SELECT 1\n    FROM orders\n    WHERE users.id = orders.user_id\n)",
+      "explanation": "表: users | 关联: orders (EXISTS)",
+      "suggestions": [],
+      "input_text": "find users who have orders"
+    },
+    "mysql::show users and products": {
+      "success": true,
+      "sql": "-- Generated for MYSQL\nSELECT *\nFROM users\nINNER JOIN products ON users.id = products.user_id",
+      "explanation": "表: users | 关联: products",
+      "suggestions": [],
+      "input_text": "show users and products"
+    },
+    "postgres::查询所有用户": {
+      "success": true,
+      "sql": "-- Generated for POSTGRES\nSELECT *\nFROM users",
+      "explanation": "查询: *",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询所有用户"
+    },
+    "postgres::find top 10 products by price": {
+      "success": true,
+      "sql": "-- Generated for POSTGRES\nSELECT *\nFROM products\nORDER BY price DESC\nLIMIT 10",
+      "explanation": "查询前10条记录",
+      "suggestions": [],
+      "input_text": "find top 10 products by price"
+    },
+    "postgres::calculate average price for products grouped by category": {
+      "success": true,
+      "sql": "-- Generated for POSTGRES\nSELECT category, AVG(age)\nFROM products\nGROUP BY category",
+      "explanation": "聚合: AVG(age) | 表: products | 分组: category",
+      "suggestions": [
+        "💡 可以添加 HAVING 子句过滤分组结果"
+      ],
+      "input_text": "calculate average price for products grouped by category"
+    },
+    "postgres::查询最近7天的订单": {
+      "success": true,
+      "sql": "-- Generated for POSTGRES\nSELECT *\nFROM orders\nWHERE date >= CURRENT_DATE - INTERVAL '7 days'",
+      "explanation": "查询最近7天数据",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询最近7天的订单"
+    },
+    "postgres::find users who have orders": {
+      "success": true,
+      "sql": "-- Generated for POSTGRES\nSELECT *\nFROM users\nWHERE EXISTS (\n    SELECT 1\n    FROM orders\n    WHERE users.id = orders.user_id\n)",
+      "explanation": "表: users | 关联: orders (EXISTS)",
+      "suggestions": [],
+      "input_text": "find users who have orders"
+    },
+    "postgres::show users and products": {
+      "success": true,
+      "sql": "-- Generated for POSTGRES\nSELECT *\nFROM users\nINNER JOIN products ON users.id = products.user_id",
+      "explanation": "表: users | 关联: products",
+      "suggestions": [],
+      "input_text": "show users and products"
+    },
+    "oracle::查询所有用户": {
+      "success": true,
+      "sql": "-- Generated for ORACLE\nSELECT *\nFROM users",
+      "explanation": "查询: *",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询所有用户"
+    },
+    "oracle::find top 10 products by price": {
+      "success": true,
+      "sql": "-- Generated for ORACLE\nSELECT *\nFROM products\nORDER BY price DESC\nFETCH FIRST 10 ROWS ONLY",
+      "explanation": "查询前10条记录",
+      "suggestions": [],
+      "input_text": "find top 10 products by price"
+    },
+    "oracle::calculate average price for products grouped by category": {
+      "success": true,
+      "sql": "-- Generated for ORACLE\nSELECT category, AVG(age)\nFROM products\nGROUP BY category",
+      "explanation": "聚合: AVG(age) | 表: products | 分组: category",
+      "suggestions": [
+        "💡 可以添加 HAVING 子句过滤分组结果"
+      ],
+      "input_text": "calculate average price for products grouped by category"
+    },
+    "oracle::查询最近7天的订单": {
+      "success": true,
+      "sql": "-- Generated for ORACLE\nSELECT *\nFROM orders\nWHERE date >= TRUNC(SYSDATE) - 7",
+      "explanation": "查询最近7天数据",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能",
+        "💡 Oracle 日期函数语法可能需要调整"
+      ],
+      "input_text": "查询最近7天的订单"
+    },
+    "oracle::find users who have orders": {
+      "success": true,
+      "sql": "-- Generated for ORACLE\nSELECT *\nFROM users\nWHERE EXISTS (\n    SELECT 1\n    FROM orders\n    WHERE users.id = orders.user_id\n)",
+      "explanation": "表: users | 关联: orders (EXISTS)",
+      "suggestions": [],
+      "input_text": "find users who have orders"
+    },
+    "oracle::show users and products": {
+      "success": true,
+      "sql": "-- Generated for ORACLE\nSELECT *\nFROM users\nINNER JOIN products ON users.id = products.user_id",
+      "explanation": "表: users | 关联: products",
+      "suggestions": [],
+      "input_text": "show users and products"
+    },
+    "tsql::查询所有用户": {
+      "success": true,
+      "sql": "-- Generated for TSQL\nSELECT *\nFROM users",
+      "explanation": "查询: *",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询所有用户"
+    },
+    "tsql::find top 10 products by price": {
+      "success": true,
+      "sql": "-- Generated for TSQL\nSELECT TOP 10 *\nFROM products\nORDER BY price DESC",
+      "explanation": "查询前10条记录",
+      "suggestions": [],
+      "input_text": "find top 10 products by price"
+    },
+    "tsql::calculate average price for products grouped by category": {
+      "success": true,
+      "sql": "-- Generated for TSQL\nSELECT category, AVG(age)\nFROM products\nGROUP BY category",
+      "explanation": "聚合: AVG(age) | 表: products | 分组: category",
+      "suggestions": [
+        "💡 可以添加 HAVING 子句过滤分组结果"
+      ],
+      "input_text": "calculate average price for products grouped by category"
+    },
+    "tsql::查询最近7天的订单": {
+      "success": true,
+      "sql": "-- Generated for TSQL\nSELECT *\nFROM orders\nWHERE date >= DATEADD(DAY, -7, CAST(GETDATE() AS DATE))",
+      "explanation": "查询最近7天数据",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询最近7天的订单"
+    },
+    "tsql::find users who have orders": {
+      "success": true,
+      "sql": "-- Generated for TSQL\nSELECT *\nFROM users\nWHERE EXISTS (\n    SELECT 1\n    FROM orders\n    WHERE users.id = orders.user_id\n)",
+      "explanation": "表: users | 关联: orders (EXISTS)",
+      "suggestions": [],
+      "input_text": "find users who have orders"
+    },
+    "tsql::show users and products": {
+      "success": true,
+      "sql": "-- Generated for TSQL\nSELECT *\nFROM users\nINNER JOIN products ON users.id = products.user_id",
+      "explanation": "表: users | 关联: products",
+      "suggestions": [],
+      "input_text": "show users and products"
+    },
+    "hive::查询所有用户": {
+      "success": true,
+      "sql": "-- Generated for HIVE\nSELECT *\nFROM users",
+      "explanation": "查询: *",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询所有用户"
+    },
+    "hive::find top 10 products by price": {
+      "success": true,
+      "sql": "-- Generated for HIVE\nSELECT *\nFROM products\nORDER BY price DESC\nLIMIT 10",
+      "explanation": "查询前10条记录",
+      "suggestions": [],
+      "input_text": "find top 10 products by price"
+    },
+    "hive::calculate average price for products grouped by category": {
+      "success": true,
+      "sql": "-- Generated for HIVE\nSELECT category, AVG(age)\nFROM products\nGROUP BY category",
+      "explanation": "聚合: AVG(age) | 表: products | 分组: category",
+      "suggestions": [
+        "💡 可以添加 HAVING 子句过滤分组结果"
+      ],
+      "input_text": "calculate average price for products grouped by category"
+    },
+    "hive::查询最近7天的订单": {
+      "success": true,
+      "sql": "-- Generated for HIVE\nSELECT *\nFROM orders\nWHERE date >= DATE_SUB(CURRENT_DATE, 7)",
+      "explanation": "查询最近7天数据",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询最近7天的订单"
+    },
+    "hive::find users who have orders": {
+      "success": true,
+      "sql": "-- Generated for HIVE\nSELECT *\nFROM users\nWHERE EXISTS (\n    SELECT 1\n    FROM orders\n    WHERE users.id = orders.user_id\n)",
+      "explanation": "表: users | 关联: orders (EXISTS)",
+      "suggestions": [
+        "💡 Hive 建议指定具体列名以提高性能"
+      ],
+      "input_text": "find users who have orders"
+    },
+    "hive::show users and products": {
+      "success": true,
+      "sql": "-- Generated for HIVE\nSELECT *\nFROM users\nINNER JOIN products ON users.id = products.user_id",
+      "explanation": "表: users | 关联: products",
+      "suggestions": [
+        "💡 Hive 建议指定具体列名以提高性能"
+      ],
+      "input_text": "show users and products"
+    },
+    "spark::查询所有用户": {
+      "success": true,
+      "sql": "-- Generated for SPARK\nSELECT *\nFROM users",
+      "explanation": "查询: *",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询所有用户"
+    },
+    "spark::find top 10 products by price": {
+      "success": true,
+      "sql": "-- Generated for SPARK\nSELECT *\nFROM products\nORDER BY price DESC\nLIMIT 10",
+      "explanation": "查询前10条记录",
+      "suggestions": [],
+      "input_text": "find top 10 products by price"
+    },
+    "spark::calculate average price for products grouped by category": {
+      "success": true,
+      "sql": "-- Generated for SPARK\nSELECT category, AVG(age)\nFROM products\nGROUP BY category",
+      "explanation": "聚合: AVG(age) | 表: products | 分组: category",
+      "suggestions": [
+        "💡 可以添加 HAVING 子句过滤分组结果"
+      ],
+      "input_text": "calculate average price for products grouped by category"
+    },
+    "spark::查询最近7天的订单": {
+      "success": true,
+      "sql": "-- Generated for SPARK\nSELECT *\nFROM orders\nWHERE date >= DATE_SUB(CURRENT_DATE, 7)",
+      "explanation": "查询最近7天数据",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询最近7天的订单"
+    },
+    "spark::find users who have orders": {
+      "success": true,
+      "sql": "-- Generated for SPARK\nSELECT *\nFROM users\nWHERE EXISTS (\n    SELECT 1\n    FROM orders\n    WHERE users.id = orders.user_id\n)",
+      "explanation": "表: users | 关联: orders (EXISTS)",
+      "suggestions": [],
+      "input_text": "find users who have orders"
+    },
+    "spark::show users and products": {
+      "success": true,
+      "sql": "-- Generated for SPARK\nSELECT *\nFROM users\nINNER JOIN products ON users.id = products.user_id",
+      "explanation": "表: users | 关联: products",
+      "suggestions": [],
+      "input_text": "show users and products"
+    },
+    "trino::查询所有用户": {
+      "success": true,
+      "sql": "-- Generated for TRINO\nSELECT *\nFROM users",
+      "explanation": "查询: *",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询所有用户"
+    },
+    "trino::find top 10 products by price": {
+      "success": true,
+      "sql": "-- Generated for TRINO\nSELECT *\nFROM products\nORDER BY price DESC\nLIMIT 10",
+      "explanation": "查询前10条记录",
+      "suggestions": [],
+      "input_text": "find top 10 products by price"
+    },
+    "trino::calculate average price for products grouped by category": {
+      "success": true,
+      "sql": "-- Generated for TRINO\nSELECT category, AVG(age)\nFROM products\nGROUP BY category",
+      "explanation": "聚合: AVG(age) | 表: products | 分组: category",
+      "suggestions": [
+        "💡 可以添加 HAVING 子句过滤分组结果"
+      ],
+      "input_text": "calculate average price for products grouped by category"
+    },
+    "trino::查询最近7天的订单": {
+      "success": true,
+      "sql": "-- Generated for TRINO\nSELECT *\nFROM orders\nWHERE date >= DATE_SUB(CURRENT_DATE, 7)",
+      "explanation": "查询最近7天数据",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询最近7天的订单"
+    },
+    "trino::find users who have orders": {
+      "success": true,
+      "sql": "-- Generated for TRINO\nSELECT *\nFROM users\nWHERE EXISTS (\n    SELECT 1\n    FROM orders\n    WHERE users.id = orders.user_id\n)",
+      "explanation": "表: users | 关联: orders (EXISTS)",
+      "suggestions": [],
+      "input_text": "find users who have orders"
+    },
+    "trino::show users and products": {
+      "success": true,
+      "sql": "-- Generated for TRINO\nSELECT *\nFROM users\nINNER JOIN products ON users.id = products.user_id",
+      "explanation": "表: users | 关联: products",
+      "suggestions": [],
+      "input_text": "show users and products"
+    },
+    "databricks::查询所有用户": {
+      "success": true,
+      "sql": "-- Generated for DATABRICKS\nSELECT *\nFROM users",
+      "explanation": "查询: *",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询所有用户"
+    },
+    "databricks::find top 10 products by price": {
+      "success": true,
+      "sql": "-- Generated for DATABRICKS\nSELECT *\nFROM products\nORDER BY price DESC\nLIMIT 10",
+      "explanation": "查询前10条记录",
+      "suggestions": [],
+      "input_text": "find top 10 products by price"
+    },
+    "databricks::calculate average price for products grouped by category": {
+      "success": true,
+      "sql": "-- Generated for DATABRICKS\nSELECT category, AVG(age)\nFROM products\nGROUP BY category",
+      "explanation": "聚合: AVG(age) | 表: products | 分组: category",
+      "suggestions": [
+        "💡 可以添加 HAVING 子句过滤分组结果"
+      ],
+      "input_text": "calculate average price for products grouped by category"
+    },
+    "databricks::查询最近7天的订单": {
+      "success": true,
+      "sql": "-- Generated for DATABRICKS\nSELECT *\nFROM orders\nWHERE date >= DATE_SUB(CURRENT_DATE, 7)",
+      "explanation": "查询最近7天数据",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询最近7天的订单"
+    },
+    "databricks::find users who have orders": {
+      "success": true,
+      "sql": "-- Generated for DATABRICKS\nSELECT *\nFROM users\nWHERE EXISTS (\n    SELECT 1\n    FROM orders\n    WHERE users.id = orders.user_id\n)",
+      "explanation": "表: users | 关联: orders (EXISTS)",
+      "suggestions": [],
+      "input_text": "find users who have orders"
+    },
+    "databricks::show users and products": {
+      "success": true,
+      "sql": "-- Generated for DATABRICKS\nSELECT *\nFROM users\nINNER JOIN products ON users.id = products.user_id",
+      "explanation": "表: users | 关联: products",
+      "suggestions": [],
+      "input_text": "show users and products"
+    },
+    "snowflake::查询所有用户": {
+      "success": true,
+      "sql": "-- Generated for SNOWFLAKE\nSELECT *\nFROM users",
+      "explanation": "查询: *",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询所有用户"
+    },
+    "snowflake::find top 10 products by price": {
+      "success": true,
+      "sql": "-- Generated for SNOWFLAKE\nSELECT *\nFROM products\nORDER BY price DESC\nLIMIT 10",
+      "explanation": "查询前10条记录",
+      "suggestions": [],
+      "input_text": "find top 10 products by price"
+    },
+    "snowflake::calculate average price for products grouped by category": {
+      "success": true,
+      "sql": "-- Generated for SNOWFLAKE\nSELECT category, AVG(age)\nFROM products\nGROUP BY category",
+      "explanation": "聚合: AVG(age) | 表: products | 分组: category",
+      "suggestions": [
+        "💡 可以添加 HAVING 子句过滤分组结果"
+      ],
+      "input_text": "calculate average price for products grouped by category"
+    },
+    "snowflake::查询最近7天的订单": {
+      "success": true,
+      "sql": "-- Generated for SNOWFLAKE\nSELECT *\nFROM orders\nWHERE date >= DATE_SUB(CURRENT_DATE, 7)",
+      "explanation": "查询最近7天数据",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询最近7天的订单"
+    },
+    "snowflake::find users who have orders": {
+      "success": true,
+      "sql": "-- Generated for SNOWFLAKE\nSELECT *\nFROM users\nWHERE EXISTS (\n    SELECT 1\n    FROM orders\n    WHERE users.id = orders.user_id\n)",
+      "explanation": "表: users | 关联: orders (EXISTS)",
+      "suggestions": [],
+      "input_text": "find users who have orders"
+    },
+    "snowflake::show users and products": {
+      "success": true,
+      "sql": "-- Generated for SNOWFLAKE\nSELECT *\nFROM users\nINNER JOIN products ON users.id = products.user_id",
+      "explanation": "表: users | 关联: products",
+      "suggestions": [],
+      "input_text": "show users and products"
+    },
+    "redshift::查询所有用户": {
+      "success": true,
+      "sql": "-- Generated for REDSHIFT\nSELECT *\nFROM users",
+      "explanation": "查询: *",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询所有用户"
+    },
+    "redshift::find top 10 products by price": {
+      "success": true,
+      "sql": "-- Generated for REDSHIFT\nSELECT *\nFROM products\nORDER BY price DESC\nLIMIT 10",
+      "explanation": "查询前10条记录",
+      "suggestions": [],
+      "input_text": "find top 10 products by price"
+    },
+    "redshift::calculate average price for products grouped by category": {
+      "success": true,
+      "sql": "-- Generated for REDSHIFT\nSELECT category, AVG(age)\nFROM products\nGROUP BY category",
+      "explanation": "聚合: AVG(age) | 表: products | 分组: category",
+      "suggestions": [
+        "💡 可以添加 HAVING 子句过滤分组结果"
+      ],
+      "input_text": "calculate average price for products grouped by category"
+    },
+    "redshift::查询最近7天的订单": {
+      "success": true,
+      "sql": "-- Generated for REDSHIFT\nSELECT *\nFROM orders\nWHERE date >= DATE_SUB(CURRENT_DATE, 7)",
+      "explanation": "查询最近7天数据",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询最近7天的订单"
+    },
+    "redshift::find users who have orders": {
+      "success": true,
+      "sql": "-- Generated for REDSHIFT\nSELECT *\nFROM users\nWHERE EXISTS (\n    SELECT 1\n    FROM orders\n    WHERE users.id = orders.user_id\n)",
+      "explanation": "表: users | 关联: orders (EXISTS)",
+      "suggestions": [],
+      "input_text": "find users who have orders"
+    },
+    "redshift::show users and products": {
+      "success": true,
+      "sql": "-- Generated for REDSHIFT\nSELECT *\nFROM users\nINNER JOIN products ON users.id = products.user_id",
+      "explanation": "表: users | 关联: products",
+      "suggestions": [],
+      "input_text": "show users and products"
+    },
+    "clickhouse::查询所有用户": {
+      "success": true,
+      "sql": "-- Generated for CLICKHOUSE\nSELECT *\nFROM users",
+      "explanation": "查询: *",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询所有用户"
+    },
+    "clickhouse::find top 10 products by price": {
+      "success": true,
+      "sql": "-- Generated for CLICKHOUSE\nSELECT *\nFROM products\nORDER BY price DESC\nLIMIT 10",
+      "explanation": "查询前10条记录",
+      "suggestions": [],
+      "input_text": "find top 10 products by price"
+    },
+    "clickhouse::calculate average price for products grouped by category": {
+      "success": true,
+      "sql": "-- Generated for CLICKHOUSE\nSELECT category, AVG(age)\nFROM products\nGROUP BY category",
+      "explanation": "聚合: AVG(age) | 表: products | 分组: category",
+      "suggestions": [
+        "💡 可以添加 HAVING 子句过滤分组结果"
+      ],
+      "input_text": "calculate average price for products grouped by category"
+    },
+    "clickhouse::查询最近7天的订单": {
+      "success": true,
+      "sql": "-- Generated for CLICKHOUSE\nSELECT *\nFROM orders\nWHERE date >= DATE_SUB(CURRENT_DATE, 7)",
+      "explanation": "查询最近7天数据",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询最近7天的订单"
+    },
+    "clickhouse::find users who have orders": {
+      "success": true,
+      "sql": "-- Generated for CLICKHOUSE\nSELECT *\nFROM users\nWHERE EXISTS (\n    SELECT 1\n    FROM orders\n    WHERE users.id = orders.user_id\n)",
+      "explanation": "表: users | 关联: orders (EXISTS)",
+      "suggestions": [],
+      "input_text": "find users who have orders"
+    },
+    "clickhouse::show users and products": {
+      "success": true,
+      "sql": "-- Generated for CLICKHOUSE\nSELECT *\nFROM users\nINNER JOIN products ON users.id = products.user_id",
+      "explanation": "表: users | 关联: products",
+      "suggestions": [],
+      "input_text": "show users and products"
+    },
+    "duckdb::查询所有用户": {
+      "success": true,
+      "sql": "-- Generated for DUCKDB\nSELECT *\nFROM users",
+      "explanation": "查询: *",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询所有用户"
+    },
+    "duckdb::find top 10 products by price": {
+      "success": true,
+      "sql": "-- Generated for DUCKDB\nSELECT *\nFROM products\nORDER BY price DESC\nLIMIT 10",
+      "explanation": "查询前10条记录",
+      "suggestions": [],
+      "input_text": "find top 10 products by price"
+    },
+    "duckdb::calculate average price for products grouped by category": {
+      "success": true,
+      "sql": "-- Generated for DUCKDB\nSELECT category, AVG(age)\nFROM products\nGROUP BY category",
+      "explanation": "聚合: AVG(age) | 表: products | 分组: category",
+      "suggestions": [
+        "💡 可以添加 HAVING 子句过滤分组结果"
+      ],
+      "input_text": "calculate average price for products grouped by category"
+    },
+    "duckdb::查询最近7天的订单": {
+      "success": true,
+      "sql": "-- Generated for DUCKDB\nSELECT *\nFROM orders\nWHERE date >= CURRENT_DATE - INTERVAL '7 days'",
+      "explanation": "查询最近7天数据",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询最近7天的订单"
+    },
+    "duckdb::find users who have orders": {
+      "success": true,
+      "sql": "-- Generated for DUCKDB\nSELECT *\nFROM users\nWHERE EXISTS (\n    SELECT 1\n    FROM orders\n    WHERE users.id = orders.user_id\n)",
+      "explanation": "表: users | 关联: orders (EXISTS)",
+      "suggestions": [],
+      "input_text": "find users who have orders"
+    },
+    "duckdb::show users and products": {
+      "success": true,
+      "sql": "-- Generated for DUCKDB\nSELECT *\nFROM users\nINNER JOIN products ON users.id = products.user_id",
+      "explanation": "表: users | 关联: products",
+      "suggestions": [],
+      "input_text": "show users and products"
+    }
+  },
+  "d1_date_arithmetic": {
+    "D1::postgres::查询今天的订单": {
+      "success": true,
+      "sql": "-- Generated for POSTGRES\nSELECT *\nFROM orders\nWHERE date = CURRENT_DATE",
+      "explanation": "查询: * | 日期条件: 1个",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询今天的订单"
+    },
+    "D1::postgres::show yesterday's orders": {
+      "success": true,
+      "sql": "-- Generated for POSTGRES\nSELECT *\nFROM orders\nWHERE date = CURRENT_DATE - INTERVAL '1 days'",
+      "explanation": "查询: * | 日期条件: 1个",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "show yesterday's orders"
+    },
+    "D1::postgres::查询最近7天的订单": {
+      "success": true,
+      "sql": "-- Generated for POSTGRES\nSELECT *\nFROM orders\nWHERE date >= CURRENT_DATE - INTERVAL '7 days'",
+      "explanation": "查询最近7天数据",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询最近7天的订单"
+    },
+    "D1::postgres::查询最近3周的订单": {
+      "success": true,
+      "sql": "-- Generated for POSTGRES\nSELECT *\nFROM orders\nWHERE date >= CURRENT_DATE - INTERVAL '21 days'",
+      "explanation": "查询最近3天数据",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询最近3周的订单"
+    },
+    "D1::postgres::查询最近2月的订单": {
+      "success": true,
+      "sql": "-- Generated for POSTGRES\nSELECT *\nFROM orders\nWHERE date >= CURRENT_DATE + INTERVAL '-2 month'",
+      "explanation": "查询最近2天数据",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询最近2月的订单"
+    },
+    "D1::postgres::查询最近1年的订单": {
+      "success": true,
+      "sql": "-- Generated for POSTGRES\nSELECT *\nFROM orders\nWHERE date >= CURRENT_DATE + INTERVAL '-12 month'",
+      "explanation": "查询最近1天数据",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询最近1年的订单"
+    },
+    "D1::mysql::查询今天的订单": {
+      "success": true,
+      "sql": "-- Generated for MYSQL\nSELECT *\nFROM orders\nWHERE date = CURRENT_DATE",
+      "explanation": "查询: * | 日期条件: 1个",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询今天的订单"
+    },
+    "D1::mysql::show yesterday's orders": {
+      "success": true,
+      "sql": "-- Generated for MYSQL\nSELECT *\nFROM orders\nWHERE date = DATE_SUB(CURRENT_DATE, INTERVAL 1 DAY)",
+      "explanation": "查询: * | 日期条件: 1个",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "show yesterday's orders"
+    },
+    "D1::mysql::查询最近7天的订单": {
+      "success": true,
+      "sql": "-- Generated for MYSQL\nSELECT *\nFROM orders\nWHERE date >= DATE_SUB(CURRENT_DATE, INTERVAL 7 DAY)",
+      "explanation": "查询最近7天数据",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询最近7天的订单"
+    },
+    "D1::mysql::查询最近3周的订单": {
+      "success": true,
+      "sql": "-- Generated for MYSQL\nSELECT *\nFROM orders\nWHERE date >= DATE_SUB(CURRENT_DATE, INTERVAL 21 DAY)",
+      "explanation": "查询最近3天数据",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询最近3周的订单"
+    },
+    "D1::mysql::查询最近2月的订单": {
+      "success": true,
+      "sql": "-- Generated for MYSQL\nSELECT *\nFROM orders\nWHERE date >= DATE_SUB(CURRENT_DATE, INTERVAL 2 MONTH)",
+      "explanation": "查询最近2天数据",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询最近2月的订单"
+    },
+    "D1::mysql::查询最近1年的订单": {
+      "success": true,
+      "sql": "-- Generated for MYSQL\nSELECT *\nFROM orders\nWHERE date >= DATE_SUB(CURRENT_DATE, INTERVAL 12 MONTH)",
+      "explanation": "查询最近1天数据",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询最近1年的订单"
+    },
+    "D1::oracle::查询今天的订单": {
+      "success": true,
+      "sql": "-- Generated for ORACLE\nSELECT *\nFROM orders\nWHERE date = TRUNC(SYSDATE)",
+      "explanation": "查询: * | 日期条件: 1个",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询今天的订单"
+    },
+    "D1::oracle::show yesterday's orders": {
+      "success": true,
+      "sql": "-- Generated for ORACLE\nSELECT *\nFROM orders\nWHERE date = TRUNC(SYSDATE) - 1",
+      "explanation": "查询: * | 日期条件: 1个",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "show yesterday's orders"
+    },
+    "D1::oracle::查询最近7天的订单": {
+      "success": true,
+      "sql": "-- Generated for ORACLE\nSELECT *\nFROM orders\nWHERE date >= TRUNC(SYSDATE) - 7",
+      "explanation": "查询最近7天数据",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能",
+        "💡 Oracle 日期函数语法可能需要调整"
+      ],
+      "input_text": "查询最近7天的订单"
+    },
+    "D1::oracle::查询最近3周的订单": {
+      "success": true,
+      "sql": "-- Generated for ORACLE\nSELECT *\nFROM orders\nWHERE date >= TRUNC(SYSDATE) - 21",
+      "explanation": "查询最近3天数据",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能",
+        "💡 Oracle 日期函数语法可能需要调整"
+      ],
+      "input_text": "查询最近3周的订单"
+    },
+    "D1::oracle::查询最近2月的订单": {
+      "success": true,
+      "sql": "-- Generated for ORACLE\nSELECT *\nFROM orders\nWHERE date >= ADD_MONTHS(TRUNC(SYSDATE), -2)",
+      "explanation": "查询最近2天数据",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能",
+        "💡 Oracle 日期函数语法可能需要调整"
+      ],
+      "input_text": "查询最近2月的订单"
+    },
+    "D1::oracle::查询最近1年的订单": {
+      "success": true,
+      "sql": "-- Generated for ORACLE\nSELECT *\nFROM orders\nWHERE date >= ADD_MONTHS(TRUNC(SYSDATE), -12)",
+      "explanation": "查询最近1天数据",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能",
+        "💡 Oracle 日期函数语法可能需要调整"
+      ],
+      "input_text": "查询最近1年的订单"
+    },
+    "D1::tsql::查询今天的订单": {
+      "success": true,
+      "sql": "-- Generated for TSQL\nSELECT *\nFROM orders\nWHERE date = CAST(GETDATE() AS DATE)",
+      "explanation": "查询: * | 日期条件: 1个",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询今天的订单"
+    },
+    "D1::tsql::show yesterday's orders": {
+      "success": true,
+      "sql": "-- Generated for TSQL\nSELECT *\nFROM orders\nWHERE date = DATEADD(DAY, -1, CAST(GETDATE() AS DATE))",
+      "explanation": "查询: * | 日期条件: 1个",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "show yesterday's orders"
+    },
+    "D1::tsql::查询最近7天的订单": {
+      "success": true,
+      "sql": "-- Generated for TSQL\nSELECT *\nFROM orders\nWHERE date >= DATEADD(DAY, -7, CAST(GETDATE() AS DATE))",
+      "explanation": "查询最近7天数据",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询最近7天的订单"
+    },
+    "D1::tsql::查询最近3周的订单": {
+      "success": true,
+      "sql": "-- Generated for TSQL\nSELECT *\nFROM orders\nWHERE date >= DATEADD(DAY, -21, CAST(GETDATE() AS DATE))",
+      "explanation": "查询最近3天数据",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询最近3周的订单"
+    },
+    "D1::tsql::查询最近2月的订单": {
+      "success": true,
+      "sql": "-- Generated for TSQL\nSELECT *\nFROM orders\nWHERE date >= DATEADD(MONTH, -2, CAST(GETDATE() AS DATE))",
+      "explanation": "查询最近2天数据",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询最近2月的订单"
+    },
+    "D1::tsql::查询最近1年的订单": {
+      "success": true,
+      "sql": "-- Generated for TSQL\nSELECT *\nFROM orders\nWHERE date >= DATEADD(MONTH, -12, CAST(GETDATE() AS DATE))",
+      "explanation": "查询最近1天数据",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询最近1年的订单"
+    },
+    "D1::hive::查询今天的订单": {
+      "success": true,
+      "sql": "-- Generated for HIVE\nSELECT *\nFROM orders\nWHERE date = CURRENT_DATE",
+      "explanation": "查询: * | 日期条件: 1个",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询今天的订单"
+    },
+    "D1::hive::show yesterday's orders": {
+      "success": true,
+      "sql": "-- Generated for HIVE\nSELECT *\nFROM orders\nWHERE date = DATE_SUB(CURRENT_DATE, 1)",
+      "explanation": "查询: * | 日期条件: 1个",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "show yesterday's orders"
+    },
+    "D1::hive::查询最近7天的订单": {
+      "success": true,
+      "sql": "-- Generated for HIVE\nSELECT *\nFROM orders\nWHERE date >= DATE_SUB(CURRENT_DATE, 7)",
+      "explanation": "查询最近7天数据",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询最近7天的订单"
+    },
+    "D1::hive::查询最近3周的订单": {
+      "success": true,
+      "sql": "-- Generated for HIVE\nSELECT *\nFROM orders\nWHERE date >= DATE_SUB(CURRENT_DATE, 21)",
+      "explanation": "查询最近3天数据",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询最近3周的订单"
+    },
+    "D1::hive::查询最近2月的订单": {
+      "success": true,
+      "sql": "-- Generated for HIVE\nSELECT *\nFROM orders\nWHERE date >= ADD_MONTHS(CURRENT_DATE, -2)",
+      "explanation": "查询最近2天数据",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询最近2月的订单"
+    },
+    "D1::hive::查询最近1年的订单": {
+      "success": true,
+      "sql": "-- Generated for HIVE\nSELECT *\nFROM orders\nWHERE date >= ADD_MONTHS(CURRENT_DATE, -12)",
+      "explanation": "查询最近1天数据",
+      "suggestions": [
+        "💡 建议指定具体列名以提高查询性能"
+      ],
+      "input_text": "查询最近1年的订单"
+    }
+  },
+  "d2_relational": {
+    "D2::postgres::find users who have orders": {
+      "success": true,
+      "sql": "-- Generated for POSTGRES\nSELECT *\nFROM users\nWHERE EXISTS (\n    SELECT 1\n    FROM orders\n    WHERE users.id = orders.user_id\n)",
+      "explanation": "表: users | 关联: orders (EXISTS)",
+      "suggestions": [],
+      "input_text": "find users who have orders"
+    },
+    "D2::mysql::find users who have orders": {
+      "success": true,
+      "sql": "-- Generated for MYSQL\nSELECT *\nFROM users\nWHERE EXISTS (\n    SELECT 1\n    FROM orders\n    WHERE users.id = orders.user_id\n)",
+      "explanation": "表: users | 关联: orders (EXISTS)",
+      "suggestions": [],
+      "input_text": "find users who have orders"
+    },
+    "D2::hive::find users who have orders": {
+      "success": true,
+      "sql": "-- Generated for HIVE\nSELECT *\nFROM users\nWHERE EXISTS (\n    SELECT 1\n    FROM orders\n    WHERE users.id = orders.user_id\n)",
+      "explanation": "表: users | 关联: orders (EXISTS)",
+      "suggestions": [
+        "💡 Hive 建议指定具体列名以提高性能"
+      ],
+      "input_text": "find users who have orders"
+    },
+    "D2::postgres::find users without orders": {
+      "success": true,
+      "sql": "-- Generated for POSTGRES\nSELECT *\nFROM users\nWHERE NOT EXISTS (\n    SELECT 1\n    FROM orders\n    WHERE users.id = orders.user_id\n)",
+      "explanation": "表: users | 关联: orders (NOT EXISTS)",
+      "suggestions": [],
+      "input_text": "find users without orders"
+    },
+    "D2::mysql::find users without orders": {
+      "success": true,
+      "sql": "-- Generated for MYSQL\nSELECT *\nFROM users\nWHERE NOT EXISTS (\n    SELECT 1\n    FROM orders\n    WHERE users.id = orders.user_id\n)",
+      "explanation": "表: users | 关联: orders (NOT EXISTS)",
+      "suggestions": [],
+      "input_text": "find users without orders"
+    },
+    "D2::hive::find users without orders": {
+      "success": true,
+      "sql": "-- Generated for HIVE\nSELECT *\nFROM users\nWHERE NOT EXISTS (\n    SELECT 1\n    FROM orders\n    WHERE users.id = orders.user_id\n)",
+      "explanation": "表: users | 关联: orders (NOT EXISTS)",
+      "suggestions": [
+        "💡 Hive 建议指定具体列名以提高性能"
+      ],
+      "input_text": "find users without orders"
+    }
+  },
+  "g1_fail_closed": {
+    "G1::postgres::show users and products": {
+      "success": true,
+      "sql": "-- Generated for POSTGRES\nSELECT *\nFROM users\nINNER JOIN products ON users.id = products.user_id",
+      "explanation": "表: users | 关联: products",
+      "suggestions": [],
+      "input_text": "show users and products"
+    },
+    "G1::hive::show users and products": {
+      "success": true,
+      "sql": "-- Generated for HIVE\nSELECT *\nFROM users\nINNER JOIN products ON users.id = products.user_id",
+      "explanation": "表: users | 关联: products",
+      "suggestions": [
+        "💡 Hive 建议指定具体列名以提高性能"
+      ],
+      "input_text": "show users and products"
+    },
+    "G1::postgres::find users who have invoices": {
+      "success": false,
+      "sql": null,
+      "explanation": "Unable to safely infer the relationship between the table(s) involved (users ⟷ invoices). Please provide the join condition or schema relationship.",
+      "suggestions": [
+        "Specify the relationship between tables, e.g., 'users.id = invoices.user_id'"
+      ],
+      "input_text": "find users who have invoices"
+    },
+    "G1::hive::find users who have invoices": {
+      "success": false,
+      "sql": null,
+      "explanation": "Unable to safely infer the relationship between the table(s) involved (users ⟷ invoices). Please provide the join condition or schema relationship.",
+      "suggestions": [
+        "Specify the relationship between tables, e.g., 'users.id = invoices.user_id'"
+      ],
+      "input_text": "find users who have invoices"
+    }
+  }
+}
