@@ -60,21 +60,41 @@ class TestTargetValidationStates:
         )
 
     def test_validate_detailed_returns_generic_only_for_target_failure(
-        self, transpiler: SQLTranspiler
+        self, transpiler: SQLTranspiler, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Deterministic unit: target parser rejects but generic accepts ->
         generic_only, with a warning, and no error.  The generic fallback
-        must never be presented as a clean target validation."""
-        # A fragment only some target parsers reject but the generic one
-        # accepts.  If the current sqlglot build turns out to parse it
-        # under the target dialect, pick a fragment it does not.
+        must never be presented as a clean target validation.
+
+        This is monkeypatch-based so it does NOT depend on any particular
+        natural SQL string happening to trip a specific sqlglot dialect
+        parser.  The failure mode is forced deterministically.
+        """
+        import sqlglot
+
+        real_parse_one = sqlglot.parse_one
+
+        def fake_parse_one(sql, read=None, **kwargs):
+            # First call (target-dialect validation, read=target) -> force fail
+            # Second call (generic validation, read=None) -> succeed
+            if read is not None:
+                raise sqlglot.errors.ParseError(f"forced target parser reject: {sql}")
+            return real_parse_one(sql)
+
+        monkeypatch.setattr(sqlglot, "parse_one", fake_parse_one)
+
         error, warning, state = transpiler._validate_output_detailed(
-            "SELECT x#commented FROM t", "mysql"
+            "SELECT 1 FROM t", "mysql"
         )
-        assert state in ("generic_only", "invalid", "target_valid")
-        if state == "generic_only":
-            assert warning is not None
-            assert error is None
+        assert state == "generic_only", (
+            f"Expected 'generic_only' but got {state!r} — the forced "
+            "target-fail/generic-pass path must always produce generic_only"
+        )
+        assert error is None, "generic_only must not set error"
+        assert warning is not None, "generic_only must set a warning"
+        assert "target dialect parser rejected" in warning.lower() or "target" in warning.lower(), (
+            f"warning must describe target-dialect rejection, got: {warning!r}"
+        )
 
     def test_validate_detailed_returns_invalid_when_both_fail(
         self, transpiler: SQLTranspiler
@@ -91,31 +111,126 @@ class TestTargetValidationStates:
     def test_transpile_generic_only_is_not_bare_success(
         self, transpiler: SQLTranspiler
     ) -> None:
-        """End-to-end: a target-dialect parse failure that survives via the
-        generic fallback must read as generic_only — never target_valid.
-        The state field must carry the warning's meaning."""
+        """End-to-end guard: a real transpile whose output the target
+        dialect really accepted must still read as target_valid (not
+        generic_only).  This test verifies the non-generic path remains
+        intact for the specific SQL chosen here."""
         result = transpiler.transpile(
-            "SELECT a || b AS x FROM t", "postgres", "oracle"
+            "SELECT id FROM users LIMIT 10", "postgres", "mysql"
         )
-        if result.target_sql:
-            import sqlglot
+        assert result.success is True
+        assert result.target_validation_state == "target_valid"
 
-            try:
-                sqlglot.parse_one(result.target_sql, read=result.target_dialect)
-                target_parse_ok = True
-            except Exception:
-                target_parse_ok = False
+    def test_transpile_propagates_generic_only_to_result(
+        self, transpiler: SQLTranspiler, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Production-path: transpile() must propagate the generic_only
+        state to TranspileResult.target_validation_state.
 
-            if target_parse_ok:
-                # The target really accepted it, so target_valid is correct.
-                assert result.target_validation_state == "target_valid"
-            else:
-                # Target parser rejected the produced output: it must be
-                # surfaced as generic_only, not target_valid.
-                assert result.target_validation_state == "generic_only"
-                assert any("generic" in w.lower() for w in result.warnings), (
-                    "generic fallback must be surfaced as a warning"
-                )
+        This monkeypatches _validate_output_detailed so that the
+        forced-failure scenario (target parser rejects, generic parser
+        accepts) is guaranteed regardless of sqlglot version.  It
+        exercises the full transpile() → TranspileResult → to_dict()
+        → ConvertResponse path without depending on a specific natural
+        SQL string.
+        """
+        import sqlglot
+
+        real_parse_one = sqlglot.parse_one
+
+        def fake_parse_one(sql, read=None, **kwargs):
+            if read is not None:
+                raise sqlglot.errors.ParseError("forced target reject")
+            return real_parse_one(sql)
+
+        monkeypatch.setattr(sqlglot, "parse_one", fake_parse_one)
+
+        # Full transpile() path: source=postgres → target=mysql
+        # The real sqlglot.transpile() call at the top of transpile()
+        # also uses sqlglot.parse_one (for clickhouse/oracle/etc. fast
+        # paths).  For postgres→mysql, the generic sqlglot.transpile
+        # branch is taken (line ~251), which does NOT use parse_one
+        # for the transpile step itself — only _validate_output_detailed
+        # does.  So the fake only affects validation, which is exactly
+        # the path under test.
+        result = transpiler.transpile("SELECT 1 FROM t", "postgres", "mysql")
+
+        # The fake forces target validation to fail, so transpile()
+        # enters the generic fallback:
+        #   generic_parse succeeds → generic_only (not invalid)
+        #   → TranspileResult(target_validation_state="generic_only")
+        assert result.success is True, (
+            "generic_only must still be a successful conversion (not blocked)"
+        )
+        assert result.target_validation_state == "generic_only", (
+            f"Expected generic_only but got {result.target_validation_state!r} — "
+            "transpile() did not propagate the generic fallback state"
+        )
+        assert any(
+            "target dialect parser rejected" in w.lower()
+            for w in result.warnings
+        ), (
+            "generic_only warning must be present in TranspileResult.warnings"
+        )
+
+        # Wire format: to_dict() must carry the state.
+        d = result.to_dict()
+        assert d["target_validation_state"] == "generic_only"
+
+        # API wire: ConvertResponse must preserve it.
+        from backend.api.main import ConvertResponse
+
+        resp = ConvertResponse(
+            success=result.success,
+            source_sql=result.source_sql,
+            target_sql=result.target_sql,
+            source_dialect=result.source_dialect,
+            target_dialect=result.target_dialect,
+            error=result.error,
+            error_code=result.error_code,
+            compatibility_notes=result.compatibility_notes,
+            transformations=result.transformations,
+            warnings=result.warnings,
+            target_validation_state=result.target_validation_state,
+        )
+        assert resp.target_validation_state == "generic_only"
+        assert resp.model_dump()["target_validation_state"] == "generic_only"
+
+    def test_transpile_propagates_invalid_when_both_parsers_fail(
+        self, transpiler: SQLTranspiler, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Production-path: when both target and generic parsers reject
+        the output, transpile() must return success=False with state
+        'invalid' — never presenting a broken conversion as successful."""
+        import sqlglot
+
+        real_parse_one = sqlglot.parse_one
+
+        def fake_parse_one(sql, read=None, **kwargs):
+            # Both target and generic parser calls fail.
+            # The transpile() step (sqlglot.transpile) is not patched,
+            # so transpilation itself succeeds; only the validation
+            # step (which calls parse_one) fails.
+            raise sqlglot.errors.ParseError(f"forced reject ({read})")
+
+        monkeypatch.setattr(sqlglot, "parse_one", fake_parse_one)
+
+        result = transpiler.transpile("SELECT 1 FROM t", "postgres", "mysql")
+
+        # _validate_output_detailed: target fails, generic fails →
+        #   returns (error=..., warning=None, state="invalid")
+        # transpile() then: validation_error is not None →
+        #   returns TranspileResult(success=False, target_validation_state="invalid")
+        assert result.success is False, (
+            "invalid state must make transpile() report success=False"
+        )
+        assert result.target_validation_state == "invalid", (
+            f"Expected 'invalid' but got {result.target_validation_state!r}"
+        )
+        assert result.error is not None, "invalid state must carry an error"
+
+        d = result.to_dict()
+        assert d["target_validation_state"] == "invalid"
 
 
 class TestExistingValidOutputUnaffected:
