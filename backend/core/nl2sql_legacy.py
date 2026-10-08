@@ -19,17 +19,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import sqlglot
 
 from .column_hint_validation import validate_column_hints
-from .nl2sql_components.aggregations import extract_aggregations as _extract_aggregations_impl
 from .nl2sql_components.boolean_conditions import extract_boolean_conditions
-from .nl2sql_components.core_extract import (
-    check_distinct as _check_distinct_impl,
-    detect_operation as _detect_operation_impl,
-    extract_columns as _extract_columns_impl,
-    extract_limit as _extract_limit_impl,
-    extract_table as _extract_table_impl,
-    extract_table_subject as _extract_table_subject_impl,
-    named_tables as _named_tables_impl,
-)
 from .nl2sql_components.mappings import (
     COLUMN_PATTERNS as MAPPING_COLUMN_PATTERNS,
 )
@@ -39,52 +29,59 @@ from .nl2sql_components.mappings import (
 from .nl2sql_components.mappings import (
     TABLE_PATTERNS as MAPPING_TABLE_PATTERNS,
 )
-from .nl2sql_components.relations import (
-    extract_joins as _extract_joins_impl,
-    guess_join_key as _guess_join_key_impl,
-    has_relational_keyword as _has_relational_keyword_impl,
-)
 from .nl2sql_components.evidence import GenerationEvidence
 from .nl2sql_components.templates import DEFAULT_QUERY_TEMPLATES, QueryTemplate
 from .nl2sql_components.tokenizer import Tokenizer
 
+# P8 pipeline: pure stage functions live in nl2sql_pipeline; this class
+# delegates to them so existing method call-sites keep working.
+from .nl2sql_pipeline import ir as _nl2sql_ir
+from .nl2sql_pipeline import models as _nl2sql_models
+from .nl2sql_pipeline.aggregations import extract_aggregations as _pipeline_extract_aggregations
+from .nl2sql_pipeline.clause_extract import (
+    check_distinct as _pipeline_check_distinct,
+    extract_group_by as _pipeline_extract_group_by,
+    extract_limit as _pipeline_extract_limit,
+    extract_ordering as _pipeline_extract_ordering,
+)
+from .nl2sql_pipeline.dialect import apply_dialect_adjustments as _apply_dialect_adjustments_impl
+from .nl2sql_pipeline.intent import (
+    analyze_intent as _analyze_intent,
+    detect_operation as _detect_operation,
+    parse_text as _parse_text_impl,
+)
+from .nl2sql_pipeline.predicates import extract_conditions as _extract_conditions_enhanced_impl
+from .nl2sql_pipeline.renderer import add_limit as _add_limit_impl
+from .nl2sql_pipeline.renderer import join_sql_kind as _join_sql_kind_impl
+from .nl2sql_pipeline.renderer import render_sql as _render_sql_impl
+from .nl2sql_pipeline.resolution import (
+    extract_columns as _pipeline_extract_columns,
+    extract_joins as _pipeline_extract_joins,
+    extract_table as _pipeline_extract_table,
+    extract_table_subject as _pipeline_extract_table_subject,
+    guess_join_key as _pipeline_guess_join_key,
+    has_relational_keyword as _pipeline_has_relational_keyword,
+    named_tables as _pipeline_named_tables,
+)
+from .nl2sql_pipeline.suggestions import (
+    generate_suggestions as _pipeline_generate_suggestions,
+)
+from .nl2sql_pipeline.templates import (
+    generate_from_template as _pipeline_generate_from_template,
+    template_suggestions as _pipeline_template_suggestions,
+)
+from .nl2sql_pipeline.validation import validate_sql as _validate_sql_impl
+
 logger = logging.getLogger(__name__)
 
-def _join_sql_kind(join: Dict) -> str:
-    """Return the SQL JOIN keyword for a physical join record.
+# P8: canonical source moved to nl2sql_pipeline.renderer; re-exported here
+# for backward compatibility with existing import sites.
+_join_sql_kind = _join_sql_kind_impl
 
-    A structured ``join_spec`` from the relations module wins; an
-    unqualified join or a missing spec falls back to INNER.  Physical
-    join kinds never include EXISTS/NOT EXISTS — those are relational.
-    """
-    spec = join.get("join_spec")
-    if spec is not None:
-        kind = spec.kind
-        return "INNER" if kind == "JOIN" else kind
-    join_type = join.get("type", "JOIN")
-    if join_type in ("EXISTS", "NOT EXISTS"):
-        return "INNER"
-    return "INNER" if join_type in ("JOIN", "INNER") else join_type
-
-
-
-
-@dataclass
-class NL2SQLResult:
-    """Result of NL2SQL generation."""
-
-    success: bool = False
-    input_text: str = ""
-    sql: Optional[str] = None
-    dialect: str = ""
-    explanation: str = ""
-    confidence: float = 0.0
-    # Structured evidence trail backing ``confidence``. Optional and
-    # backward-compatible: consumers that only need the scalar score can
-    # ignore this field.
-    evidence: Optional[GenerationEvidence] = None
-    suggestions: list = field(default_factory=list)
-    parsed_elements: dict = field(default_factory=dict)
+# P8: NL2SQLResult is now defined once in nl2sql_pipeline.models; this
+# re-export keeps `from backend.core.nl2sql_legacy import NL2SQLResult`
+# identical to `from backend.core.nl2sql import NL2SQLResult`.
+NL2SQLResult = _nl2sql_models.NL2SQLResult
 
 
 class NL2SQLGenerator:
@@ -129,37 +126,11 @@ class NL2SQLGenerator:
         return None, None
 
     def _tokenize_and_analyze(self, text: str) -> Dict[str, Any]:
-        """Tokenize text and perform semantic analysis."""
-        tokens = self.tokenizer.tokenize(text)
-        numbers = self.tokenizer.extract_numbers(text)
-        quoted = self.tokenizer.extract_quoted_strings(text)
+        """Tokenize text and perform semantic analysis.
 
-        detected_tables = [
-            self.TABLE_PATTERNS[token]
-            for token in tokens
-            if token in self.TABLE_PATTERNS
-        ]
-        detected_columns = [
-            self.COLUMN_PATTERNS[token]
-            for token in tokens
-            if token in self.COLUMN_PATTERNS
-        ]
-        detected_ops = [
-            self.KEYWORDS[token]
-            for token in tokens
-            if token in self.KEYWORDS
-        ]
-
-        return {
-            "tokens": tokens,
-            "numbers": numbers,
-            "quoted_strings": quoted,
-            "tables": list(set(detected_tables)),
-            "columns": list(set(detected_columns)),
-            "operations": list(set(detected_ops)),
-            "is_chinese": self.tokenizer.is_chinese(text),
-            "token_count": len(tokens),
-        }
+        P8: delegates to ``nl2sql_pipeline.intent.analyze_intent``.
+        """
+        return _analyze_intent(text)
 
     def _generate_from_template(
         self,
@@ -174,318 +145,16 @@ class NL2SQLGenerator:
     ) -> NL2SQLResult:
         """Generate SQL from a matched template.
 
-        Accumulates a structured GenerationEvidence trail whose weights
-        mirror the legacy heuristic exactly so the final score is
-        unchanged while the items explain it.
+        P8: implementation moved to ``nl2sql_pipeline.templates``.
+        This adapter preserves the legacy call signature.
         """
-        from .nl2sql_components.evidence import (
-            EVIDENCE_AGGREGATION_PRESENT,
-            EVIDENCE_CONDITIONS_PRESENT,
-            EVIDENCE_GROUP_BY,
-            EVIDENCE_JOIN_KNOWN,
-            EVIDENCE_LIMIT,
-            EVIDENCE_PARSE_FAIL,
-            EVIDENCE_PARSE_OK,
-            EVIDENCE_TABLE_KNOWN,
-            EVIDENCE_TEMPLATE_MATCHED,
-            EvidenceItem,
+        return _pipeline_generate_from_template(
+            template, match_groups, analysis, dialect,
+            table_hint, column_hints,
+            text_lower, text_original,
+            table_patterns=self.TABLE_PATTERNS,
+            column_patterns=self.COLUMN_PATTERNS,
         )
-
-        explanation_parts = []
-        table = table_hint or (
-            analysis["tables"][0] if analysis["tables"] else "table_name"
-        )
-        columns = column_hints or analysis["columns"] or ["*"]
-        numbers = analysis["numbers"]
-        # Structured evidence trail; weights mirror the heuristic exactly.
-        evidence = GenerationEvidence()
-        evidence.items.append(
-            EvidenceItem("base", "Base confidence for template match", 0.7)
-        )
-        if table != "table_name":
-            evidence.items.append(EvidenceItem(
-                EVIDENCE_TABLE_KNOWN,
-                f"Table resolved to known name: {table}", 0.1, detail=table,
-            ))
-        # The clause-aware merge below combines the branch's own predicates
-        # with any template-external time/status condition without duplicating
-        # a clause the branch owns. The extractor must see the full original
-        # text for number extraction: the template capture alone silently
-        # drops conditions that sit outside the captured window.
-        external_conditions = self._extract_conditions_enhanced(
-            text_lower, text_original or text_lower
-        )
-
-        try:
-            if template.name == "top_n_query":
-                n = numbers[0] if numbers else "10"
-                order_col = analysis["columns"][0] if analysis["columns"] else "id"
-                # Determine ordering direction based on request text
-                request_text = str((match_groups or {}).get("match", "")).lower()
-                ascending_requested = bool(
-                    re.search(r"\b(bottom|lowest|smallest)\b|最低|最少", request_text)
-                )
-                order_dir = "ASC" if ascending_requested else "DESC"
-                if ascending_requested:
-                    explanation_parts.append(f"查询最低/最少{n}条记录")
-                else:
-                    explanation_parts.append(f"查询前{n}条记录")
-                base_sql = (
-                    f"SELECT *\nFROM {table}\n"
-                    f"ORDER BY {order_col} {order_dir}"
-                )
-                sql = self._add_limit(base_sql, int(n), dialect)
-                evidence.items.append(EvidenceItem(
-                    EVIDENCE_LIMIT,
-                    f"Template limit applied: {n}", 0.1, detail=str(n),
-                ))
-            elif template.name == "count_by_group":
-                group_col = (
-                    analysis["columns"][0] if analysis["columns"] else "category"
-                )
-                sql = (
-                    f"SELECT {group_col}, COUNT(*) AS count\n"
-                    f"FROM {table}\nGROUP BY {group_col}"
-                )
-                explanation_parts.append(f"按{group_col}分组统计")
-                evidence.items.append(EvidenceItem(
-                    EVIDENCE_GROUP_BY,
-                    f"Template GROUP BY on {group_col}", 0.1, detail=group_col,
-                ))
-            elif template.name == "time_range_query":
-                # The canonical D3 semantic expression is the single source of
-                # the date predicate. Other external conditions (comparisons,
-                # status flags) stay template-external and are composed by the
-                # clause-aware merge below, which de-duplicates instead of
-                # re-appending a second WHERE.
-                n = numbers[0] if numbers else "7"
-                date_col = (
-                    "created_at"
-                    if "created_at" in str(analysis["columns"])
-                    else "date"
-                )
-                date_predicate = None
-                for c in external_conditions:
-                    if "DATE_SUB" in c or "ADD_MONTHS" in c or "DATE_ADD" in c:
-                        date_predicate = c
-                        break
-                if date_predicate is None:
-                    date_predicate = f"{date_col} >= DATE_SUB(CURRENT_DATE, {n})"
-                sql = f"SELECT *\nFROM {table}\nWHERE {date_predicate}"
-                explanation_parts.append(f"查询最近{n}天数据")
-                evidence.items.append(EvidenceItem(
-                    EVIDENCE_CONDITIONS_PRESENT,
-                    f"Template time range: {date_predicate}", 0.1, detail=table,
-                ))
-            elif template.name == "aggregate_query":
-                agg_func = "COUNT"
-                for token in analysis["tokens"]:
-                    if token in ["平均", "average", "avg"]:
-                        agg_func = "AVG"
-                    elif token in ["总和", "sum", "合计"]:
-                        agg_func = "SUM"
-                    elif token in ["最大", "max", "maximum"]:
-                        agg_func = "MAX"
-                    elif token in ["最小", "min", "minimum"]:
-                        agg_func = "MIN"
-                col = analysis["columns"][0] if analysis["columns"] else "*"
-                sql = f"SELECT {agg_func}({col}) AS result\nFROM {table}"
-                explanation_parts.append(f"计算{agg_func}({col})")
-                evidence.items.append(EvidenceItem(
-                    EVIDENCE_AGGREGATION_PRESENT,
-                    f"Template aggregation: {agg_func}({col})", 0.1, detail=agg_func,
-                ))
-            elif template.name == "condition_query":
-                col = analysis["columns"][0] if analysis["columns"] else "column"
-                value = numbers[0] if numbers else "0"
-                op = "="
-                for token in analysis["tokens"]:
-                    if token in ["大于", "超过", "greater", ">"]:
-                        op = ">"
-                    elif token in ["小于", "低于", "less", "<"]:
-                        op = "<"
-                    elif token in ["不等于", "!="]:
-                        op = "!="
-                    elif token in ["大于等于", ">="]:
-                        op = ">="
-                    elif token in ["小于等于", "<="]:
-                        op = "<="
-                condition_predicate = f"{col} {op} {value}"
-                # Fold in template-external conditions that are not already
-                # implied by the branch's own comparison. Date predicates are
-                # recognised by their canonical D3 forms; any other external
-                # condition (status, flags) is appended verbatim.
-                sql = f"SELECT *\nFROM {table}\nWHERE {condition_predicate}"
-                for c in external_conditions:
-                    if c in sql:
-                        continue
-                    if "DATE_SUB" not in c and "ADD_MONTHS" not in c:
-                        sql += f"\nAND {c}"
-                explanation_parts.append(f"条件: {col} {op} {value}")
-                evidence.items.append(EvidenceItem(
-                    EVIDENCE_CONDITIONS_PRESENT,
-                    f"Template condition: {col} {op} {value}", 0.1,
-                ))
-            elif template.name == "join_query":
-                # JOIN composition is owned by the enhanced path: route every
-                # join request through _extract_joins, which only yields a
-                # canonical condition for known relationships. The template
-                # must not invent a condition of its own.
-                all_joins = self._extract_joins(text_lower)
-                joins = [j for j in all_joins if j["condition"] is not None]
-                # The join request is only safe when every pair the text names
-                # has a canonical relationship; otherwise fail the request.
-                pairs_blocked = [j for j in all_joins if j["condition"] is None]
-                if pairs_blocked:
-                    blocked = " ⟷ ".join(
-                        [j["subject"] for j in pairs_blocked]
-                        + [j["table"] for j in pairs_blocked]
-                    )
-                    return NL2SQLResult(
-                        success=False,
-                        input_text=match_groups.get("match", ""),
-                        sql=None,
-                        dialect=dialect,
-                        explanation=(
-                            "Unable to safely infer the relationship between the "
-                            f"table(s) involved ({blocked}). Please provide the "
-                            "join condition or schema relationship."
-                        ),
-                        confidence=0.0,
-                        evidence=GenerationEvidence(),
-                        suggestions=[
-                            "Specify the relationship between tables, "
-                            "e.g., 'users.id = invoices.user_id'"
-                        ],
-                        parsed_elements=analysis,
-                    )
-                if joins:
-                    subject = self._extract_table_subject(text_lower)
-                    subject = subject or joins[0].get("subject")
-                    sql = f"SELECT *\nFROM {subject or joins[0]['table']}"
-                    for join in joins:
-                        # Emit the structured join kind from JoinSpec when
-                        # the user asked for a physical join (LEFT/RIGHT/
-                        # INNER/OUTER); an unqualified join stays INNER.
-                        kind = _join_sql_kind(join)
-                        sql += f"\n{kind} JOIN {join['table']} ON {join['condition']}"
-                        explanation_parts.append(
-                            f"关联: {subject or joins[0]['table']} ⟷ {join['table']}"
-                        )
-                        evidence.items.append(EvidenceItem(
-                            EVIDENCE_JOIN_KNOWN,
-                            f"Join in template: {join['table']} ON {join['condition']}",
-                            0.15, detail=join["condition"],
-                        ))
-                else:
-                    # No known pair resolvable — fail-safe too.
-                    return NL2SQLResult(
-                        success=False,
-                        input_text=match_groups.get("match", ""),
-                        sql=None,
-                        dialect=dialect,
-                        explanation=(
-                            "Unable to safely infer the relationship between the "
-                            "table(s). Please provide the join condition or "
-                            "schema relationship."
-                        ),
-                        confidence=0.0,
-                        evidence=GenerationEvidence(),
-                        suggestions=[
-                            "Specify the relationship between tables, "
-                            "e.g., 'users.id = invoices.user_id'"
-                        ],
-                        parsed_elements=analysis,
-                    )
-            elif template.name == "select_with_columns":
-                cols = ", ".join(columns) if columns != ["*"] else "*"
-                sql = f"SELECT {cols}\nFROM {table}"
-                explanation_parts.append(f"查询: {cols}")
-            else:
-                sql = f"SELECT *\nFROM {table}"
-                explanation_parts.append(f"查询表: {table}")
-
-            # Clause-aware predicate composition: add only the time/status
-            # conditions the composed SQL does not already carry. Branches
-            # that own their WHERE clause (time_range/condition) already
-            # folded the external conditions in above; this step then
-            # de-duplicates instead of appending a second WHERE.
-            merged_conditions: List[str] = []
-            for c in external_conditions:
-                base = c.split(" AND ")[0] if " AND " in c else c
-                base = base.strip()
-                if base in sql or c in sql:
-                    continue
-                if not any(
-                    kw in text_lower
-                    for kw in [
-                        "today", "yesterday", "tomorrow", "last", "past",
-                        "本周", "本月", "本年", "今天", "昨天", "明天"
-                    ]
-                ) and c in [
-                    "status = 'active'", "status = 'inactive'",
-                    "is_deleted = 1", "is_deleted = 0"
-                ]:
-                    continue
-                merged_conditions.append(c)
-            if merged_conditions:
-                if "WHERE" in sql.upper():
-                    sql = f"{sql}\nAND {' AND '.join(merged_conditions)}"
-                else:
-                    sql = f"{sql}\nWHERE {' AND '.join(merged_conditions)}"
-                explanation_parts.append(f"日期条件: {len(merged_conditions)}个")
-                evidence.items.append(EvidenceItem(
-                    EVIDENCE_CONDITIONS_PRESENT,
-                    f"Merged {len(merged_conditions)} external condition(s)",
-                    0.1,
-                ))
-
-            sql = f"-- Generated for {dialect.upper()}\n{sql}"
-            sql = self._apply_dialect_adjustments(sql, dialect)
-            parse_adjustment = self._validate_generated_sql(sql, dialect)
-
-            evidence.items.append(EvidenceItem(
-                EVIDENCE_TEMPLATE_MATCHED,
-                f"Template matched: {template.name}", 0.0, detail=template.name,
-            ))
-            if parse_adjustment > 0:
-                evidence.items.append(EvidenceItem(
-                    EVIDENCE_PARSE_OK,
-                    "Target dialect parser accepted the generated SQL",
-                    parse_adjustment,
-                ))
-            elif parse_adjustment < 0:
-                evidence.items.append(EvidenceItem(
-                    EVIDENCE_PARSE_FAIL,
-                    "Target dialect parser rejected the generated SQL",
-                    parse_adjustment,
-                ))
-
-            suggestions = self._generate_suggestions_for_template(
-                template, table, columns, dialect
-            )
-
-            return NL2SQLResult(
-                success=True,
-                input_text=match_groups.get("match", ""),
-                sql=sql,
-                dialect=dialect,
-                explanation=" | ".join(explanation_parts),
-                confidence=evidence.score,
-                evidence=evidence,
-                suggestions=suggestions,
-                parsed_elements=analysis,
-            )
-        except Exception as exc:
-            logger.warning("Template generation failed: %s", exc)
-            return NL2SQLResult(
-                success=False,
-                input_text=str(match_groups),
-                dialect=dialect,
-                explanation=f"Template error: {exc}",
-                confidence=0.0,
-                evidence=GenerationEvidence(),
-            )
 
     def _generate_suggestions_for_template(
         self,
@@ -494,17 +163,11 @@ class NL2SQLGenerator:
         columns: List[str],
         dialect: str,
     ) -> List[str]:
-        """Generate suggestions specific to template-based generation."""
-        suggestions = []
-        if table == "table_name":
-            suggestions.append("💡 请指定具体的表名，如：用户表、订单表、员工表")
-        if columns == ["*"]:
-            suggestions.append("💡 建议指定具体列名以提高查询性能")
-        if template.name == "join_query":
-            suggestions.append("💡 请确认关联条件是否正确")
-        if template.name == "time_range_query" and dialect == "oracle":
-            suggestions.append("💡 Oracle 日期函数语法可能需要调整")
-        return suggestions
+        """Generate suggestions specific to template-based generation.
+
+        P8: implementation moved to ``nl2sql_pipeline.templates``.
+        """
+        return _pipeline_template_suggestions(template, table, columns, dialect)
 
     def generate(
         self,
@@ -753,299 +416,114 @@ class NL2SQLGenerator:
         )
 
     def _parse_text(self, text_lower: str, original: str) -> dict:
-        """Parse and extract all elements from text."""
-        parsed = {
-            "tables": [],
-            "columns": [],
-            "conditions": [],
-            "aggregations": [],
-            "time_range": None,
-            "limit": None,
-            "order": None,
-            "joins": [],
-        }
-        # Word-boundary matching for tables to avoid false positives like "order" matching "orders"
-        import re as _re
-        for pattern, table in self.TABLE_PATTERNS.items():
-            if _re.search(r'\b' + _re.escape(pattern) + r'\b', text_lower) and table not in parsed["tables"]:
-                parsed["tables"].append(table)
-        # Word-boundary matching for columns
-        for pattern, column in self.COLUMN_PATTERNS.items():
-            if re.search(r'\b' + re.escape(pattern) + r'\b', text_lower) and column not in parsed["columns"]:
-                parsed["columns"].append(column)
-        numbers = re.findall(r"\d+", original)
-        if numbers:
-            parsed["numbers"] = numbers
-        return parsed
+        """Parse and extract all elements from text.
+
+        P8: delegates to ``nl2sql_pipeline.intent.parse_text``.
+        """
+        return _parse_text_impl(text_lower, original)
 
     def _detect_operation(self, text: str) -> str:
-        """Detect SQL operation type from text. Delegates to core_extract."""
-        return _detect_operation_impl(text, self.KEYWORDS)
+        """Detect SQL operation type from text.
+
+        P8: delegates to ``nl2sql_pipeline.intent.detect_operation``.
+        """
+        return _detect_operation(text)
 
     def _extract_table(self, text: str) -> str:
-        """Extract table name from text. Delegates to core_extract."""
-        return _extract_table_impl(text, self.TABLE_PATTERNS)
+        """Extract table name from text.
+
+        P8: delegates to ``nl2sql_pipeline.resolution.extract_table``.
+        """
+        return _pipeline_extract_table(text, self.TABLE_PATTERNS)
 
     def _extract_table_subject(self, text: str) -> Optional[str]:
         """Extract the subject table (first appearing in text) for D2 relational queries.
 
-        Delegates to core_extract.extract_table_subject.
+        P8: delegates to ``nl2sql_pipeline.resolution.extract_table_subject``.
         """
-        return _extract_table_subject_impl(text, self.TABLE_PATTERNS)
+        return _pipeline_extract_table_subject(text, self.TABLE_PATTERNS)
 
     def _named_tables(self, text: str) -> list:
-        """Return the distinct table names the text mentions. Delegates to core_extract."""
-        return _named_tables_impl(text, self.TABLE_PATTERNS)
+        """Return the distinct table names the text mentions.
+
+        P8: delegates to ``nl2sql_pipeline.resolution.named_tables``.
+        """
+        return _pipeline_named_tables(text, self.TABLE_PATTERNS)
 
     def _extract_columns(self, text: str) -> list:
-        """Extract column names from text. Delegates to core_extract."""
-        return _extract_columns_impl(text, self.COLUMN_PATTERNS)
+        """Extract column names from text.
+
+        P8: delegates to ``nl2sql_pipeline.resolution.extract_columns``.
+        """
+        return _pipeline_extract_columns(text, self.COLUMN_PATTERNS)
 
     def _extract_conditions_enhanced(self, text: str, original: str) -> list:
-        """Extract WHERE conditions with enhanced parsing including boolean expressions."""
-        # Use the structured boolean extractor first — it correctly handles
-        # multiple predicates connected by AND/OR while preserving precedence.
-        boolean_conditions = extract_boolean_conditions(text)
-        if boolean_conditions:
-            return boolean_conditions
+        """Extract WHERE conditions with enhanced parsing including boolean expressions.
 
-        conditions = []
-        numbers = re.findall(r"\d+\.?\d*", original)
-        condition_column = None
-        for pattern, column in self.COLUMN_PATTERNS.items():
-            if pattern in text:
-                condition_column = column
-                break
-
-        # Handle IN/NOT IN predicate (must come before generic comparison handling)
-        in_matched_columns: set = set()
-        in_match = re.search(
-            r"\b(\w+)\s+(not\s+)?in\s*\(([^)]+)\)",
-            text,
-            re.IGNORECASE,
+        P8: delegates to ``nl2sql_pipeline.predicates.extract_conditions``.
+        """
+        return _extract_conditions_enhanced_impl(
+            text, original, self.COLUMN_PATTERNS
         )
-        if in_match:
-            col = in_match.group(1)
-            negation = in_match.group(2) is not None
-            raw_values = in_match.group(3).strip()
-            # Parse comma-separated values, preserving quoted strings
-            values = []
-            current = ""
-            quote_char = None
-            for char in raw_values:
-                if char in ("'", '"'):
-                    if quote_char and quote_char == char:
-                        quote_char = None
-                    elif not quote_char:
-                        quote_char = char
-                    current += char
-                elif char == "," and not quote_char:
-                    if current.strip():
-                        values.append(current.strip())
-                    current = ""
-                else:
-                    current += char
-            if current.strip():
-                values.append(current.strip())
-
-            if values:
-                formatted_values = ", ".join(
-                    f"'{v}'" if v.startswith(("'", '"')) or not re.match(r"^-?\d+(\.\d+)?$", v) else v
-                    for v in values
-                )
-                operator = "NOT IN" if negation else "IN"
-                conditions.append(f"{col} {operator} ({formatted_values})")
-                in_matched_columns.add(col.lower())
-
-        comparisons = [
-            (["大于等于", "不小于", "至少", "greater than or equal to", "larger than or equal to"], ">="),
-            (["小于等于", "不大于", "最多", "less than or equal to", "smaller than or equal to"], "<="),
-            (["不等于", "不是", "不为", "not equal", "isn't", "doesn't equal"], "!="),
-            (["大于", "超过", "高于", "多于", "greater", "more than", "above", "over", ">"], ">"),
-            (["小于", "低于", "少于", "不足", "less", "less than", "below", "under", "<"], "<"),
-            (["等于", "是", "为", "equals", "equal", "="], "="),
-        ]
-        for keywords, op in comparisons:
-            if any(keyword in text for keyword in keywords) and numbers:
-                col = condition_column or "column"
-                conditions.append(f"{col} {op} {numbers[0]}")
-                break
-
-        if any(keyword in text for keyword in ["之间", "范围", "between", "from...to"]):
-            if len(numbers) >= 2:
-                col = condition_column or "column"
-                conditions.append(f"{col} BETWEEN {numbers[0]} AND {numbers[1]}")
-
-        if any(keyword in text for keyword in ["包含", "含有", "contains", "like", "includes"]):
-            match = re.search(r"[\"']([^\"']+)[\"']", original)
-            if match:
-                col = condition_column or "column"
-                conditions.append(f"{col} LIKE '%{match.group(1)}%'")
-
-        has_negative_null = any(
-            keyword in text
-            for keyword in ["非空", "不为空", "is not null", "not null", "not empty"]
-        )
-        if has_negative_null:
-            conditions.append(f"{condition_column or 'column'} IS NOT NULL")
-        elif any(keyword in text for keyword in ["为空", "空值", "is null", "null", "empty"]):
-            conditions.append(f"{condition_column or 'column'} IS NULL")
-
-        date_col = "created_at" if "created_at" in text else "date"
-        if "今天" in text or "today" in text:
-            conditions.append(f"{date_col} = CURRENT_DATE")
-        elif "昨天" in text or "yesterday" in text:
-            conditions.append(f"{date_col} = DATE_SUB(CURRENT_DATE, 1)")
-        elif "前天" in text or "day before" in text:
-            conditions.append(f"{date_col} = DATE_SUB(CURRENT_DATE, 2)")
-        elif "明天" in text or "tomorrow" in text:
-            conditions.append(f"{date_col} = DATE_ADD(CURRENT_DATE, 1)")
-
-        time_patterns = [
-            (r"(最近|过去|last|past)\s*(\d+)\s*(天|day)", "DAY"),
-            (r"(最近|过去|last|past)\s*(\d+)\s*(周|week)", "WEEK"),
-            (r"(最近|过去|last|past)\s*(\d+)\s*(月|month)", "MONTH"),
-            (r"(最近|过去|last|past)\s*(\d+)\s*(年|year)", "YEAR"),
-        ]
-        for pattern, unit in time_patterns:
-            match = re.search(pattern, text, re.IGNORECASE)
-            if match:
-                n = match.group(2)
-                if unit == "DAY":
-                    conditions.append(f"{date_col} >= DATE_SUB(CURRENT_DATE, {n})")
-                elif unit == "WEEK":
-                    conditions.append(f"{date_col} >= DATE_SUB(CURRENT_DATE, {int(n) * 7})")
-                elif unit == "MONTH":
-                    conditions.append(f"{date_col} >= ADD_MONTHS(CURRENT_DATE, -{n})")
-                elif unit == "YEAR":
-                    conditions.append(f"{date_col} >= ADD_MONTHS(CURRENT_DATE, -{int(n) * 12})")
-                break
-
-        # Bare period expressions without explicit count
-        if not any(c for c in conditions if "DATE_SUB" in c or "DATE_ADD" in c or "ADD_MONTHS" in c or "CURRENT_DATE" in c):
-            if ("last week" in text or "本周" in text) and "this week" not in text and "本周" not in text:
-                conditions.append(f"{date_col} >= DATE_SUB(CURRENT_DATE, 7)")
-            if "last month" in text:
-                conditions.append(f"{date_col} >= ADD_MONTHS(CURRENT_DATE, -1)")
-            if "last year" in text:
-                conditions.append(f"{date_col} >= ADD_MONTHS(CURRENT_DATE, -12)")
-
-        if "本周" in text or "this week" in text:
-            conditions.append(f"WEEKOFYEAR({date_col}) = WEEKOFYEAR(CURRENT_DATE)")
-        if "本月" in text or "this month" in text:
-            conditions.append(
-                f"MONTH({date_col}) = MONTH(CURRENT_DATE) AND YEAR({date_col}) = YEAR(CURRENT_DATE)"
-            )
-        if "本年" in text or "this year" in text:
-            conditions.append(f"YEAR({date_col}) = YEAR(CURRENT_DATE)")
-
-        status_patterns = [
-            (["有效", "active", "enabled", "valid"], "status = 'active'"),
-            (["无效", "inactive", "disabled", "invalid"], "status = 'inactive'"),
-            (["已删除", "deleted", "removed"], "is_deleted = 1"),
-            (["未删除", "not deleted"], "is_deleted = 0"),
-            (["已完成", "completed", "done", "finished"], "status = 'completed'"),
-            (["未完成", "pending", "incomplete"], "status = 'pending'"),
-            (["已支付", "paid"], "status = 'paid'"),
-            (["未支付", "unpaid"], "status = 'unpaid'"),
-        ]
-        for keywords, condition in status_patterns:
-            # Skip status pattern if the column was already matched via IN predicate
-            col_match = re.match(r"^(\w+)\s*=", condition)
-            col_name = col_match.group(1).lower() if col_match else None
-            if col_name and col_name in in_matched_columns:
-                continue
-            if any(keyword in text for keyword in keywords):
-                conditions.append(condition)
-                break
-        return conditions
 
     def _extract_aggregations(self, text: str) -> list:
-        """Extract aggregation functions from text. Delegates to aggregations module."""
-        return _extract_aggregations_impl(text, self.COLUMN_PATTERNS)
+        """Extract aggregation functions from text.
+
+        P8: delegates to ``nl2sql_pipeline.aggregations.extract_aggregations``.
+        """
+        return _pipeline_extract_aggregations(text, self.COLUMN_PATTERNS)
 
     def _extract_group_by(self, text: str) -> list:
-        """Extract GROUP BY columns from text."""
-        group_cols = []
-        patterns = [
-            r"按(.+?)(分组|汇总|统计)",
-            r"group\s*by\s*(\w+)",
-            r"grouped\s*by\s*(\w+)",
-            r"per\s+(\w+)",
-            r"each\s+(\w+)",
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, text, re.IGNORECASE)
-            if not match:
-                continue
-            group_text = match.group(1).strip()
-            for kw, col in self.COLUMN_PATTERNS.items():
-                if kw in group_text:
-                    group_cols.append(col)
-                    break
-            else:
-                for kw in self.TABLE_PATTERNS:
-                    if kw in group_text:
-                        if "部门" in group_text or "department" in group_text:
-                            group_cols.append("department")
-                        elif "用户" in group_text or "user" in group_text:
-                            group_cols.append("user_id")
-                        elif "日期" in group_text or "date" in group_text:
-                            group_cols.append("date")
-                        elif "月" in group_text or "month" in group_text:
-                            group_cols.append("MONTH(date)")
-                        elif "年" in group_text or "year" in group_text:
-                            group_cols.append("YEAR(date)")
-                        break
-        return group_cols
+        """Extract GROUP BY columns from text.
+
+        P8: delegates to ``nl2sql_pipeline.clause_extract.extract_group_by``.
+        """
+        return _pipeline_extract_group_by(text, self.COLUMN_PATTERNS, self.TABLE_PATTERNS)
 
     def _extract_ordering(self, text: str) -> Optional[Tuple[str, str]]:
-        """Extract ORDER BY clause from text."""
-        order_col = None
-        for pattern, column in self.COLUMN_PATTERNS.items():
-            if pattern in text:
-                order_col = column
-                break
-        # Use word-boundary matching to avoid false positives (e.g., "orders" contains "order")
-        if any(re.search(rf'\b{k}\b', text, re.IGNORECASE) for k in ["排序", "排列", "sort", "order", "sorted"]):
-            return (
-                order_col or "id",
-                "DESC"
-                if any(re.search(rf'\b{k}\b', text, re.IGNORECASE) for k in ["降序", "从大到小", "递减", "desc", "descending", "decreasing"])
-                else "ASC",
-            )
-        if any(re.search(rf'\b{k}\b', text, re.IGNORECASE) for k in ["最大", "最高", "最多", "max", "highest", "top"]):
-            return (order_col or "amount", "DESC")
-        if any(re.search(rf'\b{k}\b', text, re.IGNORECASE) for k in ["最小", "最低", "最少", "min", "lowest"]):
-            return (order_col or "amount", "ASC")
-        return None
+        """Extract ORDER BY clause from text.
+
+        P8: delegates to ``nl2sql_pipeline.clause_extract.extract_ordering``.
+        """
+        return _pipeline_extract_ordering(text, self.COLUMN_PATTERNS)
 
     def _extract_limit(self, text: str) -> Optional[int]:
-        """Extract LIMIT value from text. Delegates to core_extract."""
-        return _extract_limit_impl(text)
+        """Extract LIMIT value from text.
+
+        P8: delegates to ``nl2sql_pipeline.clause_extract.extract_limit``.
+        """
+        return _pipeline_extract_limit(text)
 
     def _extract_joins(self, text: str) -> list:
-        """Extract JOIN information from text. Delegates to relations module.
+        """Extract JOIN information from text.
 
+        P8: delegates to ``nl2sql_pipeline.resolution.extract_joins``.
         Detects relational existence patterns (e.g., "users who have orders")
         and returns structured join contexts for EXISTS-based SQL generation.
         """
-        return _extract_joins_impl(text, self.TABLE_PATTERNS)
+        return _pipeline_extract_joins(text, self.TABLE_PATTERNS)
 
     def _guess_join_key(self, table1: str, table2: str) -> Optional[str]:
-        """Guess the join key between two tables. Delegates to relations module.
+        """Guess the join key between two tables.
 
+        P8: delegates to ``nl2sql_pipeline.resolution.guess_join_key``.
         Returns None for unknown relationships instead of guessing.
         """
-        return _guess_join_key_impl(table1, table2)
+        return _pipeline_guess_join_key(table1, table2)
 
     def _check_distinct(self, text: str) -> bool:
-        """Check if DISTINCT is needed. Delegates to core_extract."""
-        return _check_distinct_impl(text)
+        """Check if DISTINCT is needed.
+
+        P8: delegates to ``nl2sql_pipeline.clause_extract.check_distinct``.
+        """
+        return _pipeline_check_distinct(text)
 
     def _has_relational_keyword(self, text: str) -> bool:
-        """Check if text contains relational existence keywords (D2). Delegates to relations module."""
-        return _has_relational_keyword_impl(text)
+        """Check if text contains relational existence keywords (D2).
+
+        P8: delegates to ``nl2sql_pipeline.resolution.has_relational_keyword``.
+        """
+        return _pipeline_has_relational_keyword(text)
 
     def _build_sql_enhanced(
         self,
@@ -1063,369 +541,45 @@ class NL2SQLGenerator:
     ) -> tuple:
         """Build SQL statement from extracted components.
 
-        Fail-closed: any join entry with ``condition is None`` (an
-        unresolved/unknown relationship) immediately returns
-        ``(None, explanation, 0.0)`` so the caller observes
-        ``success=False``.  The relationship is never silently dropped.
+        P8: implementation moved to ``nl2sql_pipeline.renderer.render_sql``.
+        This method is a thin adapter that preserves the legacy call
+        signature.  Fail-closed behaviour (unresolved join → success=False)
+        is enforced by ``render_sql``.
         """
-        # ------------------------------------------------------------------
-        # Structural guard: reject unresolved joins at the entry point.
-        # This is the single canonical fail-closed check; it covers every
-        # call site of _build_sql_enhanced (early boolean/null path,
-        # ordinary enhanced fallback, and any future caller) without
-        # requiring each caller to duplicate the check.
-        # ------------------------------------------------------------------
-        for join in joins:
-            if join.get("condition") is None:
-                # Use the subject/table context carried by the join entry
-                # (populated by _extract_joins) so the pair is named from
-                # the actual relationship structure, not from the final
-                # `table` variable which may have been resolved differently.
-                subject = join.get("subject") or table
-                pair_desc = f"{subject} ⟷ {join['table']}"
-                explanation = (
-                    "Unable to safely infer the relationship between the "
-                    f"table(s) involved ({pair_desc}). Please provide the "
-                    "join condition or schema relationship."
-                )
-                return None, explanation, 0.0, GenerationEvidence()
-
-        from .nl2sql_components.evidence import (
-            EVIDENCE_AGGREGATION_PRESENT,
-            EVIDENCE_COLUMNS_EXPLICIT,
-            EVIDENCE_CONDITIONS_PRESENT,
-            EVIDENCE_GROUP_BY,
-            EVIDENCE_JOIN_KNOWN,
-            EVIDENCE_LIMIT,
-            EVIDENCE_PARSE_FAIL,
-            EVIDENCE_PARSE_OK,
-            EVIDENCE_TABLE_KNOWN,
-            EvidenceItem,
+        ir = _nl2sql_ir.build_ir(
+            operation, table, columns, conditions, aggregations,
+            group_by, ordering, limit, joins, distinct, dialect,
         )
-
-        explanation_parts = []
-        evidence = GenerationEvidence()
-        evidence.items.append(EvidenceItem("base", "Base confidence for generated SQL", 0.5))
-
-        if operation == "SELECT":
-            distinct_kw = "DISTINCT " if distinct else ""
-            if aggregations:
-                if group_by:
-                    select_parts = group_by + aggregations
-                    select_clause = ", ".join(select_parts)
-                else:
-                    select_clause = ", ".join(aggregations)
-                explanation_parts.append(f"聚合: {', '.join(aggregations)}")
-                evidence.items.append(EvidenceItem(
-                    EVIDENCE_AGGREGATION_PRESENT,
-                    f"Explicit aggregation requested: {', '.join(aggregations)}",
-                    0.15, detail=aggregations[0],
-                ))
-            else:
-                select_clause = ", ".join(columns)
-                if columns != ["*"]:
-                    explanation_parts.append(f"列: {', '.join(columns)}")
-                    evidence.items.append(EvidenceItem(
-                        EVIDENCE_COLUMNS_EXPLICIT,
-                        "Explicit columns requested", 0.1,
-                        detail=columns[0],
-                    ))
-            sql = f"SELECT {distinct_kw}{select_clause}\nFROM {table}"
-            explanation_parts.append(f"表: {table}")
-            if table != "table_name":
-                evidence.items.append(EvidenceItem(
-                    EVIDENCE_TABLE_KNOWN,
-                    f"Table resolved to known name: {table}", 0.2,
-                    detail=table,
-                ))
-            for join in joins:
-                # Join conditions are only ever emitted from a resolved
-                # canonical relationship (G1). Unresolved pairs are blocked
-                # upstream by generate(); keep a structural guard so a join
-                # can never be composed with a missing condition.
-                if join.get("condition") is None:
-                    continue
-                if join.get("relational"):
-                    # EXISTS/NOT EXISTS: preserves row count, no duplicates
-                    if join["type"] == "NOT EXISTS":
-                        subquery = f"SELECT 1\n    FROM {join['table']}\n    WHERE {join['condition']}"
-                        # Merge date conditions into subquery if present
-                        if conditions:
-                            cond_sql = conditions if isinstance(conditions, str) else " AND ".join(conditions)
-                            subquery += f"\n    AND {cond_sql}"
-                            conditions = []  # Remove from top-level conditions
-                        sql += f"\nWHERE NOT EXISTS (\n    {subquery}\n)"
-                        explanation_parts.append(f"关联: {join['table']} (NOT EXISTS)")
-                    else:
-                        subquery = f"SELECT 1\n    FROM {join['table']}\n    WHERE {join['condition']}"
-                        # Merge date conditions into subquery if present
-                        if conditions:
-                            cond_sql = conditions if isinstance(conditions, str) else " AND ".join(conditions)
-                            subquery += f"\n    AND {cond_sql}"
-                            conditions = []  # Remove from top-level conditions
-                        sql += f"\nWHERE EXISTS (\n    {subquery}\n)"
-                        explanation_parts.append(f"关联: {join['table']} (EXISTS)")
-                    evidence.items.append(EvidenceItem(
-                        EVIDENCE_JOIN_KNOWN,
-                        f"Known relationship: {join['subject']} → {join['table']}",
-                        0.1, detail=join["condition"],
-                    ))
-                else:
-                    # Physical JOIN — kind comes from the structured JoinSpec
-                    # (LEFT/RIGHT/INNER/OUTER), never a first-token guess.
-                    sql += f"\n{_join_sql_kind(join)} JOIN {join['table']} ON {join['condition']}"
-                    explanation_parts.append(f"关联: {join['table']}")
-                    evidence.items.append(EvidenceItem(
-                        EVIDENCE_JOIN_KNOWN,
-                        f"Physical join: {join['table']} ON {join['condition']}",
-                        0.1, detail=join["condition"],
-                    ))
-            if conditions:
-                condition_sql = conditions if isinstance(conditions, str) else " AND ".join(conditions)
-                sql += f"\nWHERE {condition_sql}"
-                count = len(conditions) if not isinstance(conditions, str) else 1
-                explanation_parts.append(f"条件: {count}个")
-                evidence.items.append(EvidenceItem(
-                    EVIDENCE_CONDITIONS_PRESENT,
-                    f"{count} explicit predicate(s) in WHERE clause",
-                    0.1,
-                ))
-            if group_by:
-                sql += f"\nGROUP BY {', '.join(group_by)}"
-                explanation_parts.append(f"分组: {', '.join(group_by)}")
-                evidence.items.append(EvidenceItem(
-                    EVIDENCE_GROUP_BY,
-                    f"GROUP BY clause: {', '.join(group_by)}", 0.1,
-                ))
-            elif aggregations and columns != ["*"]:
-                group_cols = [c for c in columns if c != "*"]
-                if group_cols:
-                    sql += f"\nGROUP BY {', '.join(group_cols)}"
-            if ordering:
-                sql += f"\nORDER BY {ordering[0]} {ordering[1]}"
-                explanation_parts.append(f"排序: {ordering[0]} {ordering[1]}")
-            if limit:
-                sql = self._add_limit(sql, limit, dialect)
-                explanation_parts.append(f"限制: {limit}条")
-                evidence.items.append(EvidenceItem(
-                    EVIDENCE_LIMIT,
-                    f"Explicit limit: {limit}", 0.1, detail=str(limit),
-                ))
-        elif operation == "INSERT":
-            cols = columns if columns != ["*"] else ["col1", "col2"]
-            placeholders = ", ".join(["?"] * len(cols))
-            sql = f"INSERT INTO {table} ({', '.join(cols)})\nVALUES ({placeholders})"
-            explanation_parts.append(f"插入到: {table}")
-        elif operation == "UPDATE":
-            update_cols = columns if columns != ["*"] else ["column"]
-            set_clause = ", ".join([f"{c} = ?" for c in update_cols])
-            sql = f"UPDATE {table}\nSET {set_clause}"
-            if conditions:
-                condition_sql = conditions if isinstance(conditions, str) else " AND ".join(conditions)
-                sql += f"\nWHERE {condition_sql}"
-            else:
-                sql += "\nWHERE id = ?"
-            explanation_parts.append(f"更新: {table}")
-        elif operation == "DELETE":
-            sql = f"DELETE FROM {table}"
-            if conditions:
-                condition_sql = conditions if isinstance(conditions, str) else " AND ".join(conditions)
-                sql += f"\nWHERE {condition_sql}"
-            else:
-                sql += "\nWHERE id = ?"
-            explanation_parts.append(f"删除: {table}")
-        else:
-            sql = f"-- 无法解析: {operation}"
-            # Unknown operation — clear all evidence; score will be 0.0.
-            evidence = GenerationEvidence()
-
-        sql = f"-- Generated for {dialect.upper()}\n{sql}"
-        sql = self._apply_dialect_adjustments(sql, dialect)
-        parse_adjustment = self._validate_generated_sql(sql, dialect)
-        if parse_adjustment > 0:
-            evidence.items.append(EvidenceItem(
-                EVIDENCE_PARSE_OK,
-                "Target dialect parser accepted the generated SQL",
-                parse_adjustment,
-            ))
-        elif parse_adjustment < 0:
-            evidence.items.append(EvidenceItem(
-                EVIDENCE_PARSE_FAIL,
-                "Target dialect parser rejected the generated SQL",
-                parse_adjustment,
-            ))
-        confidence = evidence.score
-        return sql, " | ".join(explanation_parts), confidence, evidence
+        return _render_sql_impl(ir)
 
     def _validate_generated_sql(self, sql: str, dialect: str) -> float:
-        """Validate generated SQL syntax and return confidence adjustment."""
-        try:
-            sql_to_validate = "\n".join(
-                line for line in sql.split("\n") if not line.strip().startswith("--")
-            )
-            if sql_to_validate.strip():
-                sqlglot.parse_one(sql_to_validate, read=dialect)
-                return 0.15
-        except Exception:
-            return -0.2
-        return 0.0
+        """Validate generated SQL syntax and return confidence adjustment.
+
+        P8: delegates to ``nl2sql_pipeline.validation.validate_sql``.
+        """
+        return _validate_sql_impl(sql, dialect)
 
     def _add_limit(self, sql: str, limit: int, dialect: str) -> str:
-        """Add LIMIT clause with dialect-specific syntax."""
-        if dialect == "oracle":
-            return f"{sql}\nFETCH FIRST {limit} ROWS ONLY"
-        if dialect == "tsql":
-            return sql.replace("SELECT", f"SELECT TOP {limit}", 1)
-        return f"{sql}\nLIMIT {limit}"
+        """Add LIMIT clause with dialect-specific syntax.
+
+        P8: delegates to ``nl2sql_pipeline.renderer.add_limit``.
+        """
+        return _add_limit_impl(sql, limit, dialect)
 
     def _apply_dialect_adjustments(self, sql: str, dialect: str) -> str:
         """Apply dialect-specific syntax adjustments.
 
-        Uses executable-region-aware replacement so literals, comments, and
-        quoted identifiers are never modified.
+        P8: delegates to ``nl2sql_pipeline.dialect.apply_dialect_adjustments``
+        (moved unchanged — executable-region-aware regex rewriter).
         """
-        from .p1_sql_scanner import executable_segments
-
-        dialect = dialect.lower()
-
-        if dialect == "hive":
-            return sql
-
-        replacements: list[tuple[re.Pattern, str | Callable[[re.Match[str]], str]]] = []
-
-        if dialect == "oracle":
-            # Handle DATE_SUB/DATE_ADD/ADD_MONTHS with CURRENT_DATE first,
-            # then handle the already-converted forms (TRUNC(SYSDATE)).
-            replacements = [
-                (
-                    re.compile(
-                        r"\bDATE_SUB\(\s*(?:TRUNC\(SYSDATE\)|CURRENT_DATE)\s*,\s*(\d+)\s*\)",
-                        re.IGNORECASE,
-                    ),
-                    r"TRUNC(SYSDATE) - \1",
-                ),
-                (
-                    re.compile(
-                        r"\bDATE_ADD\(\s*(?:TRUNC\(SYSDATE\)|CURRENT_DATE)\s*,\s*(\d+)\s*\)",
-                        re.IGNORECASE,
-                    ),
-                    r"TRUNC(SYSDATE) + \1",
-                ),
-                (
-                    re.compile(
-                        r"\bADD_MONTHS\(\s*(?:TRUNC\(SYSDATE\)|CURRENT_DATE)\s*,\s*([+-]?\d+)\s*\)",
-                        re.IGNORECASE,
-                    ),
-                    r"ADD_MONTHS(TRUNC(SYSDATE), \1)",
-                ),
-                (re.compile(r"\bCURRENT_TIMESTAMP\b", re.IGNORECASE), "SYSTIMESTAMP"),
-                (re.compile(r"\bCURRENT_DATE\b", re.IGNORECASE), "TRUNC(SYSDATE)"),
-            ]
-        elif dialect == "tsql":
-            replacements = [
-                (
-                    re.compile(
-                        r"\bDATE_SUB\(\s*(?:CAST\(GETDATE\(\)\s+AS\s+DATE\)|CURRENT_DATE)\s*,\s*(\d+)\s*\)",
-                        re.IGNORECASE,
-                    ),
-                    r"DATEADD(DAY, -\1, CAST(GETDATE() AS DATE))",
-                ),
-                (
-                    re.compile(
-                        r"\bDATE_ADD\(\s*(?:CAST\(GETDATE\(\)\s+AS\s+DATE\)|CURRENT_DATE)\s*,\s*(\d+)\s*\)",
-                        re.IGNORECASE,
-                    ),
-                    r"DATEADD(DAY, \1, CAST(GETDATE() AS DATE))",
-                ),
-                (
-                    re.compile(
-                        r"\bADD_MONTHS\(\s*(?:CAST\(GETDATE\(\)\s+AS\s+DATE\)|CURRENT_DATE)\s*,\s*([+-]?\d+)\s*\)",
-                        re.IGNORECASE,
-                    ),
-                    r"DATEADD(MONTH, \1, CAST(GETDATE() AS DATE))",
-                ),
-                (re.compile(r"\bCURRENT_TIMESTAMP\b", re.IGNORECASE), "SYSDATETIME()"),
-                (re.compile(r"\bCURRENT_DATE\b", re.IGNORECASE), "CAST(GETDATE() AS DATE)"),
-            ]
-        elif dialect == "mysql":
-            replacements = [
-                (
-                    re.compile(r"\bDATE_SUB\(\s*CURRENT_DATE\s*,\s*(\d+)\s*\)", re.IGNORECASE),
-                    r"DATE_SUB(CURRENT_DATE, INTERVAL \1 DAY)",
-                ),
-                (
-                    re.compile(r"\bDATE_ADD\(\s*CURRENT_DATE\s*,\s*(\d+)\s*\)", re.IGNORECASE),
-                    r"DATE_ADD(CURRENT_DATE, INTERVAL \1 DAY)",
-                ),
-                (
-                    re.compile(
-                        r"\bADD_MONTHS\(\s*CURRENT_DATE\s*,\s*([+-]?\d+)\s*\)",
-                        re.IGNORECASE,
-                    ),
-                    lambda match: (
-                        f"DATE_SUB(CURRENT_DATE, INTERVAL {abs(int(match.group(1)))} MONTH)"
-                        if int(match.group(1)) < 0
-                        else f"DATE_ADD(CURRENT_DATE, INTERVAL {match.group(1)} MONTH)"
-                    ),
-                ),
-            ]
-        elif dialect in ("postgres", "duckdb"):
-            replacements = [
-                (
-                    re.compile(r"\bDATE_SUB\(\s*CURRENT_DATE\s*,\s*(\d+)\s*\)", re.IGNORECASE),
-                    r"CURRENT_DATE - INTERVAL '\1 days'",
-                ),
-                (
-                    re.compile(r"\bDATE_ADD\(\s*CURRENT_DATE\s*,\s*(\d+)\s*\)", re.IGNORECASE),
-                    r"CURRENT_DATE + INTERVAL '\1 days'",
-                ),
-                (
-                    re.compile(
-                        r"\bADD_MONTHS\(\s*CURRENT_DATE\s*,\s*([+-]?\d+)\s*\)",
-                        re.IGNORECASE,
-                    ),
-                    r"CURRENT_DATE + INTERVAL '\1 month'",
-                ),
-            ]
-        else:
-            return sql
-
-        for pattern, replacement in replacements:
-            parts = []
-            cursor = 0
-            for start, end in executable_segments(sql):
-                parts.append(sql[cursor:start])
-                segment = sql[start:end]
-                segment = pattern.sub(replacement, segment)
-                parts.append(segment)
-                cursor = end
-            parts.append(sql[cursor:])
-            sql = "".join(parts)
-
-        return sql
+        return _apply_dialect_adjustments_impl(sql, dialect)
 
     def _generate_suggestions(self, text: str, sql: str, dialect: str) -> list:
-        """Generate improvement suggestions."""
-        suggestions = []
-        if "table_name" in sql:
-            suggestions.append("💡 请指定具体的表名，如：用户表、订单表")
-        if "column >" in sql or "column <" in sql or "column =" in sql:
-            suggestions.append("💡 请指定具体的列名用于条件判断，如：年龄大于30")
-        if dialect == "hive" and "SELECT *" in sql:
-            suggestions.append("💡 Hive 建议指定具体列名以提高性能")
-        if "JOIN" not in sql and any(k in text for k in ["关联", "连接", "join", "和", "与"]):
-            suggestions.append("💡 检测到关联需求，请明确指定两个表名")
-        if "?" in sql:
-            suggestions.append("💡 请替换 ? 占位符为实际值")
-        if "GROUP BY" in sql and "HAVING" not in sql:
-            suggestions.append("💡 可以添加 HAVING 子句过滤分组结果")
-        if dialect == "hive" and "ORDER BY" in sql and "LIMIT" not in sql:
-            suggestions.append("💡 Hive 中 ORDER BY 建议配合 LIMIT 使用")
-        if "DELETE" in sql and "WHERE" not in sql:
-            suggestions.append("⚠️ DELETE 没有 WHERE 条件将删除所有数据！")
-        if "UPDATE" in sql and "WHERE" not in sql:
-            suggestions.append("⚠️ UPDATE 没有 WHERE 条件将更新所有数据！")
-        return suggestions
+        """Generate improvement suggestions.
+
+        P8: delegates to ``nl2sql_pipeline.suggestions.generate_suggestions``.
+        """
+        return _pipeline_generate_suggestions(text, sql, dialect)
 
     def _extract_conditions(self, text: str) -> list:
         """Backward-compatible alias for enhanced condition extraction."""
