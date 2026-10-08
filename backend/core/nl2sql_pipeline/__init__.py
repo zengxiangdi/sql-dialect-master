@@ -8,5 +8,6 @@ This package is internal to ``backend.core``; it is NOT re-exported from
 ``backend.core.__init__``.  The public facade is ``backend.core.nl2sql``.
 """
 from .models import NL2SQLResult
+from .orchestrator import PipelineNL2SQLGenerator
 
-__all__ = ["NL2SQLResult"]
+__all__ = ["NL2SQLResult", "PipelineNL2SQLGenerator"]
