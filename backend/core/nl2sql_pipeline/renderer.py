@@ -128,6 +128,7 @@ def render_sql(ir: QueryIR) -> Tuple[Optional[str], str, float, GenerationEviden
                 f"Table resolved to known name: {table}", 0.2,
                 detail=table,
             ))
+        relational_where_open = False
         for join in joins:
             # Join conditions are only ever emitted from a resolved
             # canonical relationship (G1). Unresolved pairs are blocked
@@ -136,25 +137,29 @@ def render_sql(ir: QueryIR) -> Tuple[Optional[str], str, float, GenerationEviden
             if join.get("condition") is None:
                 continue
             if join.get("relational"):
-                # EXISTS/NOT EXISTS: preserves row count, no duplicates
-                if join["type"] == "NOT EXISTS":
-                    subquery = f"SELECT 1\n    FROM {join['table']}\n    WHERE {join['condition']}"
-                    # Merge date conditions into subquery if present
-                    if conditions:
-                        cond_sql = conditions if isinstance(conditions, str) else " AND ".join(conditions)
-                        subquery += f"\n    AND {cond_sql}"
-                        conditions = []  # Remove from top-level conditions
-                    sql += f"\nWHERE NOT EXISTS (\n    {subquery}\n)"
-                    explanation_parts.append(f"关联: {join['table']} (NOT EXISTS)")
+                # EXISTS/NOT EXISTS: preserves row count, no duplicates.
+                # Multiple relational EXISTS clauses compose into ONE WHERE:
+                # the first gets its own WHERE, the rest append with AND,
+                # mirroring standard SQL 'WHERE EXISTS (...) AND EXISTS (...)'.
+                subquery = f"SELECT 1\n    FROM {join['table']}\n    WHERE {join['condition']}"
+                # Merge date conditions into subquery if present
+                if conditions:
+                    cond_sql = conditions if isinstance(conditions, str) else " AND ".join(conditions)
+                    subquery += f"\n    AND {cond_sql}"
+                    conditions = []  # Remove from top-level conditions
+                clause = (
+                    f"NOT EXISTS (\n    {subquery}\n)"
+                    if join["type"] == "NOT EXISTS"
+                    else f"EXISTS (\n    {subquery}\n)"
+                )
+                if relational_where_open:
+                    sql += f"\nAND {clause}"
                 else:
-                    subquery = f"SELECT 1\n    FROM {join['table']}\n    WHERE {join['condition']}"
-                    # Merge date conditions into subquery if present
-                    if conditions:
-                        cond_sql = conditions if isinstance(conditions, str) else " AND ".join(conditions)
-                        subquery += f"\n    AND {cond_sql}"
-                        conditions = []  # Remove from top-level conditions
-                    sql += f"\nWHERE EXISTS (\n    {subquery}\n)"
-                    explanation_parts.append(f"关联: {join['table']} (EXISTS)")
+                    sql += f"\nWHERE {clause}"
+                    relational_where_open = True
+                explanation_parts.append(
+                    "关联: {} ({})".format(join["table"], join["type"])
+                )
                 evidence.items.append(EvidenceItem(
                     EVIDENCE_JOIN_KNOWN,
                     f"Known relationship: {join['subject']} → {join['table']}",
@@ -170,9 +175,14 @@ def render_sql(ir: QueryIR) -> Tuple[Optional[str], str, float, GenerationEviden
                     f"Physical join: {join['table']} ON {join['condition']}",
                     0.1, detail=join["condition"],
                 ))
+        # If relational EXISTS clauses already opened a WHERE, any remaining
+        # top-level conditions attach with AND instead of a second WHERE.
         if conditions:
             condition_sql = conditions if isinstance(conditions, str) else " AND ".join(conditions)
-            sql += f"\nWHERE {condition_sql}"
+            if relational_where_open:
+                sql += f"\nAND {condition_sql}"
+            else:
+                sql += f"\nWHERE {condition_sql}"
             count = len(conditions) if not isinstance(conditions, str) else 1
             explanation_parts.append(f"条件: {count}个")
             evidence.items.append(EvidenceItem(

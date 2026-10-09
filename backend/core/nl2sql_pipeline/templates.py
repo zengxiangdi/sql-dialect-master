@@ -97,10 +97,18 @@ def generate_from_template(
                 explanation_parts.append(f"查询最低/最少{n}条记录")
             else:
                 explanation_parts.append(f"查询前{n}条记录")
-            base_sql = (
-                f"SELECT *\nFROM {table}\n"
-                f"ORDER BY {order_col} {order_dir}"
-            )
+            # Clause order is semantic: WHERE before ORDER BY before LIMIT.
+            # The legacy top_n branch composed ORDER BY + LIMIT first and
+            # then a clause-aware merge re-appended WHERE *after* LIMIT,
+            # producing unparseable 'LIMIT N\nWHERE ...' output.
+            external_where_parts = [
+                c for c in external_conditions
+                if "DATE_SUB" not in c and "ADD_MONTHS" not in c and "DATE_ADD" not in c
+            ]
+            base_sql = f"SELECT *\nFROM {table}"
+            if external_where_parts:
+                base_sql += f"\nWHERE {' AND '.join(external_where_parts)}"
+            base_sql += f"\nORDER BY {order_col} {order_dir}"
             sql = add_limit(base_sql, int(n), dialect)
             evidence.items.append(EvidenceItem(
                 EVIDENCE_LIMIT,
@@ -126,6 +134,28 @@ def generate_from_template(
             # clause-aware merge below, which de-duplicates instead of
             # re-appending a second WHERE.
             n = numbers[0] if numbers else "7"
+            # Preserve the requested unit: the time_range template captures
+            # the unit group (days?/weeks?/months?/years? or 天/周/月/年)
+            # but the legacy explanation hard-coded 天, reporting a weeks
+            # or months request as days. The unit flows from the original
+            # text, never from the captured number alone.
+            unit_source = str((match_groups or {}).get("unit", ""))
+            if not unit_source:
+                # Unnamed-group capture: re-locate the unit word in the
+                # matched window.
+                m = re.search(
+                    r"(天|周|月|年|days?|weeks?|months?|years?)\s*(?:的|内的)?\s*$|"
+                    r"(天|周|月|年|days?|weeks?|months?|years?)",
+                    str((match_groups or {}).get("match", "")),
+                    re.IGNORECASE,
+                )
+                unit_source = (m.group(1) or m.group(2)) if m else ""
+            unit = (
+                "周" if "week" in unit_source.lower() or "周" in unit_source
+                else "月" if ("month" in unit_source.lower() or "月" in unit_source)
+                else "年" if ("year" in unit_source.lower() or "年" in unit_source)
+                else "天"
+            )
             date_col = (
                 "created_at"
                 if "created_at" in str(analysis["columns"])
@@ -139,7 +169,7 @@ def generate_from_template(
             if date_predicate is None:
                 date_predicate = f"{date_col} >= DATE_SUB(CURRENT_DATE, {n})"
             sql = f"SELECT *\nFROM {table}\nWHERE {date_predicate}"
-            explanation_parts.append(f"查询最近{n}天数据")
+            explanation_parts.append(f"查询最近{n}{unit}数据")
             evidence.items.append(EvidenceItem(
                 EVIDENCE_CONDITIONS_PRESENT,
                 f"Template time range: {date_predicate}", 0.1, detail=table,
@@ -281,6 +311,10 @@ def generate_from_template(
             base = c.split(" AND ")[0] if " AND " in c else c
             base = base.strip()
             if base in sql or c in sql:
+                continue
+            # top_n folded its own external conditions into WHERE above;
+            # never re-append them here as a second WHERE.
+            if template.name == "top_n_query" and "DATE_SUB" not in c and "ADD_MONTHS" not in c and "DATE_ADD" not in c:
                 continue
             if not any(
                 kw in text_lower

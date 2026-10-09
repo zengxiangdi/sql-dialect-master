@@ -38,18 +38,29 @@ def extract_table(text: str, table_patterns: Dict[str, str]) -> str:
     return "table_name"
 
 
-def extract_table_subject(text: str, table_patterns: Dict[str, str]) -> Optional[str]:
+def extract_table_subject(
+    text: str, table_patterns: Dict[str, str], relational_context: str = ""
+) -> Optional[str]:
     """Extract the subject table (first appearing in text) for D2 relational queries.
 
     For queries like 'users who have orders', returns 'users' (the subject)
     rather than 'orders' (the relation). Uses first occurrence position.
+
+    ``relational_context`` names the relation table when the caller already
+    resolved one from the relational keyword set (e.g. the CN 有订单
+    connective maps 订单 → orders).  That table must not win the subject
+    slot even when it is the earliest-matching pattern, so every candidate
+    table equal to it is excluded before the first-occurrence sort.
     """
     candidates = []
     for pattern, table in table_patterns.items():
-        if table not in candidates:
-            pos = text.find(pattern)
-            if pos != -1:
-                candidates.append((pos, table))
+        if relational_context and table == relational_context:
+            continue
+        pos = text.find(pattern)
+        if pos != -1:
+            if table in [t for _, t in candidates]:
+                continue
+            candidates.append((pos, table))
     if candidates:
         candidates.sort(key=lambda x: x[0])
         return candidates[0][1]
