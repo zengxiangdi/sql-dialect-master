@@ -204,23 +204,50 @@ class TestB1_3_TopNWithFilterClauseOrder:
         assert idx_where < idx_limit, result.sql
 
     @pytest.mark.parametrize(
-        "text,expected_threshold,expected_limit",
+        "text,expected_operator,expected_threshold,expected_limit",
         [
-            ("前10条金额大于100的订单", 100, 10),
-            ("前5条金额大于250的订单", 250, 5),
+            # Chinese operator words (value sits directly after the operator)
+            ("前10条金额大于100的订单", ">", 100, 10),
+            ("前5条金额大于250的订单", ">", 250, 5),
+            # English operator phrases (value sits at the end of the phrase:
+            # "greater than 100", "greater than or equal to 100", ...)
+            ("top 10 orders with amount greater than 100", ">", 100, 10),
+            ("top 5 orders with amount greater than 250", ">", 250, 5),
+            ("top 10 orders with amount greater than or equal to 100", ">=", 100, 10),
+            ("top 10 orders with amount less than 100", "<", 100, 10),
+            ("top 10 orders with amount less than or equal to 100", "<=", 100, 10),
         ],
     )
     def test_top_n_threshold_distinct_from_count(
-        self, gen, text, expected_threshold, expected_limit
+        self, gen, text, expected_operator, expected_threshold, expected_limit
     ):
         result = gen.generate(text, "duckdb")
         assert result.success is True, result.explanation
         tree = sqlglot.parse_one(executable_sql(result), read="duckdb")
         where = tree.find(exp.Where)
         assert where is not None, result.sql
-        assert f"amount > {expected_threshold}" in where.sql(dialect="duckdb"), result.sql
+        assert f"amount {expected_operator} {expected_threshold}" in where.sql(dialect="duckdb"), (
+            f"expected 'amount {expected_operator} {expected_threshold}', sql: {result.sql}"
+        )
+        # The top-N count must not leak in as the threshold.
+        assert where.sql(dialect="duckdb") != f"amount {expected_operator} {expected_limit}", result.sql
         assert tree.args.get("limit") is not None, result.sql
         assert int(tree.args["limit"].expression.this) == expected_limit, result.sql
+
+    @pytest.mark.parametrize(
+        "text,expected_operator,expected_threshold",
+        [
+            ("前10条金额大于等于100的订单", ">=", 100),
+            ("前10条金额小于100的订单", "<", 100),
+            ("前10条金额小于等于100的订单", "<=", 100),
+        ],
+    )
+    def test_cn_operator_bound_thresholds(self, gen, text, expected_operator, expected_threshold):
+        result = gen.generate(text, "duckdb")
+        assert result.success is True, result.explanation
+        tree = sqlglot.parse_one(executable_sql(result), read="duckdb")
+        where = tree.find(exp.Where)
+        assert f"amount {expected_operator} {expected_threshold}" in where.sql(dialect="duckdb"), result.sql
 
     @pytest.mark.parametrize("dialect", ["postgres", "mysql", "oracle", "tsql", "duckdb", "hive"])
     def test_parseable_per_dialect(self, gen, dialect):

@@ -38,12 +38,25 @@ EVIDENCE_TIERS = {
 # Dialects whose generated SQL is only structurally parse-checked in
 # this batch (sqlglot), not executed on a real engine — recorded per
 # the audit's "cannot-runtime-verify → state explicitly" rule.
-# This batch's structural-parse and runtime-verification matrix:
-#   parse-checked (sqlglot, all 6): postgres, mysql, oracle, tsql,
-#                                    duckdb, hive
-#   runtime-executed (DuckDB, Tier A): duckdb, hive
-#   NOT executed in this environment: postgres, mysql, oracle, tsql
-PARSE_ONLY_DIALECTS = ("postgres", "oracle", "tsql", "mysql")
+#
+# Evidence ledger, by dialect, for all 5 B1 cases:
+#   dialect   generated  sqlglot-parsed (own dialect)  executed
+#   postgres     yes         yes                          NOT executed
+#   mysql        yes         yes                          NOT executed
+#   oracle       yes         yes                          NOT executed
+#   tsql         yes         yes                          NOT executed
+#   hive         yes         yes                          NOT executed
+#   duckdb       yes         yes                          YES — Tier A,
+#                                                            native in-process
+#                                                            DuckDB execution
+#
+# The DuckDB-executed Tier A tests run the *duckdb*-dialect generated
+# SQL, not the hive-dialect SQL.  DuckDB and Hive share only basic
+# SQL surface syntax; Hive-specific constructs (e.g. DATE_SUB's
+# 2-arg form) do not execute on DuckDB.  Claiming "hive engine
+# verified" would be a false positive — hive SQL in this batch is
+# parse-checked only.
+PARSE_ONLY_DIALECTS = ("postgres", "oracle", "tsql", "mysql", "hive")
 
 
 @pytest.fixture
@@ -204,7 +217,8 @@ class TestB1RuntimeChineseExistsNotExistsValues:
 
 class TestB1RuntimeTopNThreshold:
     """B1-3 follow-up: the filter threshold must bind to the operator
-    word, not to the Top-N count that sits earlier in the text."""
+    word (or its tail, for English operator phrases), not to the
+    Top-N count that sits earlier in the text."""
 
     def _make_orders_db(self, amounts):
         db = duckdb.connect(":memory:")
@@ -228,12 +242,74 @@ class TestB1RuntimeTopNThreshold:
         rows = [float(a) for _, a in db.execute(executable(result)).fetchall()]
         assert rows == [400.0, 300.0], rows
 
+    def test_en_greater_than_tail_threshold_not_count(self, gen):
+        db = self._make_orders_db([50, 100, 150, 250])
+        result = gen.generate("top 10 orders with amount greater than 100", "duckdb")
+        assert result.success is True, result.explanation
+        rows = [float(a) for _, a in db.execute(executable(result)).fetchall()]
+        # strict >: the 100 boundary must be excluded
+        assert rows == [250.0, 150.0], rows
+
+    def test_en_greater_than_tail_distinct_count_and_threshold(self, gen):
+        db = self._make_orders_db([50, 100, 250, 300, 400])
+        result = gen.generate("top 5 orders with amount greater than 250", "duckdb")
+        assert result.success is True, result.explanation
+        rows = [float(a) for _, a in db.execute(executable(result)).fetchall()]
+        assert rows == [400.0, 300.0], rows
+
+    def test_en_greater_or_equal_includes_boundary(self, gen):
+        db = self._make_orders_db([50, 100, 150, 250])
+        result = gen.generate(
+            "top 10 orders with amount greater than or equal to 100", "duckdb"
+        )
+        assert result.success is True, result.explanation
+        rows = [float(a) for _, a in db.execute(executable(result)).fetchall()]
+        assert rows == [250.0, 150.0, 100.0], rows
+
+    def test_en_less_than_excludes_boundary(self, gen):
+        db = self._make_orders_db([50, 100, 150, 250])
+        result = gen.generate("top 10 orders with amount less than 100", "duckdb")
+        assert result.success is True, result.explanation
+        rows = [float(a) for _, a in db.execute(executable(result)).fetchall()]
+        assert rows == [50.0], rows
+
+    def test_en_less_or_equal_includes_boundary(self, gen):
+        db = self._make_orders_db([50, 100, 150, 250])
+        result = gen.generate(
+            "top 10 orders with amount less than or equal to 100", "duckdb"
+        )
+        assert result.success is True, result.explanation
+        rows = [float(a) for _, a in db.execute(executable(result)).fetchall()]
+        assert rows == [100.0, 50.0], rows
+
+    def test_cn_greater_or_equal_includes_boundary(self, gen):
+        db = self._make_orders_db([50, 100, 150, 250])
+        result = gen.generate("前10条金额大于等于100的订单", "duckdb")
+        assert result.success is True, result.explanation
+        rows = [float(a) for _, a in db.execute(executable(result)).fetchall()]
+        assert rows == [250.0, 150.0, 100.0], rows
+
+    def test_cn_less_than_excludes_boundary(self, gen):
+        db = self._make_orders_db([50, 100, 150, 250])
+        result = gen.generate("前10条金额小于100的订单", "duckdb")
+        assert result.success is True, result.explanation
+        rows = [float(a) for _, a in db.execute(executable(result)).fetchall()]
+        assert rows == [50.0], rows
+
+    def test_cn_less_or_equal_includes_boundary(self, gen):
+        db = self._make_orders_db([50, 100, 150, 250])
+        result = gen.generate("前10条金额小于等于100的订单", "duckdb")
+        assert result.success is True, result.explanation
+        rows = [float(a) for _, a in db.execute(executable(result)).fetchall()]
+        assert rows == [100.0, 50.0], rows
+
 
 def test_parse_only_dialects_are_recorded_not_claimed():
     """The audit's 'cannot-runtime-verify → say so' rule: the non-DuckDB
     dialects in this batch are sqlglot parse-checked only.  This test
     documents the fact structurally — it fails if the record is ever
-    silently dropped from the module."""
-    assert PARSE_ONLY_DIALECTS == ("postgres", "oracle", "tsql", "mysql")
+    silently dropped from the module.  Note: hive is parse-checked
+    here, not engine-verified (see the PARSE_ONLY_DIALECTS comment)."""
+    assert PARSE_ONLY_DIALECTS == ("postgres", "oracle", "tsql", "mysql", "hive")
     for dialect in PARSE_ONLY_DIALECTS:
         assert EVIDENCE_TIERS and dialect not in EVIDENCE_TIERS
