@@ -208,7 +208,6 @@ class TestB1RuntimeChineseExistsNotExistsValues:
         assert rows == [1], rows
 
     def test_unknown_pair_no_invoice_relation_fails_closed(self, gen):
-        db = self._make_two_user_db()
         result = gen.generate("查询有发票的用户", "duckdb")
         assert result.success is False
         assert result.sql is None
