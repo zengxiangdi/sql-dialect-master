@@ -29,10 +29,19 @@ def extract_table(text: str, table_patterns: Optional[Dict[str, str]] = None) ->
 
 
 def extract_table_subject(
-    text: str, table_patterns: Optional[Dict[str, str]] = None
+    text: str,
+    table_patterns: Optional[Dict[str, str]] = None,
+    relational_context: str = "",
 ) -> Optional[str]:
-    """Extract the subject table (first appearing in text) for D2 relational queries."""
-    return _extract_table_subject_impl(text, table_patterns or TABLE_PATTERNS)
+    """Extract the subject table (first appearing in text) for D2 relational queries.
+
+    ``relational_context`` names the relation table when it was already
+    resolved from a relational connective; that table is excluded from the
+    subject slot.
+    """
+    return _extract_table_subject_impl(
+        text, table_patterns or TABLE_PATTERNS, relational_context
+    )
 
 
 def named_tables(text: str, table_patterns: Optional[Dict[str, str]] = None) -> list:

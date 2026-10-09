@@ -18,6 +18,11 @@ _COMPOSITION_MARKERS = (
     "group by", "grouped by", "分组", "汇总",
     "limit", "top ", "top\t", "only ", "前",
     " and ", " or ", "且", "并且", "或者", "或",
+    # Chinese relational-existence phrases: capture by the enhanced path
+    # (EXISTS/NOT EXISTS + fail-closed), never by a single-table select
+    # template that would silently drop the relationship.
+    "有订单", "有产品", "有客户", "有员工", "有日志",
+    "没有任何订单", "没有任何产品", "没有任何客户",
 )
 
 _TEMPLATE_BLOCKERS = {
@@ -93,7 +98,7 @@ DEFAULT_QUERY_TEMPLATES = [
     ),
     QueryTemplate(
         name="time_range_query",
-        pattern=r"(?:查询|获取|get|find)?\s*(?:最近|过去|last|past)\s*(\d+)\s*(天|周|月|年|days?|weeks?|months?|years?)\s*(?:的|内的)?\s*(.+)",
+        pattern=r"(?:查询|获取|get|find)?\s*(?:最近|过去|last|past)\s*(\d+)\s*(天|周|月|年|days?|weeks?|months?|years?)(?:的|内的)?\s*(.+)",
         sql_template="SELECT * FROM {table} WHERE {date_col} >= DATE_SUB(CURRENT_DATE, {interval})",
         priority=85,
     ),

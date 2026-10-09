@@ -258,12 +258,13 @@ class PipelineNL2SQLGenerator:
             parsed = self._parse_text(text_lower, text)
             parsed.update(analysis)
             operation = self._detect_operation(text_lower)
+            cn_rel_table = self._cn_relation_table(text_lower)
             if self._has_relational_keyword(text_lower):
                 # Relational subject: 'users who have orders where price = 5'
                 # must yield FROM users, not FROM orders.
                 table = (
                     table_hint
-                    or self._extract_table_subject(text_lower)
+                    or self._extract_table_subject(text_lower, cn_rel_table)
                     or self._extract_table(text_lower)
                 )
             else:
@@ -306,6 +307,15 @@ class PipelineNL2SQLGenerator:
         if template and self._has_relational_keyword(text_lower):
             template = None
             logger.debug("NL2SQL: Relational keyword detected, bypassing template matching")
+        # A select/simpler template that captures a request naming two
+        # tables via Chinese connectives (用户 和 发票) must route to the
+        # enhanced path too: the select_with_columns / simple_select
+        # templates would silently drop the second table's relationship
+        # instead of failing closed.
+        elif template and template.name in ("select_with_columns", "simple_select"):
+            if len(self._named_tables(text_lower)) >= 2:
+                template = None
+                logger.debug("NL2SQL: multi-table select captured by select template, bypassing")
         if template:
             result = self._generate_from_template(
                 template, match_groups, analysis, dialect,
@@ -336,8 +346,20 @@ class PipelineNL2SQLGenerator:
         # tables is a relational/join request; it only succeeds when every
         # pair between the mentioned tables has a canonical relationship.
         named_tables = self._named_tables(text_lower)
+        cn_rel_table = self._cn_relation_table(text_lower)
         if len(named_tables) >= 2:
-            table = table_hint or named_tables[0]
+            # Relational subject-table resolution: when the request carries
+            # a relational connective (D2/CN 有<relation>的<subject>), the
+            # outer FROM is the subject table, not the relation table the
+            # connective names.
+            table = (
+                table_hint
+                or (
+                    self._extract_table_subject(text_lower, cn_rel_table)
+                    if self._has_relational_keyword(text_lower)
+                    else named_tables[0]
+                )
+            )
             unresolved = [j for j in joins if j.get("condition") is None]
             if unresolved:
                 pair_desc = " ⟷ ".join(
@@ -362,8 +384,13 @@ class PipelineNL2SQLGenerator:
                     ],
                 )
         else:
+            cn_rel_table = self._cn_relation_table(text_lower)
             if self._has_relational_keyword(text_lower):
-                table = table_hint or self._extract_table_subject(text_lower) or "table_name"
+                table = (
+                    table_hint
+                    or self._extract_table_subject(text_lower, cn_rel_table)
+                    or "table_name"
+                )
             else:
                 table = table_hint or self._extract_table(text_lower)
 
@@ -412,12 +439,19 @@ class PipelineNL2SQLGenerator:
         """
         return _pipeline_extract_table(text, self.TABLE_PATTERNS)
 
-    def _extract_table_subject(self, text: str) -> Optional[str]:
+    def _extract_table_subject(
+        self, text: str, relational_context: str = ""
+    ) -> Optional[str]:
         """Extract the subject table (first appearing in text) for D2 relational queries.
 
-        Delegates to ``nl2sql_pipeline.resolution.extract_table_subject``.
+        Delegates to ``nl2sql_pipeline.resolution.extract_table_subject``;
+        ``relational_context`` excludes the already-resolved relation table
+        from the subject slot so '查询有订单的用户' returns 'users', not
+        'orders'.
         """
-        return _pipeline_extract_table_subject(text, self.TABLE_PATTERNS)
+        return _pipeline_extract_table_subject(
+            text, self.TABLE_PATTERNS, relational_context
+        )
 
     def _named_tables(self, text: str) -> list:
         """Return the distinct table names the text mentions.
@@ -476,6 +510,16 @@ class PipelineNL2SQLGenerator:
         and returns structured join contexts for EXISTS-based SQL generation.
         """
         return _pipeline_extract_joins(text, self.TABLE_PATTERNS)
+
+    def _cn_relation_table(self, text: str) -> str:
+        """Return the CN relational connective's table (orders, products, ...)
+        when present in ``text``; otherwise ""."""
+        import re as _re
+        from ..nl2sql_components.relations import _CN_REL_TABLES
+        for modifier, rel_table in _CN_REL_TABLES.items():
+            if _re.search(r"(?:有|没有任何|没有)" + _re.escape(modifier), text):
+                return rel_table
+        return ""
 
     def _guess_join_key(self, table1: str, table2: str) -> Optional[str]:
         """Guess the join key between two tables.
