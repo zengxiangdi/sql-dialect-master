@@ -38,6 +38,11 @@ EVIDENCE_TIERS = {
 # Dialects whose generated SQL is only structurally parse-checked in
 # this batch (sqlglot), not executed on a real engine — recorded per
 # the audit's "cannot-runtime-verify → state explicitly" rule.
+# This batch's structural-parse and runtime-verification matrix:
+#   parse-checked (sqlglot, all 6): postgres, mysql, oracle, tsql,
+#                                    duckdb, hive
+#   runtime-executed (DuckDB, Tier A): duckdb, hive
+#   NOT executed in this environment: postgres, mysql, oracle, tsql
 PARSE_ONLY_DIALECTS = ("postgres", "oracle", "tsql", "mysql")
 
 
@@ -151,6 +156,77 @@ class TestB1RuntimeChineseRelation:
         assert result.sql is None
         assert result.confidence == 0.0
         assert "Unable to safely infer" in result.explanation
+
+
+class TestB1RuntimeChineseExistsNotExistsValues:
+    """The 没有 / 没有任何 phrasings must each produce NOT EXISTS and
+    return the correct row set, not just parse."""
+
+    def _make_two_user_db(self):
+        db = duckdb.connect(":memory:")
+        db.execute("CREATE TABLE users (id INT, name VARCHAR, age INT)")
+        db.execute("CREATE TABLE orders (id INT, user_id INT, amount DECIMAL)")
+        db.execute("CREATE TABLE invoices (id INT, user_id INT, amount DECIMAL)")
+        # user 1 has orders; user 2 has none; both have invoices
+        db.execute("INSERT INTO users VALUES (1, 'alice', 30), (2, 'bob', 25)")
+        db.execute("INSERT INTO orders VALUES (1, 1, 100), (2, 1, 50)")
+        db.execute("INSERT INTO invoices VALUES (1, 1, 10), (2, 2, 20)")
+        return db
+
+    def test_no_orders_not_exists_returns_only_user_without_orders(self, gen):
+        db = self._make_two_user_db()
+        result = gen.generate("查询没有订单的用户", "duckdb")
+        assert result.success is True, result.explanation
+        rows = [row[0] for row in db.execute(executable(result)).fetchall()]
+        assert rows == [2], rows
+
+    def test_no_any_orders_not_exists_returns_only_user_without_orders(self, gen):
+        db = self._make_two_user_db()
+        result = gen.generate("查询没有任何订单的用户", "duckdb")
+        assert result.success is True, result.explanation
+        rows = [row[0] for row in db.execute(executable(result)).fetchall()]
+        assert rows == [2], rows
+
+    def test_has_orders_exists_returns_only_user_with_orders(self, gen):
+        db = self._make_two_user_db()
+        result = gen.generate("查询有订单的用户", "duckdb")
+        assert result.success is True, result.explanation
+        rows = [row[0] for row in db.execute(executable(result)).fetchall()]
+        assert rows == [1], rows
+
+    def test_unknown_pair_no_invoice_relation_fails_closed(self, gen):
+        db = self._make_two_user_db()
+        result = gen.generate("查询有发票的用户", "duckdb")
+        assert result.success is False
+        assert result.sql is None
+        assert result.confidence == 0.0
+
+
+class TestB1RuntimeTopNThreshold:
+    """B1-3 follow-up: the filter threshold must bind to the operator
+    word, not to the Top-N count that sits earlier in the text."""
+
+    def _make_orders_db(self, amounts):
+        db = duckdb.connect(":memory:")
+        db.execute("CREATE TABLE orders (id INT, amount DECIMAL)")
+        rows = ", ".join(f"({i + 1}, {a})" for i, a in enumerate(amounts))
+        db.execute(f"INSERT INTO orders VALUES {rows}")
+        return db
+
+    def test_threshold_is_100_not_10(self, gen):
+        db = self._make_orders_db([50, 100, 150, 250])
+        result = gen.generate("前10条金额大于100的订单", "duckdb")
+        assert result.success is True, result.explanation
+        rows = [float(a) for _, a in db.execute(executable(result)).fetchall()]
+        assert all(a > 100 for a in rows), rows
+        assert rows == [250.0, 150.0], rows
+
+    def test_threshold_distinct_from_count_and_desc_ordered(self, gen):
+        db = self._make_orders_db([50, 100, 250, 300, 400])
+        result = gen.generate("前5条金额大于250的订单", "duckdb")
+        assert result.success is True, result.explanation
+        rows = [float(a) for _, a in db.execute(executable(result)).fetchall()]
+        assert rows == [400.0, 300.0], rows
 
 
 def test_parse_only_dialects_are_recorded_not_claimed():

@@ -86,8 +86,46 @@ def extract_conditions(
         (["小于", "低于", "少于", "不足", "less", "less than", "below", "under", "<"], "<"),
         (["等于", "是", "为", "equals", "equal", "="], "="),
     ]
+    # For each operator word, the threshold is the number that
+    # immediately follows it in the original text (not numbers[0] —
+    # '前10条金额大于100' must bind 100 to 大于, not 10).  Multi-char
+    # operator words are tried in longest-first order so that e.g.
+    # 大于等于 binds its own value before the 大于 row fires on the same
+    # text — the legacy row order let the shorter 大于 substring steal
+    # an 大于等于 match and emit ">" instead of ">=".
+    #
+    # The primary value bind (operator word → number directly after it)
+    # is the canonical form.  When that bind fails but an operator word
+    # is still present (e.g. 'greater than 5' — number follows 'than',
+    # not 'greater'), a fallback binds the column before the operator
+    # word to the first number after it.  This keeps the legacy
+    # operator-word + numbers[0] behavior for English phrases while
+    # correcting the Chinese case where the operator word sits between
+    # the column and the threshold number.
     for keywords, op in comparisons:
-        if any(keyword in text for keyword in keywords) and numbers:
+        bound_value = None
+        matched_keyword = None
+        for keyword in sorted(keywords, key=len, reverse=True):
+            if keyword not in original:
+                continue
+            m = re.search(
+                re.escape(keyword) + r"\s*(\d+(?:\.\d+)?)",
+                original,
+            )
+            if m:
+                bound_value = m.group(1)
+                matched_keyword = keyword
+                break
+        if matched_keyword is not None and bound_value is None and numbers:
+            bound_value = numbers[0]
+        if bound_value is not None:
+            col = condition_column or "column"
+            conditions.append(f"{col} {op} {bound_value}")
+            break
+        # Fallback: operator word present but no number directly follows
+        # it (English phrasing) — bind the column named before the
+        # operator word to the first available number.
+        if any(k in original for k in keywords) and numbers:
             col = condition_column or "column"
             conditions.append(f"{col} {op} {numbers[0]}")
             break

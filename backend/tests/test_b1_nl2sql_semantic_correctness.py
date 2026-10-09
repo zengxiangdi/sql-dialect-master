@@ -193,13 +193,34 @@ class TestB1_3_TopNWithFilterClauseOrder:
         assert "LIMIT 10" in sql, result.sql
 
     def test_limit_not_immediately_before_where(self, gen):
-        """The exact defect: 'LIMIT 10\\nWHERE amount > 10' must be gone."""
+        """The exact defect: 'LIMIT 10\\nWHERE amount > 10' must be gone.
+        The filter threshold must be the operator-bound value (100),
+        not the LIMIT count that happens to sit earlier in the text."""
         result = gen.generate("前10条金额大于100的订单", "hive")
         sql = " ".join((result.sql or "").split())
-        assert not sql.upper().startswith("LIMIT"), result.sql
+        assert "amount > 100" in sql, f"threshold must bind to the operator word, got: {sql}"
         idx_limit = sql.upper().find("LIMIT")
         idx_where = sql.upper().find("WHERE")
         assert idx_where < idx_limit, result.sql
+
+    @pytest.mark.parametrize(
+        "text,expected_threshold,expected_limit",
+        [
+            ("前10条金额大于100的订单", 100, 10),
+            ("前5条金额大于250的订单", 250, 5),
+        ],
+    )
+    def test_top_n_threshold_distinct_from_count(
+        self, gen, text, expected_threshold, expected_limit
+    ):
+        result = gen.generate(text, "duckdb")
+        assert result.success is True, result.explanation
+        tree = sqlglot.parse_one(executable_sql(result), read="duckdb")
+        where = tree.find(exp.Where)
+        assert where is not None, result.sql
+        assert f"amount > {expected_threshold}" in where.sql(dialect="duckdb"), result.sql
+        assert tree.args.get("limit") is not None, result.sql
+        assert int(tree.args["limit"].expression.this) == expected_limit, result.sql
 
     @pytest.mark.parametrize("dialect", ["postgres", "mysql", "oracle", "tsql", "duckdb", "hive"])
     def test_parseable_per_dialect(self, gen, dialect):
