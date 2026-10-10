@@ -21,6 +21,7 @@ from .config import (
 from .exceptions import ErrorCode, ValidationError
 from .p1_sql_scanner import mask_non_executable
 from .post_processor import PostProcessor
+from .rules import DYNAMIC_SEPARATOR_FAIL_NOTE
 
 logger = logging.getLogger(__name__)
 _DANGEROUS_OPERATION_PATTERN = re.compile(
@@ -261,6 +262,40 @@ class SQLTranspiler:
                 warnings = security_warnings + self._generate_warnings(sql, source, target)
 
             target_validation_state = "target_valid"
+            if DYNAMIC_SEPARATOR_FAIL_NOTE in transformations:
+                # B2-1b fail-closed: the structured rewriter left an
+                # unconvertible dynamic GROUP_CONCAT SEPARATOR in place
+                # and recorded the fail-closed note.  Refuse to report
+                # success: the target SQL contains a source-dialect
+                # STRING_AGG call that MySQL cannot execute.
+                return TranspileResult(
+                    success=False, source_sql=sql, source_dialect=source, target_dialect=target,
+                    error=DYNAMIC_SEPARATOR_FAIL_NOTE,
+                    error_code=ErrorCode.VALIDATION_FAILED.value,
+                    compatibility_notes=compat_notes, transformations=transformations,
+                    warnings=warnings, target_validation_state="invalid",
+                )
+            # B2-1b structural guard: even when sqlglot transpiled a
+            # STRING_AGG whose dynamic separator it emitted natively
+            # (e.g. `SEPARATOR CONCAT(',', UPPER(x))`), MySQL's actual
+            # GROUP_CONCAT grammar accepts only a string literal in the
+            # SEPARATOR slot.  sqlglot's MySQL dialect is more permissive
+            # than real MySQL here, so a parse-OK result is not
+            # execution evidence — detect the non-Literal separator and
+            # fail closed.
+            if target == "mysql" and self._group_concat_dynamic_separator(final_sql):
+                guard_note = (
+                    "B2-1b fail-closed: GROUP_CONCAT SEPARATOR must be a "
+                    "string literal in MySQL; the dynamic separator produced "
+                    "by transpilation cannot be expressed in the target "
+                    "and the conversion is not executable on MySQL."
+                )
+                return TranspileResult(
+                    success=False, source_sql=sql, source_dialect=source, target_dialect=target,
+                    error=guard_note, error_code=ErrorCode.VALIDATION_FAILED.value,
+                    compatibility_notes=compat_notes, transformations=transformations,
+                    warnings=warnings, target_validation_state="invalid",
+                )
             if validate:
                 (
                     validation_error,
@@ -657,6 +692,26 @@ class SQLTranspiler:
         """Validate target SQL, preserving the original error-only interface."""
         error, _, _ = self._validate_output_detailed(sql, dialect)
         return error
+
+    def _group_concat_dynamic_separator(self, sql: str) -> bool:
+        """True when any GROUP_CONCAT in ``sql`` has a non-Literal SEPARATOR.
+
+        Real MySQL's ``GROUP_CONCAT(expr [SEPARATOR str_val])`` requires a
+        string literal in the SEPARATOR slot; sqlglot's MySQL dialect
+        accepts arbitrary expressions there, so a parse-OK result is not
+        evidence the output is executable MySQL.  Used only when
+        ``target == "mysql"`` as a fail-closed guard.
+        """
+        try:
+            tree = sqlglot.parse_one(sql, read="mysql")
+        except Exception:
+            # Unparseable output is already caught by _validate_output_detailed.
+            return False
+        for gc in tree.find_all(exp.GroupConcat):
+            sep = gc.args.get("separator")
+            if sep is not None and not isinstance(sep, exp.Literal):
+                return True
+        return False
 
     def _validate_output_detailed(
         self, sql: str, dialect: str

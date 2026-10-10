@@ -1,31 +1,29 @@
-"""B2-1 — STRING_AGG dynamic-separator structured-rewrite audit.
+"""B2-1 / B2-1b — STRING_AGG dynamic-separator conversion audit.
 
-This test documents two independent conclusions required by the audit:
+Summary of verified behavior after B2-1 + B2-1b:
 
-1. **The structured replacer itself is defective for dynamic separators.**
-   ``rule_engine.apply_rules`` applied directly to *source* SQL (the
-   pre-sqlglot-transpile form) mangles ``STRING_AGG(expr, DYN_SEP)`` into
-   ``GROUP_CONCAT(expr SEPARATOR 'DYN_SEP')`` — the dynamic expression is
-   wrapped in single quotes and treated as a string literal.  The resulting
-   SQL does not parse under the target dialect (a concrete, parse-checked
-   failure, not a string-substring guess).
-
-2. **The production ``SQLTranspiler.transpile`` entry point does not
-   reproduce this defect.**  It runs sqlglot first, which natively
-   converts ``STRING_AGG`` to ``GROUP_CONCAT(... SEPARATOR
-   <expression>)`` with the dynamic separator preserved as an
-   expression; the rule engine's STRING_AGG rule no longer fires on the
-   already-rewritten output.  The defect is therefore a bug in the
-   callable rule-engine entry point, not a defect in the shipped
-   transpile pipeline.
-
-The audit explicitly forbids claiming "the full conversion failed" when
-the failure is confined to the callable rule-engine path, and forbids
-claiming a path is verified when no test exercises it.  These tests
-lock in exactly that boundary: the production path is asserted correct
-(and parseable), and the structured replacer's own output is asserted
-to parse under the target dialect — which it currently does NOT, and
-will once the underlying replacer is fixed in a later batch.
+- A **fixed** string-literal separator converts to a valid, executable
+  MySQL ``GROUP_CONCAT(... SEPARATOR '<literal>')`` via both the
+  ``rule_engine.apply_rules`` entry point and the production
+  ``SQLTranspiler.transpile`` pipeline.  Escape and quote semantics are
+  preserved and re-quoted per MySQL's single-quoted-literal rules.
+- A **dynamic** separator (function call, CASE expression, ``||`` /
+  ``+`` concatenation, or a bare column reference) has no
+  semantics-preserving MySQL equivalent — MySQL's ``SEPARATOR str_val``
+  slot accepts only a string literal, and pre-computing a constant would
+  change per-row semantics.  Both entry points now fail closed instead
+  of reporting a successful conversion with unexecutable target SQL:
+  * ``rule_engine.apply_rules`` leaves the source call untouched and
+    appends ``DYNAMIC_SEPARATOR_FAIL_NOTE`` to the notes.
+  * ``SQLTranspiler.transpile`` returns ``success=False`` with
+    ``error_code=VALIDATION_FAILED`` when either the rule engine's
+    fail-closed note is present OR the transpiled output contains a
+    non-Literal ``GROUP_CONCAT`` SEPARATOR (a structural guard, since
+    sqlglot's MySQL dialect accepts dynamic SEPARATOR values that real
+    MySQL does not).
+- **No real MySQL engine is available in this environment.**  All
+  "parse-check" results here are sqlglot AST structural checks, which
+  are explicitly *not* equivalent to execution on a real MySQL server.
 """
 from __future__ import annotations
 
@@ -34,153 +32,188 @@ from sqlglot import exp
 
 import pytest
 
-from backend.core.rules import rule_engine
+from backend.core.rules import (
+    DYNAMIC_SEPARATOR_FAIL_NOTE,
+    rule_engine,
+)
 from backend.core.transpiler import SQLTranspiler
 
 
-CASES = [
+# Fixed-literal cases
+FIXED_CASES = [
     ("SELECT STRING_AGG(name, ',') FROM t", "fixed-literal"),
-    # Postgres `||` is a legal source-dialect expression, but sqlglot's
-    # MySQL target grammar rejects `||` anywhere in the statement, so the
-    # post-rewrite output is unparseable under `read="mysql"` even though
-    # the replacer kept the separator as an expression (this is a
-    # source/target dialect-grammar mismatch, not a defect in the fix
-    # itself — verified separately in TestDynamicConcOperatorCaveat below).
-    # For the parse-check that proves "separator is still an
-    # expression," a CONCAT() dynamic separator is used instead: it is
-    # valid in both the Postgres source and the MySQL target grammar.
+]
+# Dynamic-separator cases: no executable MySQL equivalent exists.
+DYNAMIC_CASES = [
     ("SELECT STRING_AGG(name, CONCAT(',', UPPER(x))) FROM t", "dynamic-concat"),
     (
         "SELECT STRING_AGG(name, CASE WHEN z THEN ',' ELSE ';' END) FROM t",
         "dynamic-case",
     ),
+    ("SELECT STRING_AGG(name, ',' || UPPER(x)) FROM t", "dynamic-pipe"),
+    ("SELECT STRING_AGG(name, ',' + UPPER(x)) FROM t", "dynamic-plus"),
 ]
 SOURCES = ("postgres", "tsql")
 
 
 def _separator_is_expression(tree: exp.Expression) -> bool:
-    """Return True when the GROUP_CONCAT separator is a non-Literal node.
-
-    A correct rewrite of a dynamic separator must keep it as an
-    expression (CONCAT / CASE / ...), not a quoted string.
-    """
-    gc = tree.find(exp.GroupConcat)
-    if gc is None:
-        return False
-    sep = gc.args.get("separator")
-    return sep is not None and not isinstance(sep, exp.Literal)
+    """True when any GROUP_CONCAT in the tree has a non-Literal separator."""
+    for gc in tree.find_all(exp.GroupConcat):
+        sep = gc.args.get("separator")
+        if sep is not None and not isinstance(sep, exp.Literal):
+            return True
+    return False
 
 
-class TestStructuredReplacerDynamicSeparator:
-    """The structured STRING_AGG→GROUP_CONCAT replacer, exercised through
-    the raw rule-engine entry point on source SQL.
+class TestFixedLiteralSeparator:
+    """Fixed literal separators must convert correctly through both paths."""
 
-    These tests encode the CORRECT behavior (separator stays an
-    expression, output parses).  As of this batch they FAIL on the two
-    dynamic cases — that is the expected red baseline proving the
-    underlying defect is real and reachable through the documented
-    rule-engine API.  The fixed-literal case passes both before and
-    after, confirming the test is not just a blanket failure.
-    """
-
-    @pytest.mark.parametrize("sql,label", CASES)
+    @pytest.mark.parametrize("sql,label", FIXED_CASES)
     @pytest.mark.parametrize("source", SOURCES)
-    def test_dynamic_separator_stays_an_expression(
-        self, sql, label, source
-    ):
-        result, _ = rule_engine.apply_rules(sql, source, "mysql")
-        # All three cases (fixed literal and both dynamic forms) must be
-        # parseable under the target dialect after the B2-1 fix.
+    def test_rule_engine_fixed_literal(self, sql, label, source):
+        result, notes = rule_engine.apply_rules(sql, source, "mysql")
+        assert DYNAMIC_SEPARATOR_FAIL_NOTE not in notes, notes
         tree = sqlglot.parse_one(result, read="mysql")
-        if label == "fixed-literal":
-            # Control case: the fixed separator is correctly a quoted
-            # string literal, not an expression.
-            assert not _separator_is_expression(tree), result
-        else:
-            # A dynamic separator must survive as an expression, not a
-            # string literal — the defect B2-1 fixes.
-            assert _separator_is_expression(tree), (
-                f"{source}→mysql {label}: dynamic separator was "
-                f"collapsed to a string literal: {result}"
-            )
+        assert not _separator_is_expression(tree), (
+            f"fixed literal separator must remain a literal, got expression: {result}"
+        )
 
-
-class TestProductionTranspilePathNotAffected:
-    """The shipped SQLTranspiler.transpile entry must not inherit the
-    structured-replacer defect: sqlglot handles STRING_AGG natively
-    before the rule engine's STRING_AGG rule ever fires."""
-
-    @pytest.mark.parametrize("sql,label", CASES)
+    @pytest.mark.parametrize("sql,label", FIXED_CASES)
     @pytest.mark.parametrize("source", SOURCES)
-    def test_transpile_preserves_dynamic_separator_and_parses(
-        self, sql, label, source
-    ):
-        transpiler = SQLTranspiler()
-        result = transpiler.transpile(sql, source, "mysql")
+    def test_transpile_fixed_literal(self, sql, label, source):
+        result = SQLTranspiler().transpile(sql, source, "mysql")
         assert result.success is True, result.error
         tree = sqlglot.parse_one(result.target_sql, read="mysql")
-        if label != "fixed-literal":
-            assert _separator_is_expression(tree), (
-                f"production transpile {source}→mysql {label}: dynamic "
-                f"separator was not preserved as an expression: "
-                f"{result.target_sql}"
-            )
+        assert not _separator_is_expression(tree), result.target_sql
 
-    def test_fixed_literal_separator_unaffected(self):
+
+class TestDynamicSeparatorRuleEngineFailsClosed:
+    """The rule-engine path must fail closed for every dynamic-separator form.
+
+    The source call is left untouched and a fail-closed note is appended.
+    No dynamic separator is silently rewritten into a string literal.
+    """
+
+    @pytest.mark.parametrize("sql,label", DYNAMIC_CASES)
+    @pytest.mark.parametrize("source", SOURCES)
+    def test_rule_engine_dynamic_separator_fail_closed(
+        self, sql, label, source
+    ):
+        result, notes = rule_engine.apply_rules(sql, source, "mysql")
+        assert DYNAMIC_SEPARATOR_FAIL_NOTE in notes, (
+            f"dynamic separator ({label}) must produce a fail-closed note, "
+            f"got notes: {notes}"
+        )
+        # The rewriter must not have collapsed the dynamic separator into
+        # a GROUP_CONCAT SEPARATOR string literal: the source call stays
+        # untouched and no GROUP_CONCAT appears where none was in source.
+        assert "GROUP_CONCAT" not in result.upper() or "STRING_AGG" in result.upper(), (
+            f"dynamic separator was silently rewritten to GROUP_CONCAT: {result}"
+        )
+
+
+class TestDynamicSeparatorTranspileFailsClosed:
+    """The production transpile path must fail closed for dynamic separators.
+
+    sqlglot's MySQL dialect is more permissive than real MySQL: it accepts
+    dynamic expressions in the GROUP_CONCAT SEPARATOR slot.  The structural
+    guard in SQLTranspiler (``_group_concat_dynamic_separator``) catches
+    this and forces a fail-closed result rather than reporting success with
+    unexecutable target SQL.
+    """
+
+    @pytest.mark.parametrize("sql,label", DYNAMIC_CASES)
+    @pytest.mark.parametrize("source", SOURCES)
+    def test_transpile_dynamic_separator_fail_closed(self, sql, label, source):
+        result = SQLTranspiler().transpile(sql, source, "mysql")
+        assert result.success is False, (
+            f"dynamic separator ({label}) must fail closed, "
+            f"got success=True target={result.target_sql!r}"
+        )
+        assert result.error_code == "VALIDATION_FAILED", result.error_code
+
+
+class TestDynamicSeparatorTranspileDoesNotFalsePositiveOnValidMySQL:
+    """The structural guard must not flag valid fixed-literal GROUP_CONCAT
+    output as unsupported — only genuinely dynamic separators trigger it."""
+
+    @pytest.mark.parametrize("sql", [
+        "SELECT STRING_AGG(name, ',') FROM t",
+        "SELECT STRING_AGG(name, ';') FROM t",
+    ])
+    @pytest.mark.parametrize("source", SOURCES)
+    def test_fixed_literals_do_not_trigger_guard(self, sql, source):
+        result = SQLTranspiler().transpile(sql, source, "mysql")
+        assert result.success is True, (
+            f"fixed-literal separator must still succeed: {result.error}"
+        )
+        # Confirm the structural guard itself does not fire on valid output.
         transpiler = SQLTranspiler()
-        for source in SOURCES:
-            result = transpiler.transpile(
-                "SELECT STRING_AGG(name, ',') FROM t", source, "mysql"
-            )
-            assert result.success is True, result.error
-            sqlglot.parse_one(result.target_sql, read="mysql")
-
-
-class TestDynamicConcOperatorCaveat:
-    """Documents the source/target dialect-grammar mismatch found during
-    this audit, which is distinct from (and independent of) the B2-1
-    replacer defect: Postgres `||` is a legal source expression, but
-    sqlglot's MySQL target grammar rejects `||` anywhere in the
-    statement, so the post-rewrite output is unparseable under
-    ``read="mysql"`` even though the replacer correctly kept the
-    separator as an expression.  This caveat is recorded here so the
-    test suite makes explicit that the parse-check uses a
-    CONCAT()-form dynamic separator precisely to avoid this unrelated
-    grammar limitation."""
-
-    def test_concat_operator_output_unparseable_under_mysql_grammar(self):
-        result, _ = rule_engine.apply_rules(
-            "SELECT STRING_AGG(name, ',' || UPPER(x)) FROM t", "postgres", "mysql"
+        guard = transpiler._group_concat_dynamic_separator(result.target_sql)
+        assert guard is False, (
+            f"structural guard must not fire on valid literal separator: "
+            f"{result.target_sql}"
         )
-        # The replacer kept the expression verbatim (correct fix
-        # behavior) — the || operator itself is what MySQL's grammar
-        # rejects, not the replacer's output shape.
-        assert "||" in result, result
-        with pytest.raises(sqlglot.errors.ParseError):
-            sqlglot.parse_one(result, read="mysql")
 
-    def test_concat_equivalent_dynamic_separator_parseable(self):
-        result, _ = rule_engine.apply_rules(
-            "SELECT STRING_AGG(name, CONCAT(',', UPPER(x))) FROM t",
-            "postgres",
-            "mysql",
+
+class TestLiteralFidelity:
+    """Double-quoted and escaped-quote arguments must be interpreted per
+    source dialect with escape/content semantics preserved.
+
+    In PostgreSQL/Oracle double quotes mark IDENTIFIERS, not string
+    literals — so a double-quoted separator in Postgres is a dynamic
+    (identifier-based) expression and must fail closed.  In T-SQL double
+    quotes mark string literals, so a double-quoted separator in T-SQL
+    is a valid fixed literal.
+    """
+
+    @pytest.mark.parametrize(
+        "sql,source,expect_fail_closed",
+        [
+            ('SELECT STRING_AGG(name, "separator_col") FROM t', "postgres", True),
+            ('SELECT STRING_AGG(name, "foo") FROM t', "postgres", True),
+            ('SELECT STRING_AGG(name, "foo") FROM t', "tsql", False),
+        ],
+    )
+    def test_double_quote_interpretation(self, sql, source, expect_fail_closed):
+        result, notes = rule_engine.apply_rules(sql, source, "mysql")
+        is_fail_closed = DYNAMIC_SEPARATOR_FAIL_NOTE in notes
+        assert is_fail_closed == expect_fail_closed, (
+            f"{source} double-quoted separator: expected "
+            f"{'fail-closed' if expect_fail_closed else 'success'}, "
+            f"got fail_closed={is_fail_closed} result={result!r}"
         )
+
+    def test_escaped_single_quote_literal_preserved(self):
+        """PostgreSQL's doubled-quote escape must normalize to MySQL's
+        backslash-escape without changing the literal's content."""
+        result, notes = rule_engine.apply_rules(
+            "SELECT STRING_AGG(name, 'a''b') FROM t", "postgres", "mysql"
+        )
+        assert DYNAMIC_SEPARATOR_FAIL_NOTE not in notes
         tree = sqlglot.parse_one(result, read="mysql")
-        assert _separator_is_expression(tree), result
+        gc = tree.find(exp.GroupConcat)
+        sep = gc.args.get("separator")
+        assert isinstance(sep, exp.Literal), result
+        # The literal's VALUE must be a'b — escape form may differ per
+        # dialect, but the content must survive.
+        assert sep.this == "a'b", f"literal content mangled: {sep.this!r}"
+
+    def test_escaped_double_quote_literal_preserved_tsql(self):
+        result, notes = rule_engine.apply_rules(
+            'SELECT STRING_AGG(name, "a""b") FROM t', "tsql", "mysql"
+        )
+        assert DYNAMIC_SEPARATOR_FAIL_NOTE not in notes
+        tree = sqlglot.parse_one(result, read="mysql")
+        gc = tree.find(exp.GroupConcat)
+        sep = gc.args.get("separator")
+        assert isinstance(sep, exp.Literal), result
+        assert sep.this == 'a"b', f"literal content mangled: {sep.this!r}"
 
 
 if __name__ == "__main__":
-    # Red-baseline evidence (run before the fix lands in a later batch):
-    #   fixed-literal cases pass; dynamic-concat / dynamic-case cases in
-    #   TestStructuredReplacerDynamicSeparator FAIL (unparseable output,
-    #   separator wrapped in quotes).  TestProductionTranspilePathNotAffected
-    #   passes in full — the production path is not the bug.
-    import subprocess
-    import sys
-
-    print(
-        subprocess.check_output(
-            [sys.executable, "-m", "pytest", __file__, "-q", "-rs"],
-            text=True,
-        ),
-    )
+    import subprocess, sys
+    print(subprocess.check_output(
+        [sys.executable, "-m", "pytest", __file__, "-v", "-p", "no:cacheprovider"],
+        text=True,
+    ))

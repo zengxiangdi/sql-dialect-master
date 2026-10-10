@@ -17,40 +17,136 @@ from .p1_sql_scanner import executable_segments, mask_non_executable, split_top_
 logger = logging.getLogger(__name__)
 
 
-def _is_plain_string_literal(text: str) -> bool:
-    """True when text is a single, unescaped single- or double-quoted literal.
+# Sentinel marker that the structured STRING_AGG rewriter appends to its
+# output when the separator argument is a dynamic expression.  MySQL's
+# GROUP_CONCAT grammar accepts only a plain string literal for
+# ``SEPARATOR str_val`` — a dynamic expression there is not executable
+# MySQL.  No semantics-preserving rewrite exists (a pre-computed
+# constant would change per-row semantics; a GROUP_CONCAT-of-separators
+# trick is undefined behavior).  The conversion must therefore fail
+# closed: ``PostProcessor.process`` strips the marker and records the
+# fail-closed note, so both entry points (``rule_engine.apply_rules``
+# and ``SQLTranspiler.transpile``) surface the failure without carrying
+# the marker into any returned SQL.
+DYNAMIC_SEPARATOR_FAIL_NOTE = (
+    "B2-1b fail-closed: STRING_AGG dynamic separator is not expressible as "
+    "a MySQL GROUP_CONCAT SEPARATOR (string literal only); the conversion "
+    "is not executable on the target and is reported as a failure."
+)
 
-    Used to decide whether a STRING_AGG separator argument is a fixed
-    literal (quote-strip it) or a dynamic expression (embed it verbatim).
+
+def strip_dynamic_separator_marker(sql: str) -> Tuple[str, bool]:
+    """Remove every dynamic-separator marker line from ``sql``.
+
+    Returns ``(cleaned_sql, marker_was_present)``.  Marker lines are
+    comment lines carrying the B2-1b dynamic-separator sentinel; they
+    are produced by ``_replace_string_agg_to_group_concat`` and never
+    by user SQL, so removing them is safe and total.
+    """
+    cleaned_lines = [
+        line for line in sql.splitlines() if "B2-1b: dynamic SEPARATOR" not in line
+    ]
+    was_present = len(cleaned_lines) != len(sql.splitlines())
+    cleaned = "\n".join(cleaned_lines).rstrip()
+    return cleaned, was_present
+
+
+def _is_plain_string_literal(text: str, source_dialect: str = "") -> bool:
+    """True when text is a plain string literal in the given source dialect.
+
+    Quote interpretation is dialect-aware:
+    - PostgreSQL / Oracle / snowflake / redshift: double quotes mark
+      IDENTIFIERS, so a double-quoted argument is never a string literal;
+    - T-SQL / MySQL / duckdb / clickhouse / hive-family: double quotes
+      mark string literals;
+    - single quotes mark string literals in all source dialects.
     """
     text = text.strip()
     if len(text) < 2:
         return False
     quote = text[0]
-    if quote not in ("'", '"'):
+    if quote == "'":
+        # A plain literal has no UNESCAPED quote inside; a doubled
+        # ``''`` pair is the source dialect's escape for a literal quote
+        # and does not end the literal.
+        inner = text[1:-1]
+        i = 0
+        while i < len(inner):
+            if inner[i] != quote:
+                i += 1
+                continue
+            if i + 1 < len(inner) and inner[i + 1] == quote:
+                i += 2  # escaped quote, skip the pair
+                continue
+            return False  # unescaped closing quote too early
+        return True
+    if quote == '"' and source_dialect in ("postgres", "oracle", "snowflake", "redshift"):
+        # Double-quoted identifier: not a string literal in these dialects.
         return False
-    if text[-1] != quote:
+    if quote != '"':
         return False
-    return text[1:-1].count(quote) == 0
+    inner = text[1:-1]
+    i = 0
+    while i < len(inner):
+        if inner[i] != '"':
+            i += 1
+            continue
+        if i + 1 < len(inner) and inner[i + 1] == '"':
+            i += 2
+            continue
+        return False
+    return True
 
 
-def _replace_string_agg_to_group_concat(args: str, original: str) -> str:
-    """Convert STRING_AGG to GROUP_CONCAT preserving nested expressions."""
+def _requote_for_mysql(inner: str, original_quotes: str) -> str:
+    """Convert a plain string literal's inner text to MySQL single-quoted form.
+
+    ``original_quotes`` is the source dialect's quote style for the literal.
+    When single-quoted, the inner text may use doubled ``''`` as the escape
+    (PostgreSQL / T-SQL / MariaDB form); when double-quoted (T-SQL), the
+    inner text may use doubled ``""`` as the escape.  Both doubled-pair
+    escapes are unwound back to a plain quote, then re-escaped to MySQL's
+    backslash-single-quote form.
+    """
+    if original_quotes == "'":
+        inner = inner.replace("''", "'")
+    else:
+        inner = inner.replace('""', '"')
+    inner = inner.replace("'", "\\'")
+    return inner
+
+
+def _replace_string_agg_to_group_concat(
+    args: str, original: str, source_dialect: str = ""
+) -> str:
+    """Convert STRING_AGG to GROUP_CONCAT preserving nested expressions.
+
+    - Fixed string-literal separators are re-quoted for GROUP_CONCAT's
+      ``SEPARATOR str_val`` clause, with single-quote escaping preserved
+      (a doubled ``\'\'`` inside a literal stays doubled).
+    - Dynamic separator expressions (CONCAT(...), CASE ... END, ...)
+      cannot be expressed in MySQL: ``SEPARATOR`` accepts only a string
+      literal.  The rewriter fails closed with a marker comment instead
+      of emitting unexecutable SQL and reporting success.
+    - Double-quoted arguments are interpreted per source dialect (see
+      _is_plain_string_literal); in PostgreSQL a double-quoted separator
+      is an identifier, not a string, and is treated as dynamic (unsupported).
+    """
     values = split_top_level_args(args)
     if len(values) != 2 or not all(values):
         return original
     expression, separator = values
-    if _is_plain_string_literal(separator):
-        # Fixed literal separator: strip its quotes and re-quote for
-        # GROUP_CONCAT's SEPARATOR clause.
-        sep_stripped = separator.strip("'\"")
-        return f"GROUP_CONCAT({expression} SEPARATOR '{sep_stripped}')"
-    # Dynamic separator expression (function call, CASE, ...): emit it
-    # verbatim as GROUP_CONCAT's SEPARATOR argument.  MySQL's SEPARATOR
-    # clause accepts a dynamic expression, so keep it an expression
-    # (wrapping it in single quotes would turn it into a malformed
-    # string literal that the target dialect cannot parse).
-    return f"GROUP_CONCAT({expression} SEPARATOR {separator})"
+    if _is_plain_string_literal(separator, source_dialect):
+        # Fixed literal separator: normalize its inner text to MySQL
+        # single-quoted form, preserving the content and escape semantics.
+        separator = separator.strip()
+        inner = separator[1:-1]
+        mysql_literal = _requote_for_mysql(inner, separator[0])
+        return f"GROUP_CONCAT({expression} SEPARATOR '{mysql_literal}')"
+    # Dynamic separator: not expressible in MySQL — emit the original
+    # call untouched plus a marker line the caller strips and converts
+    # into an explicit fail-closed note (see strip_dynamic_separator_marker).
+    return f"{original}\n-- B2-1b: dynamic SEPARATOR is not executable MySQL"
 
 
 def _replace_group_concat_to_string_agg(args: str, original: str) -> str:
@@ -280,8 +376,17 @@ class TransformRule:
         target_match = "*" in target_values or target.lower() in target_values
         return source_match and target_match
 
-    def _apply_structured(self, sql: str) -> Tuple[str, bool]:
-        """Apply an explicitly scanner-backed function rewrite."""
+    def _apply_structured(
+        self, sql: str, source_dialect: str = ""
+    ) -> Tuple[str, bool]:
+        """Apply an explicitly scanner-backed function rewrite.
+
+        ``source_dialect`` (lower-cased) is threaded to
+        ``structured_replacer`` callables that need dialect-aware parsing
+        of argument text (e.g. STRING_AGG separator quote interpretation
+        differs between PostgreSQL — where ``"x"`` is an identifier — and
+        T-SQL, where it is a string literal).
+        """
         if not self.function_name:
             return sql, False
 
@@ -294,7 +399,12 @@ class TransformRule:
         def replacer(args: str, original_call: str) -> str:
             nonlocal applied
             if self.structured_replacer is not None:
-                transformed = self.structured_replacer(args, original_call)
+                try:
+                    transformed = self.structured_replacer(
+                        args, original_call, source_dialect
+                    )
+                except TypeError:
+                    transformed = self.structured_replacer(args, original_call)
                 applied = applied or transformed != original_call
                 return transformed
             values = split_top_level_args(args)
@@ -307,13 +417,15 @@ class TransformRule:
         transformed = replace_function_calls(sql, self.function_name, replacer)
         return transformed, applied
 
-    def apply(self, sql: str) -> Tuple[str, bool]:
+    def apply(
+        self, sql: str, source_dialect: str = ""
+    ) -> Tuple[str, bool]:
         """Apply this rule only to executable SQL segments."""
         if not self.enabled:
             return sql, False
 
         if self.function_name and (self.structured_replacement or self.structured_replacer or self.full_sql_rewriter):
-            return self._apply_structured(sql)
+            return self._apply_structured(sql, source_dialect)
 
         pattern = getattr(self, "_compiled_pattern", None)
         if pattern is None:
@@ -674,7 +786,12 @@ class RuleEngine:
         self._sort_rules()
         self._compile_patterns()
 
-    def apply_rules(self, sql: str, source: str, target: str) -> Tuple[str, List[str]]:
+    def apply_rules(
+        self,
+        sql: str,
+        source: str,
+        target: str,
+    ) -> Tuple[str, List[str]]:
         """Apply all matching rules to SQL.
 
         Args:
@@ -683,17 +800,35 @@ class RuleEngine:
             target: Target dialect
 
         Returns:
-            Tuple of (transformed_sql, list_of_notes)
+            Tuple of (transformed_sql, list_of_notes).  Fixed-literal
+            STRING_AGG separators convert to a valid MySQL
+            ``GROUP_CONCAT(... SEPARATOR '...')``.  When a separator is
+            a dynamic expression the rewriter fails closed: the original
+            call is left untouched, the marker is stripped from the
+            returned SQL, and ``DYNAMIC_SEPARATOR_FAIL_NOTE`` is appended
+            to the notes — callers must treat that note as "conversion
+            did not complete for this construct" and must not report
+            the overall conversion as successful.
         """
         result = sql
         notes = []
+        source_lower = source.lower()
+        fail_closed_dynamic_separator = False
 
         for rule in self.rules:
             if rule.matches_dialects(source, target):
-                new_result, applied = rule.apply(result)
+                new_result, applied = rule.apply(result, source_lower)
                 if applied:
-                    result = new_result
+                    cleaned, marker_was_present = strip_dynamic_separator_marker(new_result)
+                    if marker_was_present:
+                        fail_closed_dynamic_separator = True
+                        result = cleaned
+                    else:
+                        result = cleaned
                     notes.append(rule.note)
+
+        if fail_closed_dynamic_separator:
+            notes.append(DYNAMIC_SEPARATOR_FAIL_NOTE)
 
         return result, notes
 
