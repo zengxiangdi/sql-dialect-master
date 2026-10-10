@@ -131,7 +131,20 @@ _RULE_CALLABLE_FIELDS = ("structured_replacer", "full_sql_rewriter")
 #   target_constructs  — must appear in the FINAL SQL; an empty tuple
 #                        marks a source-construct advisory (no
 #                        conversion claimed, source evidence only)
-# Notes not matched by any marker are advisories and pass through.
+#
+# Classification rule (B2-3a): a static note is a conversion-result
+# claim (Class B, evidence-gated) when its copy explicitly states the
+# conversion happened — "… transformation" or "… converted to …" — or
+# when a prior audit batch (B2-3) explicitly gated that family
+# (LISTAGG/ARRAY_JOIN, CONNECT BY, LATERAL VIEW).  Bare "X → Y" notes
+# without completion wording describe a generic source→target mapping
+# (dialect-pair information) and remain Class A advisories; that choice
+# is deliberate and documented here, and is locked in by
+# TestB23A_T1_StaticClaimClassificationComplete — any NEW note with
+# completion wording that is not listed below fails that test.
+#
+# Marker order matters for nested substrings: put the more specific
+# marker first ("converted to JSON/VARRAY" before "converted to JSON").
 _CONVERSION_NOTE_EVIDENCE = (
     ("LISTAGG → ARRAY_JOIN", ("LISTAGG",), ("ARRAY_JOIN",)),
     ("ARRAY_AGG → LISTAGG", ("ARRAY_AGG",), ("LISTAGG",)),
@@ -143,6 +156,16 @@ _CONVERSION_NOTE_EVIDENCE = (
     ("FLATTEN → LATERAL VIEW EXPLODE", ("FLATTEN",), ("LATERAL VIEW",)),
     ("CROSS/OUTER APPLY → LATERAL VIEW", ("APPLY",), ("LATERAL VIEW",)),
     ("LATERAL VIEW EXPLODE may need manual adjustment", ("LATERAL VIEW",), ()),
+    # B2-3a: remaining explicit conversion claims ("transformation" /
+    # "converted to" wording) from the static table.
+    ("GROUP_CONCAT → STRING_AGG transformation", ("GROUP_CONCAT",), ("STRING_AGG",)),
+    ("IFNULL → COALESCE transformation", ("IFNULL",), ("COALESCE",)),
+    ("STRING_AGG → GROUP_CONCAT transformation", ("STRING_AGG",), ("GROUP_CONCAT",)),
+    ("ARRAY types → JSON transformation", ("ARRAY",), ("JSON",)),
+    ("TOP → LIMIT transformation", ("TOP",), ("LIMIT",)),
+    ("GETDATE() → NOW() transformation", ("GETDATE",), ("NOW()",)),
+    ("Hive ARRAY/MAP types converted to JSON/VARRAY", ("ARRAY", "MAP"), ("JSON", "VARRAY")),
+    ("Hive ARRAY/MAP types converted to JSON", ("ARRAY", "MAP"), ("JSON",)),
 )
 
 

@@ -269,3 +269,235 @@ class TestT5SourceAdvisoryNotesSurvive:
             "PIVOT/UNPIVOT syntax varies" in note
             for note in result.compatibility_notes
         ), result.compatibility_notes
+
+
+# ── B2-3a T1 — classification completeness ───────────────────────────────────
+
+class TestB23A_T1_StaticClaimClassificationComplete:
+    """Every static note that EXPLICITLY claims a conversion happened
+    (wording: "transformation" / "converted to") must have a Class B
+    evidence rule.  Unmatched explicit claims silently passing through
+    is exactly the defect this test guards against."""
+
+    def test_every_explicit_conversion_claim_has_evidence_rule(self):
+        from backend.core.config import COMPATIBILITY_NOTES
+        from backend.core.transpiler import _CONVERSION_NOTE_EVIDENCE
+
+        markers = [marker.upper() for marker, _, _ in _CONVERSION_NOTE_EVIDENCE]
+        unclassified = []
+        for (source, target), notes in COMPATIBILITY_NOTES.items():
+            for note in notes:
+                upper = note.upper()
+                explicit_claim = (
+                    "TRANSFORMATION" in upper or "CONVERTED TO" in upper
+                )
+                if explicit_claim and not any(m in upper for m in markers):
+                    unclassified.append(f"({source}->{target}) {note!r}")
+        assert not unclassified, (
+            f"unclassified explicit conversion claims: {unclassified}"
+        )
+
+
+# ── B2-3a T2 — GROUP_CONCAT → STRING_AGG ─────────────────────────────────────
+
+class TestB23A_T2_GroupConcatToStringAgg:
+    def test_claim_present_when_conversion_happens(self, transpiler):
+        result = transpiler.transpile(
+            "SELECT GROUP_CONCAT(name SEPARATOR ',') FROM users",
+            "mysql", "postgres",
+        )
+        assert result.success is True, result.error
+        assert "STRING_AGG" in result.target_sql.upper(), result.target_sql
+        assert any(
+            "GROUP_CONCAT" in n and "STRING_AGG" in n
+            for n in result.compatibility_notes
+        ), result.compatibility_notes
+
+    def test_claim_suppressed_when_final_keeps_group_concat(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "mysql", "postgres",
+            source_sql="SELECT GROUP_CONCAT(name) FROM users",
+            final_sql="SELECT GROUP_CONCAT(name) FROM users",
+        )
+        assert not any(
+            "GROUP_CONCAT" in n and "STRING_AGG" in n for n in notes
+        ), notes
+
+    def test_no_claim_without_source_group_concat(self, transpiler):
+        result = transpiler.transpile("SELECT 1", "mysql", "postgres")
+        assert result.success is True, result.error
+        assert not any(
+            "GROUP_CONCAT" in n for n in result.compatibility_notes
+        ), result.compatibility_notes
+
+
+# ── B2-3a T3 — IFNULL → COALESCE ──────────────────────────────────────────────
+
+class TestB23A_T3_IfnullToCoalesce:
+    def test_claim_present_when_conversion_happens(self, transpiler):
+        result = transpiler.transpile(
+            "SELECT IFNULL(a, 0) FROM t", "mysql", "postgres"
+        )
+        assert result.success is True, result.error
+        assert "COALESCE" in result.target_sql.upper(), result.target_sql
+        assert any(
+            "IFNULL" in n and "COALESCE" in n
+            for n in result.compatibility_notes
+        ), result.compatibility_notes
+
+    def test_claim_suppressed_when_final_keeps_ifnull(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "mysql", "postgres",
+            source_sql="SELECT IFNULL(a, 0) FROM t",
+            final_sql="SELECT IFNULL(a, 0) FROM t",
+        )
+        assert not any(
+            "IFNULL" in n and "COALESCE" in n for n in notes
+        ), notes
+
+    def test_no_claim_when_source_lacks_ifnull_even_with_coalesce_target(
+        self, transpiler
+    ):
+        """COALESCE in the final SQL alone must not trigger the IFNULL
+        claim — the source construct is required evidence too."""
+        notes = transpiler._get_compatibility_notes(
+            "mysql", "postgres",
+            source_sql="SELECT COALESCE(a, 0) FROM t",
+            final_sql="SELECT COALESCE(a, 0) FROM t",
+        )
+        assert not any("IFNULL" in n for n in notes), notes
+
+
+# ── B2-3a T4 — remaining transformation claims ───────────────────────────────
+
+class TestB23A_T4_RemainingTransformationClaims:
+    def test_string_agg_group_concat_claim_present(self, transpiler):
+        result = transpiler.transpile(
+            "SELECT STRING_AGG(name, ',') FROM users", "postgres", "mysql"
+        )
+        assert result.success is True, result.error
+        assert "GROUP_CONCAT" in result.target_sql.upper(), result.target_sql
+        assert any(
+            "STRING_AGG" in n and "GROUP_CONCAT" in n
+            for n in result.compatibility_notes
+        ), result.compatibility_notes
+
+    def test_string_agg_claim_suppressed_without_target_evidence(
+        self, transpiler
+    ):
+        notes = transpiler._get_compatibility_notes(
+            "postgres", "mysql",
+            source_sql="SELECT STRING_AGG(name, ',') FROM users",
+            final_sql="SELECT STRING_AGG(name, ',') FROM users",
+        )
+        assert not any("GROUP_CONCAT" in n for n in notes), notes
+
+    def test_top_limit_claim_present(self, transpiler):
+        result = transpiler.transpile(
+            "SELECT TOP 5 * FROM t", "tsql", "mysql"
+        )
+        assert result.success is True, result.error
+        assert "LIMIT" in result.target_sql.upper(), result.target_sql
+        assert any(
+            "TOP" in n and "LIMIT" in n
+            for n in result.compatibility_notes
+        ), result.compatibility_notes
+
+    def test_top_limit_claim_suppressed_without_target_evidence(
+        self, transpiler
+    ):
+        notes = transpiler._get_compatibility_notes(
+            "tsql", "mysql",
+            source_sql="SELECT TOP 5 * FROM t",
+            final_sql="SELECT TOP 5 * FROM t",
+        )
+        assert not any("TOP" in n and "LIMIT" in n for n in notes), notes
+
+    def test_getdate_now_claim_suppressed_when_engine_produces_timestamp(
+        self, transpiler
+    ):
+        """The engine really converts GETDATE() to CURRENT_TIMESTAMP(),
+        not NOW() (sqlglot consumes GETDATE before the NOW rule fires).
+        The claim must fail closed against the actual output."""
+        result = transpiler.transpile(
+            "SELECT GETDATE() FROM t", "tsql", "mysql"
+        )
+        assert result.success is True, result.error
+        assert "NOW()" not in result.target_sql.upper(), result.target_sql
+        assert not any(
+            "GETDATE" in n and "NOW()" in n
+            for n in result.compatibility_notes
+        ), result.compatibility_notes
+
+    def test_getdate_now_claim_present_with_target_evidence(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "tsql", "mysql",
+            source_sql="SELECT GETDATE() FROM t",
+            final_sql="SELECT NOW() FROM t",
+        )
+        assert any(
+            "GETDATE" in n and "NOW()" in n for n in notes
+        ), notes
+
+    def test_no_claims_without_any_source_constructs(self, transpiler):
+        result = transpiler.transpile("SELECT 1", "tsql", "mysql")
+        assert result.success is True, result.error
+        for forbidden in ("STRING_AGG", "TOP", "GETDATE"):
+            assert not any(
+                forbidden in n for n in result.compatibility_notes
+            ), (forbidden, result.compatibility_notes)
+
+    def test_hive_array_map_converted_to_json_claim(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "hive", "mysql",
+            source_sql="CREATE TABLE t (tags ARRAY<STRING>)",
+            final_sql="CREATE TABLE t (tags JSON)",
+        )
+        assert any(
+            "converted to JSON" in n for n in notes
+        ), notes
+
+        notes_without = transpiler._get_compatibility_notes(
+            "hive", "mysql",
+            source_sql="SELECT 1",
+            final_sql="SELECT 1",
+        )
+        assert not any(
+            "converted to JSON" in n for n in notes_without
+        ), notes_without
+
+
+# ── B2-3a T5 — B2-3 behaviors must not regress ───────────────────────────────
+
+class TestB23A_T5_B23BehaviorsUnchanged:
+    def test_limit_advisory_survives(self, transpiler):
+        result = transpiler.transpile(
+            "SELECT * FROM t LIMIT 5", "postgres", "oracle"
+        )
+        assert result.success is True, result.error
+        assert any(
+            "Oracle uses FETCH FIRST" in n
+            for n in result.compatibility_notes
+        ), result.compatibility_notes
+
+    def test_lateral_view_advisory_and_no_false_claim(self, transpiler):
+        result = transpiler.transpile(LATERAL_VIEW_SQL, "hive", "mysql")
+        assert result.success is True, result.error
+        assert any(
+            "may need manual adjustment" in n
+            for n in result.compatibility_notes
+        ), result.compatibility_notes
+        assert not any(
+            "converted to UNNEST/JSON_TABLE" in n
+            for n in result.compatibility_notes
+        ), result.compatibility_notes
+
+    def test_source_advisories_still_source_based(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "mysql", "postgres",
+            source_sql="CREATE TABLE x (id INT AUTO_INCREMENT PRIMARY KEY)",
+            final_sql="CREATE TABLE x (id SERIAL PRIMARY KEY)",
+        )
+        assert any(
+            "AUTO_INCREMENT" in n and "varies" in n for n in notes
+        ), notes
