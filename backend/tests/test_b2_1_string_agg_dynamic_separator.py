@@ -165,23 +165,40 @@ class TestLiteralFidelity:
     """Double-quoted and escaped-quote arguments must be interpreted per
     source dialect with escape/content semantics preserved.
 
-    In PostgreSQL/Oracle double quotes mark IDENTIFIERS, not string
-    literals — so a double-quoted separator in Postgres is a dynamic
-    (identifier-based) expression and must fail closed.  In T-SQL double
-    quotes mark string literals, so a double-quoted separator in T-SQL
-    is a valid fixed literal.
+    - PostgreSQL / Oracle / Snowflake / Redshift: double quotes mark
+      IDENTIFIERS unambiguously (ANSI SQL); a double-quoted separator
+      is a dynamic (identifier-based) expression and must fail closed.
+    - T-SQL: the meaning of double quotes depends on the
+      QUOTED_IDENTIFIER session setting (ON = identifier, OFF = string
+      literal).  The transpiler carries no QUOTED_IDENTIFIER input, so
+      without an explicit session setting the only safe interpretation
+      is to treat a double-quoted argument as an unsupported dynamic
+      expression and fail closed — silently converting a source
+      identifier to a target string constant would be wrong under the
+      default QUOTED_IDENTIFIER ON setting.
+      ``QUOTED_IDENTIFIER OFF`` double-quote literals are not yet
+      supported as a separate input configuration.
+    - MySQL / MariaDB: double quotes mark string literals by default
+      (ANSI_QUOTES OFF); a double-quoted separator is unambiguously a
+      string literal.
     """
 
     @pytest.mark.parametrize(
         "sql,source,expect_fail_closed",
         [
+            # PostgreSQL / Oracle: identifier → fail closed
             ('SELECT STRING_AGG(name, "separator_col") FROM t', "postgres", True),
             ('SELECT STRING_AGG(name, "foo") FROM t', "postgres", True),
-            ('SELECT STRING_AGG(name, "foo") FROM t', "tsql", False),
+            # T-SQL: ambiguous without QUOTED_IDENTIFIER session state
+            # → conservative fail closed (B2-1d)
+            ('SELECT STRING_AGG(name, "foo") FROM t', "tsql", True),
+            ('SELECT STRING_AGG(name, "a""b") FROM t', "tsql", True),
+            # MySQL: double quotes are string literals by default → succeeds
+            ('SELECT STRING_AGG(name, "foo") FROM t', "mysql", False),
         ],
     )
     def test_double_quote_interpretation(self, sql, source, expect_fail_closed):
-        result, notes = rule_engine.apply_rules(sql, source, "mysql")
+        result, notes = rule_engine.apply_rules(sql, source, "mysql" if source != "mysql" else "postgres")
         is_fail_closed = DYNAMIC_SEPARATOR_FAIL_NOTE in notes
         assert is_fail_closed == expect_fail_closed, (
             f"{source} double-quoted separator: expected "
@@ -204,16 +221,102 @@ class TestLiteralFidelity:
         # dialect, but the content must survive.
         assert sep.this == "a'b", f"literal content mangled: {sep.this!r}"
 
-    def test_escaped_double_quote_literal_preserved_tsql(self):
+
+class TestB2_1D_TSQLDoubleQuoteConservative:
+    """B2-1d: T-SQL double-quoted separators fail closed because the
+    transpiler has no QUOTED_IDENTIFIER input.  A double-quoted
+    argument in T-SQL may be an identifier (QUOTED_IDENTIFIER ON, the
+    default) or a string literal (QUOTED_IDENTIFIER OFF); without the
+    session setting the only safe choice is to not convert.
+
+    Fixed single-quote literals still convert correctly for T-SQL.
+    """
+
+    def test_tsql_double_quoted_foo_fails_closed(self):
+        result, notes = rule_engine.apply_rules(
+            'SELECT STRING_AGG(name, "foo") FROM t', "tsql", "mysql"
+        )
+        assert DYNAMIC_SEPARATOR_FAIL_NOTE in notes, notes
+        # The original SQL is preserved verbatim (no sentinel leak).
+        assert result == 'SELECT STRING_AGG(name, "foo") FROM t', result
+
+    def test_tsql_double_quoted_escaped_fails_closed(self):
         result, notes = rule_engine.apply_rules(
             'SELECT STRING_AGG(name, "a""b") FROM t', "tsql", "mysql"
         )
-        assert DYNAMIC_SEPARATOR_FAIL_NOTE not in notes
+        assert DYNAMIC_SEPARATOR_FAIL_NOTE in notes, notes
+        assert result == 'SELECT STRING_AGG(name, "a""b") FROM t', result
+
+    def test_tsql_single_quoted_literal_still_converts(self):
+        result, notes = rule_engine.apply_rules(
+            "SELECT STRING_AGG(name, ',') FROM t", "tsql", "mysql"
+        )
+        assert DYNAMIC_SEPARATOR_FAIL_NOTE not in notes, notes
         tree = sqlglot.parse_one(result, read="mysql")
-        gc = tree.find(exp.GroupConcat)
-        sep = gc.args.get("separator")
+        sep = tree.find(exp.GroupConcat).args.get("separator")
         assert isinstance(sep, exp.Literal), result
-        assert sep.this == 'a"b', f"literal content mangled: {sep.this!r}"
+
+    def test_tsql_transpile_path_double_quote_fails_closed(self):
+        r = SQLTranspiler().transpile(
+            'SELECT STRING_AGG(name, "foo") FROM t', "tsql", "mysql"
+        )
+        assert r.success is False, (
+            "T-SQL double-quoted separator must fail closed in transpile path "
+            f"too, got success={r.success} sql={r.target_sql!r}"
+        )
+
+
+class TestB2_1D_TransformationNotesOnFailClosed:
+    """B2-1d: when a dynamic separator triggers fail-closed, the
+    transformation notes must not also claim the rule succeeded.
+
+    A contradictory notes list ("Converted STRING_AGG to GROUP_CONCAT"
+    + "fail-closed") would mislead callers about whether the
+    conversion actually completed.
+    """
+
+    def test_dynamic_separator_notes_contain_no_success_claim(self):
+        _, notes = rule_engine.apply_rules(
+            "SELECT STRING_AGG(name, CONCAT(',', UPPER(x))) FROM t",
+            "postgres", "mysql",
+        )
+        # The fail-closed note must be present…
+        assert DYNAMIC_SEPARATOR_FAIL_NOTE in notes, notes
+        # …and no plain success note may be present for the same rule.
+        success_notes = [
+            n for n in notes
+            if n.startswith("Converted STRING_AGG") and n != DYNAMIC_SEPARATOR_FAIL_NOTE
+        ]
+        assert not success_notes, (
+            f"contradictory notes: success claim present alongside fail-closed: {notes}"
+        )
+
+    def test_fixed_literal_notes_contain_success_claim(self):
+        _, notes = rule_engine.apply_rules(
+            "SELECT STRING_AGG(name, ';') FROM t", "postgres", "mysql"
+        )
+        assert DYNAMIC_SEPARATOR_FAIL_NOTE not in notes
+        assert any(n.startswith("Converted STRING_AGG") for n in notes), (
+            f"fixed-literal conversion must carry its success note: {notes}"
+        )
+
+    def test_transpile_fail_closed_result_has_no_contradictory_notes(self):
+        r = SQLTranspiler().transpile(
+            "SELECT STRING_AGG(name, CONCAT(',', UPPER(x))) FROM t",
+            "postgres", "mysql",
+        )
+        assert r.success is False
+        # The error must carry the fail-closed note; compatibility notes
+        # must not also claim a successful STRING_AGG → GROUP_CONCAT
+        # conversion for this input.
+        assert "B2-1b" in (r.error or ""), r.error
+        contradictory = [
+            n for n in (r.compatibility_notes or [])
+            if "STRING_AGG" in n and "GROUP_CONCAT" in n
+        ]
+        assert not contradictory, (
+            f"transpile failure carries contradictory notes: {contradictory}"
+        )
 
 
 class TestB2_1C_OriginalTextPreservedOnFailClosed:

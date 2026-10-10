@@ -80,9 +80,11 @@ def _is_plain_string_literal(text: str, source_dialect: str = "") -> bool:
         return False
     quote = text[0]
     if quote == "'":
-        # A plain literal has no UNESCAPED quote inside; a doubled
-        # ``''`` pair is the source dialect's escape for a literal quote
-        # and does not end the literal.
+        # Single quotes mark string literals in every source dialect
+        # (PostgreSQL, T-SQL, MySQL, Oracle, …).  A plain literal has
+        # no UNESCAPED quote inside; a doubled ``''`` pair is the
+        # source dialect's escape for a literal quote and does not end
+        # the literal.
         inner = text[1:-1]
         i = 0
         while i < len(inner):
@@ -94,10 +96,26 @@ def _is_plain_string_literal(text: str, source_dialect: str = "") -> bool:
                 continue
             return False  # unescaped closing quote too early
         return True
-    if quote == '"' and source_dialect in ("postgres", "oracle", "snowflake", "redshift"):
-        # Double-quoted identifier: not a string literal in these dialects.
-        return False
+    # Double-quote interpretation is ambiguous without session state.
+    # - PostgreSQL / Oracle / Snowflake / Redshift: double quotes mark
+    #   identifiers (ANSI SQL), never string literals, unambiguously.
+    # - T-SQL: the meaning of double quotes depends on the
+    #   QUOTED_IDENTIFIER session setting.  QUOTED_IDENTIFIER ON
+    #   (the default in SQL Server and the setting used by most
+    #   clients) makes "foo" an identifier, not a string literal.
+    #   The transpiler has no QUOTED_IDENTIFIER input; treating a
+    #   double-quoted argument as a string literal when the session
+    #   actually has QUOTED_IDENTIFIER ON would silently convert a
+    #   source identifier into a target string constant.  The safe
+    #   default is to fail closed (see B2-1d).
+    # - MySQL / MariaDB: double quotes mark string literals by default
+    #   (ANSI_QUOTES OFF is the default), so a double-quoted argument
+    #   is unambiguously a string literal in those dialects.
     if quote != '"':
+        return False
+    if source_dialect in ("postgres", "oracle", "snowflake", "redshift", "tsql"):
+        # Ambiguous or identifier-interpretation: never a plain string
+        # literal without session state.
         return False
     inner = text[1:-1]
     i = 0
@@ -838,8 +856,17 @@ class RuleEngine:
                     cleaned, sentinel_was_present = strip_dynamic_separator_sentinel(new_result)
                     if sentinel_was_present:
                         fail_closed_dynamic_separator = True
-                    result = cleaned
-                    notes.append(rule.note)
+                        # B2-1d: do NOT report the rule's success note
+                        # when the rewrite actually failed closed; the
+                        # success note would contradict the fail-closed
+                        # result.  The DYNAMIC_SEPARATOR_FAIL_NOTE
+                        # (appended below) is the only note for this
+                        # rule in that case.
+                    else:
+                        result = cleaned
+                        notes.append(rule.note)
+                    if sentinel_was_present:
+                        result = cleaned
 
         if fail_closed_dynamic_separator:
             notes.append(DYNAMIC_SEPARATOR_FAIL_NOTE)

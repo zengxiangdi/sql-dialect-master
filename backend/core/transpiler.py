@@ -262,6 +262,20 @@ class SQLTranspiler:
                 warnings = security_warnings + self._generate_warnings(sql, source, target)
 
             target_validation_state = "target_valid"
+
+            # B2-1d: when the dynamic-separator fail-closed path fires,
+            # strip the static "STRING_AGG → GROUP_CONCAT transformation"
+            # compatibility note so a failed result does not carry a
+            # note claiming the conversion succeeded.
+            def _strip_contradictory_agg_notes(notes: list) -> list:
+                return [
+                    n for n in notes
+                    if not (
+                        "STRING_AGG" in n and "GROUP_CONCAT" in n
+                        and n != DYNAMIC_SEPARATOR_FAIL_NOTE
+                    )
+                ]
+
             if DYNAMIC_SEPARATOR_FAIL_NOTE in transformations:
                 # B2-1b fail-closed: the structured rewriter left an
                 # unconvertible dynamic GROUP_CONCAT SEPARATOR in place
@@ -272,7 +286,8 @@ class SQLTranspiler:
                     success=False, source_sql=sql, source_dialect=source, target_dialect=target,
                     error=DYNAMIC_SEPARATOR_FAIL_NOTE,
                     error_code=ErrorCode.VALIDATION_FAILED.value,
-                    compatibility_notes=compat_notes, transformations=transformations,
+                    compatibility_notes=_strip_contradictory_agg_notes(compat_notes),
+                    transformations=transformations,
                     warnings=warnings, target_validation_state="invalid",
                 )
             # B2-1b structural guard: even when sqlglot transpiled a
@@ -293,7 +308,8 @@ class SQLTranspiler:
                 return TranspileResult(
                     success=False, source_sql=sql, source_dialect=source, target_dialect=target,
                     error=guard_note, error_code=ErrorCode.VALIDATION_FAILED.value,
-                    compatibility_notes=compat_notes, transformations=transformations,
+                    compatibility_notes=_strip_contradictory_agg_notes(compat_notes),
+                    transformations=transformations,
                     warnings=warnings, target_validation_state="invalid",
                 )
             if validate:
