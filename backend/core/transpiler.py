@@ -194,12 +194,56 @@ _FUNCTION_FORM_CONSTRUCTS = frozenset({
     "UNNEST", "FLATTEN", "GETDATE", "NOW",
 })
 
-# Identifier boundary used by every construct pattern.
-_IDENT_START = r"(?<![A-Za-z0-9_])"
-_IDENT_END = r"(?![A-Za-z0-9_])"
+# Constructs whose evidence requires TYPE context.  A bare token (a
+# column named ``json``) is not evidence of a type conversion; these
+# are verified against the parsed AST as DataType nodes (see
+# _contains_type_construct).  VARRAY is parsed by sqlglot as a
+# USERDEFINED DataType carrying ``kind == "VARRAY"``.
+_TYPE_CONSTRUCTS = frozenset({"ARRAY", "MAP", "JSON", "VARRAY"})
+
+# SQL identifier character model: Unicode word characters (letters,
+# digits, underscore — Python's ``\w``) plus ``$`` (a T-SQL / Databricks
+# identifier character).  sqlglot tokenizes ``limit$column`` and
+# ``LIMIT列`` as a single identifier, so the boundary classes must
+# include both.
+_IDENT_START = r"(?<![\w$])"
+_IDENT_END = r"(?![\w$])"
+# Clause keywords additionally must not be a qualified reference:
+# ``t.LIMIT`` / ``t.TOP`` are column references, not LIMIT/TOP clauses.
+_IDENT_OR_DOT_START = r"(?<![\w$.])"
 
 
-def _contains_construct(sql_upper: str, construct: str) -> bool:
+def _contains_type_construct(sql: str, dialect: str, construct: str) -> bool:
+    """AST evidence that ``sql`` (in ``dialect``) contains the TYPE construct.
+
+    ARRAY/MAP/JSON/VARRAY claims describe type conversions, so a
+    standalone token or an ordinary identifier/reference is not
+    evidence.  Parse with sqlglot in the given dialect and look for a
+    DataType node naming the construct:
+    * ARRAY — ``ARRAY<…>`` (Hive family), ``TEXT[]`` (Postgres),
+    * MAP — ``MAP<…>``,
+    * JSON — ``tags JSON``, ``CAST(x AS JSON)``,
+    * VARRAY — a USERDEFINED DataType with ``kind == "VARRAY"``.
+    Parse failures yield no evidence (fail closed).
+    """
+    try:
+        tree = sqlglot.parse_one(sql, read=dialect)
+    except Exception:
+        return False
+    for node in tree.walk():
+        if not isinstance(node, exp.DataType):
+            continue
+        if construct == "VARRAY":
+            if node.args.get("kind") == "VARRAY":
+                return True
+        elif getattr(node.this, "name", None) == construct:
+            return True
+    return False
+
+
+def _contains_construct(
+    masked_upper: str, sql: str, dialect: str, construct: str
+) -> bool:
     """Boundary-aware construct detection on executable-masked text.
 
     Matching semantics per construct kind (uniform for the static
@@ -211,26 +255,34 @@ def _contains_construct(sql_upper: str, construct: str) -> bool:
     * function constructs (``GROUP_CONCAT``, ``STRING_AGG``,
       ``IFNULL``, ``COALESCE``, ``LISTAGG``, ``ARRAY_JOIN``, …) require
       the call form ``NAME(`` so identifiers like
-      ``GROUP_CONCAT_backup`` never match;
-    * other single-word constructs (``LIMIT``, ``TOP``, ``ARRAY``,
-      ``JSON``, ``MAP``, ``MERGE``, ``PIVOT``, …) match as whole tokens
-      with identifier boundaries on both sides.
+      ``GROUP_CONCAT_backup`` or ``schema$LISTAGG`` never match;
+    * type constructs (``ARRAY``, ``MAP``, ``JSON``, ``VARRAY``) are
+      verified as DataType nodes in the parsed AST of the given
+      dialect, never as standalone tokens;
+    * other single-word constructs (``LIMIT``, ``TOP``, ``MERGE``,
+      ``PIVOT``, ``UNPIVOT``, ``AUTO_INCREMENT``, ``APPLY``, …) match
+      as whole tokens with identifier boundaries on both sides and
+      must not be qualified references (``t.LIMIT`` is not a LIMIT
+      clause).
 
-    ``sql_upper`` must already be the executable-masked, upper-cased
-    view produced by ``_executable_upper``.
+    ``masked_upper`` must already be the executable-masked, upper-cased
+    view produced by ``_executable_upper``; ``sql`` is the original
+    (unmasked) SQL, used for AST-based type evidence.
     """
     words = construct.split()
     if len(words) > 1:
         pattern = (
             _IDENT_START + r"\s+".join(re.escape(word) for word in words) + _IDENT_END
         )
-        return re.search(pattern, sql_upper) is not None
+        return re.search(pattern, masked_upper) is not None
     name = words[0].rstrip("()")
+    if name in _TYPE_CONSTRUCTS:
+        return _contains_type_construct(sql, dialect, name)
     if name in _FUNCTION_FORM_CONSTRUCTS or construct.endswith("()"):
         pattern = _IDENT_START + re.escape(name) + r"\s*\("
-        return re.search(pattern, sql_upper) is not None
-    pattern = _IDENT_START + re.escape(name) + _IDENT_END
-    return re.search(pattern, sql_upper) is not None
+        return re.search(pattern, masked_upper) is not None
+    pattern = _IDENT_OR_DOT_START + re.escape(name) + _IDENT_END
+    return re.search(pattern, masked_upper) is not None
 
 
 class _CallableIdentity:
@@ -896,14 +948,16 @@ class SQLTranspiler:
             for marker, source_constructs, target_constructs in _CONVERSION_NOTE_EVIDENCE:
                 if marker.upper() in upper_note:
                     if not any(
-                        _contains_construct(source_upper, c) for c in source_constructs
+                        _contains_construct(source_upper, source_sql, source, c)
+                        for c in source_constructs
                     ):
                         dropped = True
                         break
                     # An empty target tuple marks a source-construct
                     # advisory: no final-SQL evidence required.
                     if target_constructs and not any(
-                        _contains_construct(final_upper, c) for c in target_constructs
+                        _contains_construct(final_upper, final_sql, target, c)
+                        for c in target_constructs
                     ):
                         dropped = True
                         break
@@ -914,21 +968,21 @@ class SQLTranspiler:
 
         # Class A: source-construct advisories (generic, not claims of a
         # completed conversion).
-        if _contains_construct(source_upper, "LIMIT") and target == "oracle":
+        if _contains_construct(source_upper, source_sql, source, "LIMIT") and target == "oracle":
             notes.append("Oracle uses FETCH FIRST n ROWS ONLY (12c+) or ROWNUM for LIMIT")
-        if _contains_construct(source_upper, "AUTO_INCREMENT") and target != "mysql":
+        if _contains_construct(source_upper, source_sql, source, "AUTO_INCREMENT") and target != "mysql":
             notes.append("AUTO_INCREMENT syntax varies by database")
-        if _contains_construct(source_upper, "MERGE"):
+        if _contains_construct(source_upper, source_sql, source, "MERGE"):
             notes.append("MERGE syntax varies significantly between databases")
-        if _contains_construct(source_upper, "PIVOT") or _contains_construct(source_upper, "UNPIVOT"):
+        if _contains_construct(source_upper, source_sql, source, "PIVOT") or _contains_construct(source_upper, source_sql, source, "UNPIVOT"):
             notes.append("PIVOT/UNPIVOT syntax varies by database")
 
         # Class B (dynamic): conversion claims, verified by the final SQL.
-        if _contains_construct(source_upper, "LATERAL VIEW") and target not in ["hive", "spark", "databricks"]:
-            if _contains_construct(final_upper, "UNNEST") or _contains_construct(final_upper, "JSON_TABLE"):
+        if _contains_construct(source_upper, source_sql, source, "LATERAL VIEW") and target not in ["hive", "spark", "databricks"]:
+            if _contains_construct(final_upper, final_sql, target, "UNNEST") or _contains_construct(final_upper, final_sql, target, "JSON_TABLE"):
                 notes.append("LATERAL VIEW is Hive/Spark specific, converted to UNNEST/JSON_TABLE")
-        if _contains_construct(source_upper, "CONNECT BY") and target != "oracle":
-            if _contains_construct(final_upper, "WITH RECURSIVE"):
+        if _contains_construct(source_upper, source_sql, source, "CONNECT BY") and target != "oracle":
+            if _contains_construct(final_upper, final_sql, target, "WITH RECURSIVE"):
                 notes.append("CONNECT BY is Oracle specific, converted to WITH RECURSIVE")
         return notes
 

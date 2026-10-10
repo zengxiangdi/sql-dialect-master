@@ -762,3 +762,127 @@ class TestB23C_IdentifierSubstringsAreNotEvidence:
             "STRING_AGG" in n and "GROUP_CONCAT" in n
             for n in result.compatibility_notes
         ), result.compatibility_notes
+
+
+# ── B2-3d — identifier boundaries ($, Unicode, dots) and type context ───────
+
+class TestB23D_IdentifierBoundariesAndConstructSemantics:
+    """Construct evidence must respect the full SQL identifier character
+    set ($ and Unicode letters) and must not mistake qualified
+    references or ordinary identifiers for clauses / types."""
+
+    def test_dollar_identifier_not_limit_clause(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "postgres", "oracle",
+            source_sql="SELECT limit$column FROM t",
+            final_sql="SELECT limit$column FROM t",
+        )
+        assert not any(
+            "Oracle uses FETCH FIRST" in n for n in notes
+        ), notes
+
+    def test_unicode_adjacent_identifier_not_limit_clause(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "postgres", "oracle",
+            source_sql="SELECT LIMIT列 FROM t",
+            final_sql="SELECT LIMIT列 FROM t",
+        )
+        assert not any(
+            "Oracle uses FETCH FIRST" in n for n in notes
+        ), notes
+
+    def test_dollar_function_identifier_not_listagg(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "oracle", "hive",
+            source_sql="SELECT schema$LISTAGG(x) FROM t",
+            final_sql="SELECT ARRAY_JOIN(COLLECT_LIST(x), ',') FROM t",
+        )
+        assert not any("ARRAY_JOIN" in n for n in notes), notes
+
+    def test_unicode_before_function_name_not_evidence(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "postgres", "mysql",
+            source_sql="SELECT 列STRING_AGG(x) FROM t",
+            final_sql="SELECT GROUP_CONCAT(x) FROM t",
+        )
+        assert not any(
+            "STRING_AGG" in n and "GROUP_CONCAT" in n for n in notes
+        ), notes
+
+    def test_qualified_column_not_limit_clause(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "postgres", "oracle",
+            source_sql="SELECT t.limit FROM t",
+            final_sql="SELECT t.limit FROM t",
+        )
+        assert not any(
+            "Oracle uses FETCH FIRST" in n for n in notes
+        ), notes
+
+    def test_qualified_column_not_top_clause(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "tsql", "mysql",
+            source_sql="SELECT t.TOP FROM t",
+            final_sql="SELECT * FROM t LIMIT 5",
+        )
+        assert not any(
+            "TOP" in n and "LIMIT" in n for n in notes
+        ), notes
+
+    def test_qualified_column_not_merge_advisory(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "postgres", "mysql",
+            source_sql="SELECT t.merge FROM t",
+            final_sql="SELECT t.merge FROM t",
+        )
+        assert not any(
+            "MERGE syntax varies" in n for n in notes
+        ), notes
+
+    def test_qualified_refs_not_array_to_json_type_evidence(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "hive", "mysql",
+            source_sql="SELECT t.ARRAY FROM t",
+            final_sql="SELECT t.JSON FROM t",
+        )
+        assert not any("converted to JSON" in n for n in notes), notes
+
+    def test_bare_columns_not_array_to_json_type_evidence(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "hive", "mysql",
+            source_sql="SELECT array FROM t",
+            final_sql="SELECT json FROM t",
+        )
+        assert not any("converted to JSON" in n for n in notes), notes
+
+    def test_real_type_constructs_still_detected(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "hive", "mysql",
+            source_sql="CREATE TABLE t (tags ARRAY<STRING>)",
+            final_sql="CREATE TABLE t (tags JSON)",
+        )
+        assert any("converted to JSON" in n for n in notes), notes
+
+    def test_real_clause_and_function_constructs_still_detected(
+        self, transpiler
+    ):
+        result = transpiler.transpile(
+            "SELECT * FROM t LIMIT 5", "postgres", "oracle"
+        )
+        assert any(
+            "Oracle uses FETCH FIRST" in n
+            for n in result.compatibility_notes
+        ), result.compatibility_notes
+
+        result = transpiler.transpile(
+            "SELECT TOP 5 * FROM t", "tsql", "mysql"
+        )
+        assert any(
+            "TOP" in n and "LIMIT" in n
+            for n in result.compatibility_notes
+        ), result.compatibility_notes
+
+        result = transpiler.transpile(LISTAGG_SQL, "oracle", "hive")
+        assert any(
+            "ARRAY_JOIN" in n for n in result.compatibility_notes
+        ), result.compatibility_notes
