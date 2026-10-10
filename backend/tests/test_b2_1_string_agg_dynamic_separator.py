@@ -1,6 +1,6 @@
-"""B2-1 / B2-1b — STRING_AGG dynamic-separator conversion audit.
+"""B2-1 / B2-1b / B2-1c — STRING_AGG dynamic-separator conversion audit.
 
-Summary of verified behavior after B2-1 + B2-1b:
+Summary of verified behavior after B2-1 + B2-1b + B2-1c:
 
 - A **fixed** string-literal separator converts to a valid, executable
   MySQL ``GROUP_CONCAT(... SEPARATOR '<literal>')`` via both the
@@ -21,6 +21,11 @@ Summary of verified behavior after B2-1 + B2-1b:
     non-Literal ``GROUP_CONCAT`` SEPARATOR (a structural guard, since
     sqlglot's MySQL dialect accepts dynamic SEPARATOR values that real
     MySQL does not).
+- **B2-1c** proves that fail-closed behavior does not alter the
+  original SQL text: the internal sentinel token used to flag dynamic
+  separators is stripped in place before any SQL is returned, so
+  multi-line statements, multiple dynamic calls in one statement, and
+  trailing text on the call's own line are all preserved exactly.
 - **No real MySQL engine is available in this environment.**  All
   "parse-check" results here are sqlglot AST structural checks, which
   are explicitly *not* equivalent to execution on a real MySQL server.
@@ -209,6 +214,89 @@ class TestLiteralFidelity:
         sep = gc.args.get("separator")
         assert isinstance(sep, exp.Literal), result
         assert sep.this == 'a"b', f"literal content mangled: {sep.this!r}"
+
+
+class TestB2_1C_OriginalTextPreservedOnFailClosed:
+    """B2-1c: when a dynamic separator triggers fail-closed, the SQL text
+    returned by the rule engine must be byte-identical to the input
+    (no text lost, no text added, no line-boundary dependence).
+
+    The old B2-1b implementation appended a marker *comment line* after
+    the call and then deleted the entire line containing it — which
+    consumed any trailing SQL text on the same line and, for multi-line
+    statements, swallowed content after the marker's own line.  The
+    B2-1c sentinel-token mechanism fixes this: the token is an exact
+    substring stripped in place, with no lexical side effects.
+
+    These tests assert on the raw returned string, not on sqlglot AST
+    shape, so they specifically guard against text truncation.
+    """
+
+    # (input_sql, source_dialect)
+    PRESERVATION_CASES = [
+        # Single-line, trailing text after the call on the same line
+        (
+            "SELECT STRING_AGG(name, CONCAT(',', UPPER(x))) AS s, id FROM t WHERE id > 10",
+            "postgres",
+        ),
+        # Multi-line statement with WHERE and GROUP BY
+        (
+            "SELECT STRING_AGG(name, CASE WHEN z THEN ',' ELSE ';' END)\n"
+            "FROM t\nWHERE active = 1\nGROUP BY category",
+            "postgres",
+        ),
+        # Two aggregate expressions, only the first is dynamic
+        (
+            "SELECT STRING_AGG(a, CONCAT(',', x)), COUNT(*)\nFROM t\nWHERE id > 10",
+            "postgres",
+        ),
+        # Two dynamic STRING_AGG calls in one statement
+        (
+            "SELECT STRING_AGG(name, CONCAT(',', UPPER(x))), "
+            "STRING_AGG(val, CASE WHEN z THEN ',' ELSE ';' END) FROM t",
+            "postgres",
+        ),
+        # T-SQL with pipe operator (also dynamic, also multi-line)
+        (
+            "SELECT STRING_AGG(name, ',' + UPPER(x)) AS s, id\nFROM t\nWHERE id > 10",
+            "tsql",
+        ),
+    ]
+
+    @pytest.mark.parametrize("sql,source", PRESERVATION_CASES)
+    def test_returned_sql_is_byte_identical_to_input(self, sql, source):
+        result, notes = rule_engine.apply_rules(sql, source, "mysql")
+        # The returned SQL must equal the input exactly — no text lost,
+        # no text added, no whitespace normalization.
+        assert result == sql, (
+            f"fail-closed SQL altered the original text.\n"
+            f"input : {sql!r}\n"
+            f"output: {result!r}"
+        )
+        # And the fail-closed note must still be present.
+        assert DYNAMIC_SEPARATOR_FAIL_NOTE in notes, (
+            f"original text preserved but fail-closed note missing: {notes}"
+        )
+
+    def test_no_internal_sentinel_leaks_to_caller(self):
+        """The internal sentinel token must never appear in returned SQL."""
+        from backend.core.rules import _DYNAMIC_SEPARATOR_SENTINEL
+        sql = "SELECT STRING_AGG(name, CONCAT(',', UPPER(x))) FROM t"
+        result, _ = rule_engine.apply_rules(sql, "postgres", "mysql")
+        assert _DYNAMIC_SEPARATOR_SENTINEL not in result, (
+            f"internal sentinel token leaked to caller: {result!r}"
+        )
+
+    def test_transpile_path_also_preserves_original_on_fail_closed(self):
+        """SQLTranspiler.transpile's error message must not embed the
+        sentinel token either."""
+        from backend.core.rules import _DYNAMIC_SEPARATOR_SENTINEL
+        sql = "SELECT STRING_AGG(name, CONCAT(',', UPPER(x))) AS s, id FROM t WHERE id > 10"
+        result = SQLTranspiler().transpile(sql, "postgres", "mysql")
+        assert result.success is False, "dynamic separator must fail closed"
+        assert _DYNAMIC_SEPARATOR_SENTINEL not in (result.error or ""), (
+            f"sentinel leaked into error message: {result.error!r}"
+        )
 
 
 if __name__ == "__main__":

@@ -34,21 +34,35 @@ DYNAMIC_SEPARATOR_FAIL_NOTE = (
     "is not executable on the target and is reported as a failure."
 )
 
+# Internal sentinel token (B2-1c) appended to the rewriter's output for
+# every dynamic-separator STRING_AGG call.  It is a 32-character
+# high-entropy marker containing a NUL byte that cannot appear in valid
+# SQL; it is NOT a SQL comment and carries no newline dependency, so
+# surrounding text on the same line or subsequent lines is never
+# consumed.  The rule engine strips every occurrence before returning
+# SQL to any caller.
+_DYNAMIC_SEPARATOR_SENTINEL = "\x00@@B2_1C_DYN_SEP@@\x00"
+
+
+def strip_dynamic_separator_sentinel(sql: str) -> Tuple[str, bool]:
+    """Remove every embedded dynamic-separator sentinel token from ``sql``.
+
+    Returns ``(cleaned_sql, was_present)``.  The token is an exact
+    substring removed in place; no line-boundary or regex assumption is
+    made, so multi-line SQL, multiple dynamic calls in one statement,
+    and trailing text on the call's own line are all preserved intact.
+    """
+    was_present = _DYNAMIC_SEPARATOR_SENTINEL in sql
+    cleaned = sql.replace(_DYNAMIC_SEPARATOR_SENTINEL, "")
+    return cleaned, was_present
+
 
 def strip_dynamic_separator_marker(sql: str) -> Tuple[str, bool]:
-    """Remove every dynamic-separator marker line from ``sql``.
+    """Deprecated B2-1b alias; delegates to ``strip_dynamic_separator_sentinel``."""
+    return strip_dynamic_separator_sentinel(sql)
 
-    Returns ``(cleaned_sql, marker_was_present)``.  Marker lines are
-    comment lines carrying the B2-1b dynamic-separator sentinel; they
-    are produced by ``_replace_string_agg_to_group_concat`` and never
-    by user SQL, so removing them is safe and total.
-    """
-    cleaned_lines = [
-        line for line in sql.splitlines() if "B2-1b: dynamic SEPARATOR" not in line
-    ]
-    was_present = len(cleaned_lines) != len(sql.splitlines())
-    cleaned = "\n".join(cleaned_lines).rstrip()
-    return cleaned, was_present
+
+
 
 
 def _is_plain_string_literal(text: str, source_dialect: str = "") -> bool:
@@ -143,10 +157,12 @@ def _replace_string_agg_to_group_concat(
         inner = separator[1:-1]
         mysql_literal = _requote_for_mysql(inner, separator[0])
         return f"GROUP_CONCAT({expression} SEPARATOR '{mysql_literal}')"
-    # Dynamic separator: not expressible in MySQL — emit the original
-    # call untouched plus a marker line the caller strips and converts
-    # into an explicit fail-closed note (see strip_dynamic_separator_marker).
-    return f"{original}\n-- B2-1b: dynamic SEPARATOR is not executable MySQL"
+    # Dynamic separator: fail closed (B2-1b / B2-1c).  The original
+    # call is preserved verbatim; the sentinel token is appended
+    # directly after it.  The rule engine strips the token before
+    # returning SQL to any caller and records DYNAMIC_SEPARATOR_FAIL_NOTE
+    # in the notes.
+    return original + _DYNAMIC_SEPARATOR_SENTINEL
 
 
 def _replace_group_concat_to_string_agg(args: str, original: str) -> str:
@@ -819,12 +835,10 @@ class RuleEngine:
             if rule.matches_dialects(source, target):
                 new_result, applied = rule.apply(result, source_lower)
                 if applied:
-                    cleaned, marker_was_present = strip_dynamic_separator_marker(new_result)
-                    if marker_was_present:
+                    cleaned, sentinel_was_present = strip_dynamic_separator_sentinel(new_result)
+                    if sentinel_was_present:
                         fail_closed_dynamic_separator = True
-                        result = cleaned
-                    else:
-                        result = cleaned
+                    result = cleaned
                     notes.append(rule.note)
 
         if fail_closed_dynamic_separator:
