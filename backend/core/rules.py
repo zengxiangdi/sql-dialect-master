@@ -17,15 +17,40 @@ from .p1_sql_scanner import executable_segments, mask_non_executable, split_top_
 logger = logging.getLogger(__name__)
 
 
+def _is_plain_string_literal(text: str) -> bool:
+    """True when text is a single, unescaped single- or double-quoted literal.
+
+    Used to decide whether a STRING_AGG separator argument is a fixed
+    literal (quote-strip it) or a dynamic expression (embed it verbatim).
+    """
+    text = text.strip()
+    if len(text) < 2:
+        return False
+    quote = text[0]
+    if quote not in ("'", '"'):
+        return False
+    if text[-1] != quote:
+        return False
+    return text[1:-1].count(quote) == 0
+
+
 def _replace_string_agg_to_group_concat(args: str, original: str) -> str:
     """Convert STRING_AGG to GROUP_CONCAT preserving nested expressions."""
     values = split_top_level_args(args)
     if len(values) != 2 or not all(values):
         return original
     expression, separator = values
-    # Strip surrounding quotes from separator if present
-    sep_stripped = separator.strip("'\"")
-    return f"GROUP_CONCAT({expression} SEPARATOR '{sep_stripped}')"
+    if _is_plain_string_literal(separator):
+        # Fixed literal separator: strip its quotes and re-quote for
+        # GROUP_CONCAT's SEPARATOR clause.
+        sep_stripped = separator.strip("'\"")
+        return f"GROUP_CONCAT({expression} SEPARATOR '{sep_stripped}')"
+    # Dynamic separator expression (function call, CASE, ...): emit it
+    # verbatim as GROUP_CONCAT's SEPARATOR argument.  MySQL's SEPARATOR
+    # clause accepts a dynamic expression, so keep it an expression
+    # (wrapping it in single quotes would turn it into a malformed
+    # string literal that the target dialect cannot parse).
+    return f"GROUP_CONCAT({expression} SEPARATOR {separator})"
 
 
 def _replace_group_concat_to_string_agg(args: str, original: str) -> str:
