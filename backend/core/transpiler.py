@@ -2,6 +2,7 @@
 """SQL Transpiler - Convert SQL between different database dialects."""
 import asyncio
 import hashlib
+import json
 import logging
 import re
 from dataclasses import dataclass, field
@@ -95,6 +96,71 @@ class TranspileResult:
             "warnings": self.warnings,
             "target_validation_state": self.target_validation_state,
         }
+
+
+# The single field list that determines a rule's effective conversion
+# behavior — and therefore the transpiler cache identity.  BOTH
+# ``_rule_cache_state`` and ``_build_rule_cache_payload`` derive from
+# this list so the two can never drift.  If a new ``TransformRule``
+# field changes what a rule does, it must be added here.
+_RULE_SIGNATURE_FIELDS = (
+    "name",
+    "source",
+    "target",
+    "pattern",
+    "replacement",
+    "note",
+    "category",
+    "priority",
+    "enabled",
+    "function_name",
+    "structured_replacement",
+    "structured_replacer",
+    "full_sql_rewriter",
+)
+
+# Signature fields that hold callables; they serialize through
+# ``_callable_cache_identity`` in the payload.
+_RULE_CALLABLE_FIELDS = ("structured_replacer", "full_sql_rewriter")
+
+
+def _rule_signature_value(rule, field: str):
+    """Return the cache-signature value for one ``TransformRule`` field.
+
+    ``category`` normalizes to its string value; every other field is
+    returned as-is.  Callable fields come back as the callable object
+    itself, so tuple comparison in ``_rule_cache_state`` detects
+    callable-object replacement.
+    """
+    if field == "category":
+        return rule.category.value
+    return getattr(rule, field)
+
+
+def _callable_cache_identity(fn) -> Optional[str]:
+    """Process-local payload identity for a callable signature field.
+
+    The transpiler cache is an in-memory, per-instance TTL cache (see
+    ``SQLTranspiler.__init__``); it is never persisted across processes.
+    Within that scope the callable object's ``id()`` is a stable,
+    unique identity for the process lifetime of the rule callables and
+    detects callable *replacement*.  The ``module.qualname`` prefix is
+    informational only — the operative identity is ``id()``, so two
+    distinct callables that happen to share a qualname still produce
+    different identities.
+
+    Limitation (deliberate): this identity does NOT detect changes to
+    mutable closure state *inside* a callable.  The current rule
+    contract's callables are pure module-level functions without
+    closure state; if that contract ever allows mutable state, an
+    explicit auditable version field must be introduced — object
+    identity must not be relied on for that.
+    """
+    if fn is None:
+        return None
+    module = getattr(fn, "__module__", "?")
+    qualname = getattr(fn, "__qualname__", repr(fn))
+    return f"{module}.{qualname}#id:{id(fn)}"
 
 
 class SQLTranspiler:
@@ -595,31 +661,38 @@ class SQLTranspiler:
             ast.set("where", None)
 
     def _rule_cache_state(self):
-        """Return a mutation-sensitive structural signature for the current rules."""
+        """Return a mutation-sensitive structural signature for the current rules.
+
+        Derived from ``_RULE_SIGNATURE_FIELDS`` — the SAME field list
+        ``_build_rule_cache_payload`` uses, so the two can never drift.
+        Callable fields (``structured_replacer`` /
+        ``full_sql_rewriter``) are compared by object identity: replacing
+        the callable object changes the signature.
+        """
         return tuple(
-            (
-                rule.name,
-                rule.source,
-                rule.target,
-                rule.pattern,
-                rule.replacement,
-                rule.note,
-                rule.category.value,
-                rule.priority,
-                rule.enabled,
-            )
+            tuple(_rule_signature_value(rule, field) for field in _RULE_SIGNATURE_FIELDS)
             for rule in self.post_processor.engine.rules
         )
 
     def _build_rule_cache_payload(self) -> str:
-        """Build the canonical rule payload used by the existing cache identity."""
-        return "\n".join(
-            "|".join([
-                rule.name, rule.source, rule.target, rule.pattern, rule.replacement,
-                rule.note, rule.category.value, str(rule.priority), str(rule.enabled),
-            ])
-            for rule in self.post_processor.engine.rules
-        )
+        """Build the canonical rule payload used by the cache identity.
+
+        Derived from the SAME ``_RULE_SIGNATURE_FIELDS`` list as
+        ``_rule_cache_state``.  JSON encoding gives unambiguous field
+        boundaries (no delimiter-collision risk).  Callable fields
+        serialize through ``_callable_cache_identity`` so the payload
+        reflects the same callable replacement the state detects.
+        """
+        records = []
+        for rule in self.post_processor.engine.rules:
+            record = {}
+            for field in _RULE_SIGNATURE_FIELDS:
+                value = _rule_signature_value(rule, field)
+                if field in _RULE_CALLABLE_FIELDS:
+                    value = _callable_cache_identity(value)
+                record[field] = value
+            records.append(record)
+        return json.dumps(records, sort_keys=True)
 
     def _rule_cache_version(self) -> str:
         """Reuse the rule-version hash until the effective rule state changes."""
