@@ -670,7 +670,7 @@ class SQLTranspiler:
         the callable object changes the signature.
         """
         return tuple(
-            tuple(_rule_signature_value(rule, field) for field in _RULE_SIGNATURE_FIELDS)
+            tuple(_rule_signature_value(rule, field_name) for field_name in _RULE_SIGNATURE_FIELDS)
             for rule in self.post_processor.engine.rules
         )
 
@@ -686,11 +686,11 @@ class SQLTranspiler:
         records = []
         for rule in self.post_processor.engine.rules:
             record = {}
-            for field in _RULE_SIGNATURE_FIELDS:
-                value = _rule_signature_value(rule, field)
-                if field in _RULE_CALLABLE_FIELDS:
+            for field_name in _RULE_SIGNATURE_FIELDS:
+                value = _rule_signature_value(rule, field_name)
+                if field_name in _RULE_CALLABLE_FIELDS:
                     value = _callable_cache_identity(value)
-                record[field] = value
+                record[field_name] = value
             records.append(record)
         return json.dumps(records, sort_keys=True)
 
