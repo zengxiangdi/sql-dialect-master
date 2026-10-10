@@ -124,17 +124,50 @@ _RULE_SIGNATURE_FIELDS = (
 _RULE_CALLABLE_FIELDS = ("structured_replacer", "full_sql_rewriter")
 
 
+class _CallableIdentity:
+    """Identity wrapper for callable signature fields.
+
+    Python tuple equality calls element ``==``; a callable class may
+    override ``__eq__`` with semantic (non-identity) logic, which would
+    let two behaviorally different callables compare equal and reuse a
+    stale cache version.  This wrapper forces strict object identity
+    (``is``) so two distinct callable objects never compare equal.
+
+    The wrapper also holds a strong reference to the callable: the
+    previous signature snapshot keeps the old callable alive for as long
+    as the snapshot exists, so its ``id()`` cannot be reused by a later
+    callable (identity-reuse guard for the payload serialization).
+    """
+
+    __slots__ = ("callable",)
+
+    def __init__(self, fn):
+        self.callable = fn
+
+    def __eq__(self, other):
+        return (
+            isinstance(other, _CallableIdentity)
+            and self.callable is other.callable
+        )
+
+    def __hash__(self):
+        return id(self.callable)
+
+
 def _rule_signature_value(rule, field: str):
     """Return the cache-signature value for one ``TransformRule`` field.
 
     ``category`` normalizes to its string value; every other field is
-    returned as-is.  Callable fields come back as the callable object
-    itself, so tuple comparison in ``_rule_cache_state`` detects
-    callable-object replacement.
+    returned as-is.  Callable fields are wrapped in ``_CallableIdentity``
+    so tuple comparison in ``_rule_cache_state`` detects callable-object
+    replacement by identity (``is``), never by ``==``.
     """
     if field == "category":
         return rule.category.value
-    return getattr(rule, field)
+    value = getattr(rule, field)
+    if field in _RULE_CALLABLE_FIELDS and value is not None:
+        return _CallableIdentity(value)
+    return value
 
 
 def _callable_cache_identity(fn) -> Optional[str]:
@@ -689,7 +722,8 @@ class SQLTranspiler:
             for field_name in _RULE_SIGNATURE_FIELDS:
                 value = _rule_signature_value(rule, field_name)
                 if field_name in _RULE_CALLABLE_FIELDS:
-                    value = _callable_cache_identity(value)
+                    fn = value.callable if isinstance(value, _CallableIdentity) else value
+                    value = _callable_cache_identity(fn)
                 record[field_name] = value
             records.append(record)
         return json.dumps(records, sort_keys=True)

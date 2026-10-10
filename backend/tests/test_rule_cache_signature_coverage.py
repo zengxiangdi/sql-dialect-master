@@ -284,3 +284,83 @@ class TestT4VersionStability:
         assert transpiler._rule_cache_version() == first, (
             "equivalent rule reassignment must not change the version"
         )
+
+
+# ── B2-2a — callable identity equality guard ─────────────────────────────────
+
+class EquatableReplacer:
+    """A callable whose ``__eq__`` makes ANY two instances compare equal.
+
+    Python tuple equality calls element ``==``; a callable class may
+    override ``__eq__`` with semantic (non-identity) logic.  The cache
+    signature must compare callable fields by object identity (``is``),
+    never by ``==``, otherwise two behaviorally different callables that
+    happen to compare equal would reuse the old cache version.
+    """
+
+    def __init__(self, fn_name: str):
+        self.fn_name = fn_name
+
+    def __call__(self, args: str, original: str) -> str:
+        return f"{self.fn_name}({args})"
+
+    def __eq__(self, other):
+        return isinstance(other, EquatableReplacer)
+
+
+class TestB2_2A_CallableIdentityEqualityGuard:
+    def test_equal_comparing_callables_still_invalidate_cache(self):
+        """Two callable instances that compare equal via ``__eq__`` must
+        still produce different cache versions and a fresh result."""
+        callable_a = EquatableReplacer("FUNC_A")
+        callable_b = EquatableReplacer("FUNC_B")
+        # Precondition: the trap this test guards against.
+        assert callable_a == callable_b
+        assert callable_a is not callable_b
+
+        rule_a = _make_rule(
+            structured_replacement=None, structured_replacer=callable_a
+        )
+        rule_b = _make_rule(
+            structured_replacement=None, structured_replacer=callable_b
+        )
+
+        sql = "SELECT FOOCALL(x) FROM t"
+        transpiler = _make_transpiler(rule_a)
+        first = transpiler.transpile(sql, "postgres", "mysql")
+        assert first.success is True, first.error
+        assert "FUNC_A" in (first.target_sql or ""), first.target_sql
+        first_version = transpiler._rule_cache_version()
+
+        # Swap to the equal-comparing but different callable; SQL,
+        # dialects, and all other cache parameters stay identical.
+        transpiler.post_processor = PostProcessor(engine=RuleEngine([rule_b]))
+        second = transpiler.transpile(sql, "postgres", "mysql")
+
+        assert first_version != transpiler._rule_cache_version(), (
+            "callable replacement must change the rule cache version even "
+            "when the two callables compare equal via __eq__"
+        )
+        assert "FUNC_B" in (second.target_sql or ""), (
+            f"stale cached result returned: {second.target_sql!r}"
+        )
+        assert "FUNC_A" not in (second.target_sql or ""), (
+            f"stale cached result returned: {second.target_sql!r}"
+        )
+
+    def test_same_equal_comparing_callable_keeps_version_stable(self):
+        """The SAME callable object reassigned must keep the version
+        stable — the identity guard must not over-invalidate."""
+        callable_a = EquatableReplacer("FUNC_A")
+        rule = _make_rule(
+            structured_replacement=None, structured_replacer=callable_a
+        )
+        transpiler = _make_transpiler(rule)
+        first = transpiler._rule_cache_version()
+
+        transpiler.post_processor = PostProcessor(engine=RuleEngine([_make_rule(
+            structured_replacement=None, structured_replacer=callable_a,
+        )]))
+        assert transpiler._rule_cache_version() == first, (
+            "reassigning the SAME callable must keep the version stable"
+        )
