@@ -184,6 +184,55 @@ def _executable_upper(sql: str) -> str:
     return mask_non_executable(sql).upper()
 
 
+# Constructs whose evidence requires a FUNCTION-CALL form: the name
+# immediately followed by ``(``, with an identifier boundary before it.
+# A column named ``STRING_AGG_backup`` therefore never counts as a
+# STRING_AGG call.
+_FUNCTION_FORM_CONSTRUCTS = frozenset({
+    "GROUP_CONCAT", "STRING_AGG", "IFNULL", "COALESCE",
+    "LISTAGG", "ARRAY_JOIN", "ARRAY_AGG", "JSON_TABLE",
+    "UNNEST", "FLATTEN", "GETDATE", "NOW",
+})
+
+# Identifier boundary used by every construct pattern.
+_IDENT_START = r"(?<![A-Za-z0-9_])"
+_IDENT_END = r"(?![A-Za-z0-9_])"
+
+
+def _contains_construct(sql_upper: str, construct: str) -> bool:
+    """Boundary-aware construct detection on executable-masked text.
+
+    Matching semantics per construct kind (uniform for the static
+    evidence table and the dynamic claims):
+
+    * multi-word constructs (e.g. ``WITH RECURSIVE``, ``LATERAL VIEW``,
+      ``CONNECT BY``) match as a whole phrase with identifier
+      boundaries on both sides;
+    * function constructs (``GROUP_CONCAT``, ``STRING_AGG``,
+      ``IFNULL``, ``COALESCE``, ``LISTAGG``, ``ARRAY_JOIN``, …) require
+      the call form ``NAME(`` so identifiers like
+      ``GROUP_CONCAT_backup`` never match;
+    * other single-word constructs (``LIMIT``, ``TOP``, ``ARRAY``,
+      ``JSON``, ``MAP``, ``MERGE``, ``PIVOT``, …) match as whole tokens
+      with identifier boundaries on both sides.
+
+    ``sql_upper`` must already be the executable-masked, upper-cased
+    view produced by ``_executable_upper``.
+    """
+    words = construct.split()
+    if len(words) > 1:
+        pattern = (
+            _IDENT_START + r"\s+".join(re.escape(word) for word in words) + _IDENT_END
+        )
+        return re.search(pattern, sql_upper) is not None
+    name = words[0].rstrip("()")
+    if name in _FUNCTION_FORM_CONSTRUCTS or construct.endswith("()"):
+        pattern = _IDENT_START + re.escape(name) + r"\s*\("
+        return re.search(pattern, sql_upper) is not None
+    pattern = _IDENT_START + re.escape(name) + _IDENT_END
+    return re.search(pattern, sql_upper) is not None
+
+
 class _CallableIdentity:
     """Identity wrapper for callable signature fields.
 
@@ -846,12 +895,16 @@ class SQLTranspiler:
             dropped = False
             for marker, source_constructs, target_constructs in _CONVERSION_NOTE_EVIDENCE:
                 if marker.upper() in upper_note:
-                    if not any(c in source_upper for c in source_constructs):
+                    if not any(
+                        _contains_construct(source_upper, c) for c in source_constructs
+                    ):
                         dropped = True
                         break
                     # An empty target tuple marks a source-construct
                     # advisory: no final-SQL evidence required.
-                    if target_constructs and not any(c in final_upper for c in target_constructs):
+                    if target_constructs and not any(
+                        _contains_construct(final_upper, c) for c in target_constructs
+                    ):
                         dropped = True
                         break
                     break
@@ -861,21 +914,21 @@ class SQLTranspiler:
 
         # Class A: source-construct advisories (generic, not claims of a
         # completed conversion).
-        if "LIMIT" in source_upper and target == "oracle":
+        if _contains_construct(source_upper, "LIMIT") and target == "oracle":
             notes.append("Oracle uses FETCH FIRST n ROWS ONLY (12c+) or ROWNUM for LIMIT")
-        if "AUTO_INCREMENT" in source_upper and target != "mysql":
+        if _contains_construct(source_upper, "AUTO_INCREMENT") and target != "mysql":
             notes.append("AUTO_INCREMENT syntax varies by database")
-        if "MERGE" in source_upper:
+        if _contains_construct(source_upper, "MERGE"):
             notes.append("MERGE syntax varies significantly between databases")
-        if "PIVOT" in source_upper or "UNPIVOT" in source_upper:
+        if _contains_construct(source_upper, "PIVOT") or _contains_construct(source_upper, "UNPIVOT"):
             notes.append("PIVOT/UNPIVOT syntax varies by database")
 
         # Class B (dynamic): conversion claims, verified by the final SQL.
-        if "LATERAL VIEW" in source_upper and target not in ["hive", "spark", "databricks"]:
-            if "UNNEST" in final_upper or "JSON_TABLE" in final_upper:
+        if _contains_construct(source_upper, "LATERAL VIEW") and target not in ["hive", "spark", "databricks"]:
+            if _contains_construct(final_upper, "UNNEST") or _contains_construct(final_upper, "JSON_TABLE"):
                 notes.append("LATERAL VIEW is Hive/Spark specific, converted to UNNEST/JSON_TABLE")
-        if "CONNECT BY" in source_upper and target != "oracle":
-            if "WITH RECURSIVE" in final_upper:
+        if _contains_construct(source_upper, "CONNECT BY") and target != "oracle":
+            if _contains_construct(final_upper, "WITH RECURSIVE"):
                 notes.append("CONNECT BY is Oracle specific, converted to WITH RECURSIVE")
         return notes
 

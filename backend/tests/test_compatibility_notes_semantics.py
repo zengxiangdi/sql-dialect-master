@@ -660,3 +660,105 @@ class TestB23B_SQLAwareEvidence:
             "may need manual adjustment" in n
             for n in result.compatibility_notes
         ), result.compatibility_notes
+
+
+# ── B2-3c — identifier substrings are not construct evidence ────────────────
+
+class TestB23C_IdentifierSubstringsAreNotEvidence:
+    """Ordinary identifiers that merely contain a construct name
+    (LISTAGG_value, limit_count, STRING_AGG_backup, COALESCE_backup,
+    UNNEST_helper, …) must not count as source constructs or as
+    conversion-result evidence."""
+
+    def test_listagg_identifier_not_source_evidence(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "oracle", "hive",
+            source_sql="SELECT LISTAGG_value FROM t",
+            final_sql="SELECT ARRAY_JOIN_value FROM t",
+        )
+        assert not any("ARRAY_JOIN" in n for n in notes), notes
+
+    def test_limit_identifier_not_advisory_trigger(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "postgres", "oracle",
+            source_sql="SELECT limit_count FROM t",
+            final_sql="SELECT limit_count FROM t",
+        )
+        assert not any(
+            "Oracle uses FETCH FIRST" in n for n in notes
+        ), notes
+
+    def test_string_agg_identifier_not_claim_trigger(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "postgres", "mysql",
+            source_sql="SELECT STRING_AGG_backup FROM t",
+            final_sql="SELECT GROUP_CONCAT_backup FROM t",
+        )
+        assert not any(
+            "STRING_AGG" in n and "GROUP_CONCAT" in n for n in notes
+        ), notes
+
+    def test_group_concat_identifier_not_claim_trigger(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "mysql", "postgres",
+            source_sql="SELECT GROUP_CONCAT_backup FROM t",
+            final_sql="SELECT STRING_AGG_backup FROM t",
+        )
+        assert not any(
+            "GROUP_CONCAT" in n and "STRING_AGG" in n for n in notes
+        ), notes
+
+    def test_coalesce_identifier_not_target_evidence(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "mysql", "postgres",
+            source_sql="SELECT IFNULL(a, 0) FROM t",
+            final_sql="SELECT COALESCE_backup FROM t",
+        )
+        assert not any(
+            "IFNULL" in n and "COALESCE" in n for n in notes
+        ), notes
+
+    def test_unnest_identifier_not_target_evidence(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "hive", "postgres",
+            source_sql=LATERAL_VIEW_SQL,
+            final_sql="SELECT UNNEST_helper FROM t",
+        )
+        assert not any("UNNEST" in n for n in notes), notes
+
+    def test_real_constructs_still_detected(self, transpiler):
+        """Guard: function-call forms and keyword forms must keep
+        matching after the boundary-aware change."""
+        result = transpiler.transpile(LISTAGG_SQL, "oracle", "hive")
+        assert any(
+            "ARRAY_JOIN" in n for n in result.compatibility_notes
+        ), result.compatibility_notes
+
+        result = transpiler.transpile(
+            "SELECT * FROM t LIMIT 5", "postgres", "oracle"
+        )
+        assert any(
+            "Oracle uses FETCH FIRST" in n
+            for n in result.compatibility_notes
+        ), result.compatibility_notes
+
+        result = transpiler.transpile(
+            "SELECT IFNULL(a, 0) FROM t", "mysql", "postgres"
+        )
+        assert any(
+            "IFNULL" in n and "COALESCE" in n
+            for n in result.compatibility_notes
+        ), result.compatibility_notes
+
+        result = transpiler.transpile(LATERAL_VIEW_SQL, "hive", "duckdb")
+        assert any(
+            "UNNEST" in n for n in result.compatibility_notes
+        ), result.compatibility_notes
+
+        result = transpiler.transpile(
+            "SELECT STRING_AGG(name, ',') FROM users", "postgres", "mysql"
+        )
+        assert any(
+            "STRING_AGG" in n and "GROUP_CONCAT" in n
+            for n in result.compatibility_notes
+        ), result.compatibility_notes
