@@ -78,16 +78,19 @@ class TestStringAgg:
 
 
 class TestListagg:
-    """LISTAGG conversions must not emit false notes."""
+    """LISTAGG conversions must emit conversion claims only when the
+    conversion actually happened in the final SQL."""
 
-    def test_oracle_to_hive_false_notes_filtered(self):
+    def test_oracle_to_hive_claim_reflects_conversion(self):
         sql = "SELECT LISTAGG(name, ',') WITHIN GROUP (ORDER BY id) FROM users"
         result = transpiler.transpile(sql, "oracle", "hive")
         assert result.success
-        # sqlglot converts LISTAGG to GROUP_CONCAT for oracle->hive
-        # The note claiming ARRAY_JOIN(COLLECT_LIST()) is false
-        assert not any("ARRAY_JOIN" in n for n in result.compatibility_notes)
-        # CONNECT BY note should also be filtered (query has no CONNECT BY)
+        # The post-processor rewrites to ARRAY_JOIN(COLLECT_LIST(...)) —
+        # the conversion really happens, so the claim is true and must
+        # be retained (B2-3: claims verified by final SQL evidence).
+        assert "ARRAY_JOIN" in result.target_sql.upper()
+        assert any("ARRAY_JOIN" in n for n in result.compatibility_notes)
+        # CONNECT BY note must still be filtered (query has no CONNECT BY)
         assert not any("CONNECT BY" in n for n in result.compatibility_notes)
 
     def test_listagg_with_nested_case(self):
@@ -375,11 +378,13 @@ class TestLexicalBoundarySafety:
 class TestFalseNoteFiltering:
     """Compatibility notes must only be emitted when the transformation was applied."""
 
-    def test_listagg_no_false_array_join_note(self):
+    def test_listagg_array_join_claim_reflects_conversion(self):
         sql = "SELECT LISTAGG(name, ',') WITHIN GROUP (ORDER BY id) FROM users"
         result = transpiler.transpile(sql, "oracle", "hive")
         assert result.success
-        assert not any("ARRAY_JOIN" in n for n in result.compatibility_notes)
+        # Conversion really happens → the claim is true and retained.
+        assert "ARRAY_JOIN" in result.target_sql.upper()
+        assert any("ARRAY_JOIN" in n for n in result.compatibility_notes)
 
     def test_connect_by_only_query_no_false_note(self):
         sql = "SELECT * FROM users WHERE id = 1"
@@ -387,9 +392,12 @@ class TestFalseNoteFiltering:
         assert result.success
         assert not any("CONNECT BY" in n for n in result.compatibility_notes)
 
-    def test_connect_by_with_clause_preserves_note(self):
+    def test_connect_by_claim_absent_when_final_keeps_connect_by(self):
         sql = "SELECT * FROM users START WITH id = 1 CONNECT BY PRIOR id = parent_id"
         result = transpiler.transpile(sql, "oracle", "hive")
         assert result.success
-        # Should have the custom note about CONNECT BY being Oracle-specific
-        assert any("CONNECT BY" in n for n in result.compatibility_notes)
+        # sqlglot keeps CONNECT BY for Hive — claiming "converted to
+        # WITH RECURSIVE" would be false and must be suppressed.
+        assert "CONNECT BY" in result.target_sql.upper()
+        assert "WITH RECURSIVE" not in result.target_sql.upper()
+        assert not any("CONNECT BY" in n for n in result.compatibility_notes)

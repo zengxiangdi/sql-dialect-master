@@ -124,6 +124,28 @@ _RULE_SIGNATURE_FIELDS = (
 _RULE_CALLABLE_FIELDS = ("structured_replacer", "full_sql_rewriter")
 
 
+# Conversion-claim evidence for the static compatibility-notes table.
+# Each entry maps a distinctive note substring to the evidence the
+# claim needs before it is emitted:
+#   source_constructs  — must appear in the user's ORIGINAL SQL
+#   target_constructs  — must appear in the FINAL SQL; an empty tuple
+#                        marks a source-construct advisory (no
+#                        conversion claimed, source evidence only)
+# Notes not matched by any marker are advisories and pass through.
+_CONVERSION_NOTE_EVIDENCE = (
+    ("LISTAGG → ARRAY_JOIN", ("LISTAGG",), ("ARRAY_JOIN",)),
+    ("ARRAY_AGG → LISTAGG", ("ARRAY_AGG",), ("LISTAGG",)),
+    ("CONNECT BY → WITH RECURSIVE", ("CONNECT BY",), ("WITH RECURSIVE",)),
+    ("LATERAL VIEW EXPLODE → JSON_TABLE", ("LATERAL VIEW",), ("JSON_TABLE",)),
+    ("LATERAL VIEW EXPLODE → UNNEST", ("LATERAL VIEW",), ("UNNEST",)),
+    ("LATERAL VIEW EXPLODE → LATERAL FLATTEN", ("LATERAL VIEW",), ("FLATTEN",)),
+    ("UNNEST → LATERAL VIEW EXPLODE", ("UNNEST",), ("LATERAL VIEW",)),
+    ("FLATTEN → LATERAL VIEW EXPLODE", ("FLATTEN",), ("LATERAL VIEW",)),
+    ("CROSS/OUTER APPLY → LATERAL VIEW", ("APPLY",), ("LATERAL VIEW",)),
+    ("LATERAL VIEW EXPLODE may need manual adjustment", ("LATERAL VIEW",), ()),
+)
+
+
 class _CallableIdentity:
     """Identity wrapper for callable signature fields.
 
@@ -352,7 +374,9 @@ class SQLTranspiler:
             final_sql, transformations = self.post_processor.process(transpiled, source, target)
             if ast_notes:
                 transformations = ast_notes + transformations
-            compat_notes = self._get_compatibility_notes(source, target, sql)
+            compat_notes = self._get_compatibility_notes(
+                source, target, source_sql=sql, final_sql=final_sql
+            )
             if executable_sql is not None:
                 warnings = security_warnings + self._generate_warnings_masked(
                     executable_sql, source, target
@@ -744,43 +768,77 @@ class SQLTranspiler:
         security_version = f"{settings.security_check_enabled}|{settings.security_block_dangerous}"
         return f"v4|{rule_version}|{security_version}|{sql}|{source}|{target}|{pretty}|{validate}"
 
-    def _get_compatibility_notes(self, source: str, target: str, sql: str = "") -> List[str]:
+    def _get_compatibility_notes(
+        self,
+        source: str,
+        target: str,
+        source_sql: str = "",
+        final_sql: str = "",
+    ) -> List[str]:
+        """Compatibility notes, split by semantic responsibility.
+
+        **Source-construct advisories** (class A) are detected from
+        ``source_sql`` — the user's original SQL.  A successfully
+        converted final SQL no longer contains the source construct
+        (e.g. LIMIT becomes FETCH FIRST), so a final-only check would
+        wrongly drop these advisories.
+
+        **Conversion-result claims** (class B) assert a transformation
+        actually happened.  They are retained only when the claimed
+        target construct appears in ``final_sql`` AND the source
+        construct appears in ``source_sql``.  The old code checked the
+        original SQL for the target construct (which never appears
+        there), dropping real claims for the wrong reason, while
+        appending claims for conversions that never happened.
+        """
         notes = list(get_compatibility_notes(source, target))
-        if not sql:
+        if not source_sql and not final_sql:
             return notes
 
-        # Filter out notes for transformations that were NOT actually applied.
-        # sqlglot may have handled the conversion natively, or may have left
-        # the source construct unchanged. Only emit notes when the target SQL
-        # actually contains the expected transformed output.
-        sql_upper = sql.upper()
+        source_upper = source_sql.upper()
+        final_upper = final_sql.upper()
+
+        # Class B (static table): notes that claim a conversion happened.
+        # Marker identifies the note; the claim survives only with source
+        # and final evidence.  An empty target tuple marks an advisory
+        # that describes the source construct (source evidence only).
         filtered = []
         for note in notes:
             upper_note = note.upper()
-            if "LISTAGG" in upper_note and "ARRAY_JOIN" not in upper_note:
-                # Note claims ARRAY_JOIN conversion but we don't see it in output
-                continue
-            if "ARRAY_JOIN" in upper_note and "ARRAY_JOIN" not in sql_upper:
-                continue
-            if "CONNECT BY" in upper_note and "WITH RECURSIVE" not in sql_upper:
-                continue
-            if "LATERAL VIEW" in upper_note and ("UNNEST" not in sql_upper and "JSON_TABLE" not in sql_upper):
-                continue
-            filtered.append(note)
+            dropped = False
+            for marker, source_constructs, target_constructs in _CONVERSION_NOTE_EVIDENCE:
+                if marker.upper() in upper_note:
+                    if not any(c in source_upper for c in source_constructs):
+                        dropped = True
+                        break
+                    # An empty target tuple marks a source-construct
+                    # advisory: no final-SQL evidence required.
+                    if target_constructs and not any(c in final_upper for c in target_constructs):
+                        dropped = True
+                        break
+                    break
+            if not dropped:
+                filtered.append(note)
         notes = filtered
 
-        if "LIMIT" in sql_upper and target == "oracle":
+        # Class A: source-construct advisories (generic, not claims of a
+        # completed conversion).
+        if "LIMIT" in source_upper and target == "oracle":
             notes.append("Oracle uses FETCH FIRST n ROWS ONLY (12c+) or ROWNUM for LIMIT")
-        if "AUTO_INCREMENT" in sql_upper and target != "mysql":
+        if "AUTO_INCREMENT" in source_upper and target != "mysql":
             notes.append("AUTO_INCREMENT syntax varies by database")
-        if "LATERAL VIEW" in sql_upper and target not in ["hive", "spark", "databricks"]:
-            notes.append("LATERAL VIEW is Hive/Spark specific, converted to UNNEST/JSON_TABLE")
-        if "CONNECT BY" in sql_upper and target != "oracle":
-            notes.append("CONNECT BY is Oracle specific, converted to WITH RECURSIVE")
-        if "MERGE" in sql_upper:
+        if "MERGE" in source_upper:
             notes.append("MERGE syntax varies significantly between databases")
-        if "PIVOT" in sql_upper or "UNPIVOT" in sql_upper:
+        if "PIVOT" in source_upper or "UNPIVOT" in source_upper:
             notes.append("PIVOT/UNPIVOT syntax varies by database")
+
+        # Class B (dynamic): conversion claims, verified by the final SQL.
+        if "LATERAL VIEW" in source_upper and target not in ["hive", "spark", "databricks"]:
+            if "UNNEST" in final_upper or "JSON_TABLE" in final_upper:
+                notes.append("LATERAL VIEW is Hive/Spark specific, converted to UNNEST/JSON_TABLE")
+        if "CONNECT BY" in source_upper and target != "oracle":
+            if "WITH RECURSIVE" in final_upper:
+                notes.append("CONNECT BY is Oracle specific, converted to WITH RECURSIVE")
         return notes
 
     def _generate_warnings(self, sql: str, source: str, target: str) -> List[str]:
