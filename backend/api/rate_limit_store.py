@@ -5,10 +5,11 @@ Redis is opt-in. The in-memory backend remains the default for local/single-proc
 
 from __future__ import annotations
 
-import os
 import time
 from threading import Lock
-from typing import Protocol
+from typing import Optional, Protocol
+
+from backend.core.config import AppSettings, settings as _default_settings
 
 
 class RateLimitStore(Protocol):
@@ -95,11 +96,28 @@ class RedisRateLimitStore:
         return {"backend": "redis", "namespace": self._namespace}
 
 
-def create_rate_limit_store() -> RateLimitStore:
-    """Create the configured store; never silently downgrade Redis to memory."""
-    backend = os.getenv("SDM_RATE_LIMIT_BACKEND", "memory").strip().lower()
+def create_rate_limit_store(config: Optional[AppSettings] = None) -> RateLimitStore:
+    """Create the configured store; never silently downgrade Redis to memory.
+
+    Reads configuration from ``config``, or from the unified
+    ``backend.core.config.settings`` singleton when ``config`` is None.
+    The factory never reads raw environment variables — all deployment
+    configuration flows through AppSettings (SDM_ prefix), so backend
+    selection and the Redis URL share one validated configuration path.
+
+    The Redis URL is a SecretStr in AppSettings; its actual value is
+    read here only to construct the Redis client, and it is never
+    embedded in error messages or logs.
+    """
+    settings_obj = config if config is not None else _default_settings
+    backend = settings_obj.rate_limit_backend
     if backend == "memory":
         return InMemoryRateLimitStore()
     if backend == "redis":
-        return RedisRateLimitStore(os.getenv("SDM_REDIS_URL", ""))
-    raise ValueError("Unsupported SDM_RATE_LIMIT_BACKEND; expected 'memory' or 'redis'")
+        url = settings_obj.redis_url
+        url_value = url.get_secret_value() if url is not None else ""
+        return RedisRateLimitStore(url_value)
+    # Boundary guard for untyped callers: only reachable when a caller
+    # passes a non-AppSettings object with an unexpected backend value
+    # (typed AppSettings validation rejects it earlier).
+    raise ValueError("Unsupported rate_limit_backend; expected 'memory' or 'redis'")
