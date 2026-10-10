@@ -169,6 +169,21 @@ _CONVERSION_NOTE_EVIDENCE = (
 )
 
 
+def _executable_upper(sql: str) -> str:
+    """Upper-cased executable-only view of ``sql`` for construct detection.
+
+    Comments, string literals and quoted identifiers are replaced by
+    spaces (``mask_non_executable``), so construct evidence is taken
+    only from real SQL code: a construct spelled inside a comment, a
+    string literal or a quoted identifier is not evidence that the
+    source used it or that the final SQL produced it.  Used uniformly
+    by both the static-table evidence filter and the dynamic
+    conversion-claim checks, so no claim path falls back to raw
+    substring matching.
+    """
+    return mask_non_executable(sql).upper()
+
+
 class _CallableIdentity:
     """Identity wrapper for callable signature fields.
 
@@ -818,8 +833,8 @@ class SQLTranspiler:
         if not source_sql and not final_sql:
             return notes
 
-        source_upper = source_sql.upper()
-        final_upper = final_sql.upper()
+        source_upper = _executable_upper(source_sql)
+        final_upper = _executable_upper(final_sql)
 
         # Class B (static table): notes that claim a conversion happened.
         # Marker identifies the note; the claim survives only with source

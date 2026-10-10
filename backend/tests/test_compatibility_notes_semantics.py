@@ -501,3 +501,162 @@ class TestB23A_T5_B23BehaviorsUnchanged:
         assert any(
             "AUTO_INCREMENT" in n and "varies" in n for n in notes
         ), notes
+
+
+# ── B2-3b — evidence must be SQL-aware (literals/comments are not code) ──────
+
+class TestB23B_SQLAwareEvidence:
+    """Construct detection must ignore text inside comments and string
+    literals.  A construct spelled only in a comment or a literal is not
+    evidence that the source used it or that the final SQL produced it."""
+
+    def test_source_listagg_only_in_literal_no_claim(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "oracle", "hive",
+            source_sql="SELECT 'LISTAGG' AS txt FROM t",
+            final_sql="SELECT ARRAY_JOIN(COLLECT_LIST(x), ',') FROM t",
+        )
+        assert not any("ARRAY_JOIN" in n for n in notes), notes
+
+    def test_source_listagg_only_in_comment_no_claim(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "oracle", "hive",
+            source_sql="SELECT 1 -- LISTAGG(name, ',') WITHIN GROUP (ORDER BY id)",
+            final_sql="SELECT ARRAY_JOIN(COLLECT_LIST(x), ',') FROM t",
+        )
+        assert not any("ARRAY_JOIN" in n for n in notes), notes
+
+    def test_final_array_join_only_in_literal_not_evidence(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "oracle", "hive",
+            source_sql=LISTAGG_SQL,
+            final_sql="SELECT 'ARRAY_JOIN' AS txt FROM t",
+        )
+        assert not any("ARRAY_JOIN" in n for n in notes), notes
+
+    def test_source_connect_by_only_in_literal_no_claim(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "oracle", "hive",
+            source_sql="SELECT 'CONNECT BY' AS txt FROM t",
+            final_sql="WITH RECURSIVE cte AS (SELECT 1) SELECT * FROM cte",
+        )
+        assert not any("WITH RECURSIVE" in n for n in notes), notes
+
+    def test_final_with_recursive_only_in_literal_not_evidence(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "oracle", "hive",
+            source_sql=CONNECT_BY_SQL,
+            final_sql="SELECT 'WITH RECURSIVE' AS txt FROM t",
+        )
+        assert not any("WITH RECURSIVE" in n for n in notes), notes
+
+    def test_source_getdate_only_in_literal_no_claim(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "tsql", "mysql",
+            source_sql="SELECT 'GETDATE()' AS txt FROM t",
+            final_sql="SELECT NOW() FROM t",
+        )
+        assert not any(
+            "GETDATE" in n and "NOW()" in n for n in notes
+        ), notes
+
+    def test_source_lateral_view_only_in_literal_no_advisory(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "hive", "mysql",
+            source_sql="SELECT 'LATERAL VIEW' AS txt FROM t",
+            final_sql="SELECT 'LATERAL VIEW' AS txt FROM t",
+        )
+        assert not any(
+            "LATERAL VIEW" in n for n in notes
+        ), notes
+
+    def test_final_unnest_only_in_literal_not_evidence(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "hive", "postgres",
+            source_sql=LATERAL_VIEW_SQL,
+            final_sql="SELECT 'UNNEST' AS txt FROM t",
+        )
+        assert not any("UNNEST" in n for n in notes), notes
+
+    def test_source_limit_only_in_literal_no_advisory(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "postgres", "oracle",
+            source_sql="SELECT 'LIMIT' AS txt FROM t",
+            final_sql="SELECT 1",
+        )
+        assert not any(
+            "Oracle uses FETCH FIRST" in n for n in notes
+        ), notes
+
+    def test_real_conversions_still_keep_claims(self, transpiler):
+        """Regression anchor: the SQL-aware masking must not break the
+        real-conversion claims established in B2-3 / B2-3a."""
+        result = transpiler.transpile(LISTAGG_SQL, "oracle", "hive")
+        assert "ARRAY_JOIN" in result.target_sql.upper()
+        assert any(
+            "ARRAY_JOIN" in n for n in result.compatibility_notes
+        ), result.compatibility_notes
+
+        result = transpiler.transpile(CONNECT_BY_SQL, "oracle", "duckdb")
+        assert "WITH RECURSIVE" in result.target_sql.upper()
+        assert any(
+            "WITH RECURSIVE" in n for n in result.compatibility_notes
+        ), result.compatibility_notes
+
+        result = transpiler.transpile(LATERAL_VIEW_SQL, "hive", "duckdb")
+        assert "UNNEST" in result.target_sql.upper()
+        assert any(
+            "LATERAL VIEW" in n and "UNNEST" in n
+            for n in result.compatibility_notes
+        ), result.compatibility_notes
+
+        result = transpiler.transpile(
+            "SELECT GROUP_CONCAT(name SEPARATOR ',') FROM users",
+            "mysql", "postgres",
+        )
+        assert "STRING_AGG" in result.target_sql.upper()
+        assert any(
+            "GROUP_CONCAT" in n and "STRING_AGG" in n
+            for n in result.compatibility_notes
+        ), result.compatibility_notes
+
+        result = transpiler.transpile(
+            "SELECT IFNULL(a, 0) FROM t", "mysql", "postgres"
+        )
+        assert any(
+            "IFNULL" in n and "COALESCE" in n
+            for n in result.compatibility_notes
+        ), result.compatibility_notes
+
+        result = transpiler.transpile(
+            "SELECT STRING_AGG(name, ',') FROM users", "postgres", "mysql"
+        )
+        assert any(
+            "STRING_AGG" in n and "GROUP_CONCAT" in n
+            for n in result.compatibility_notes
+        ), result.compatibility_notes
+
+        result = transpiler.transpile(
+            "SELECT TOP 5 * FROM t", "tsql", "mysql"
+        )
+        assert any(
+            "TOP" in n and "LIMIT" in n
+            for n in result.compatibility_notes
+        ), result.compatibility_notes
+
+    def test_class_a_advisories_still_retained_for_real_constructs(
+        self, transpiler
+    ):
+        result = transpiler.transpile(
+            "SELECT * FROM t LIMIT 5", "postgres", "oracle"
+        )
+        assert any(
+            "Oracle uses FETCH FIRST" in n
+            for n in result.compatibility_notes
+        ), result.compatibility_notes
+
+        result = transpiler.transpile(LATERAL_VIEW_SQL, "hive", "mysql")
+        assert any(
+            "may need manual adjustment" in n
+            for n in result.compatibility_notes
+        ), result.compatibility_notes
