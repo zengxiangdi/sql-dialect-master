@@ -275,7 +275,25 @@ def _contains_clause_construct(sql: str, dialect: str, construct: str) -> bool:
     except Exception:
         return False
     if construct in ("LIMIT", "TOP"):
-        return tree.find(exp.Limit) is not None
+        limit = tree.find(exp.Limit)
+        if limit is None:
+            return False
+        # sqlglot represents T-SQL ``TOP n`` as a Limit node and
+        # provides no AST field distinguishing it from a LIMIT clause
+        # (verified against the installed sqlglot: both parse to
+        # Limit(expression=n) with every other arg None).  The reliable
+        # criterion is therefore dialect-constrained:
+        # * in T-SQL, the only source of a Limit node is TOP — a
+        #   genuine LIMIT clause does not exist there, and
+        #   OFFSET/FETCH parses to Offset/Fetch nodes, not Limit;
+        # * in every other supported dialect, a Limit node is a LIMIT
+        #   clause — TOP does not exist there.
+        # A bare column named limit/top yields no Limit node at all
+        # (it parses as a Column), and unparseable SQL already failed
+        # closed above.
+        if construct == "TOP":
+            return dialect == "tsql"
+        return dialect != "tsql"
     if construct == "MERGE":
         return tree.find(exp.Merge) is not None
     if construct in ("PIVOT", "UNPIVOT"):

@@ -1033,3 +1033,85 @@ class TestB23E_KeywordSyntaxContext:
         assert any(
             "AUTO_INCREMENT" in n and "varies" in n for n in notes
         ), notes
+
+
+# ── B2-3f — LIMIT vs TOP must not share one AST check ────────────────────────
+
+class TestB23F_LimitTopDistinction:
+    """sqlglot represents T-SQL ``TOP n`` as a Limit node with no AST
+    field distinguishing it from a LIMIT clause, so evidence must be
+    dialect-constrained: in T-SQL a Limit node is TOP; elsewhere it is
+    LIMIT.  The two construct names must never cross-match."""
+
+    def test_tsql_top_is_top_not_limit(self):
+        from backend.core.transpiler import (
+            _contains_construct,
+            _executable_upper,
+        )
+
+        sql = "SELECT TOP 5 * FROM t"
+        masked = _executable_upper(sql)
+        assert _contains_construct(masked, sql, "tsql", "TOP") is True
+        assert _contains_construct(masked, sql, "tsql", "LIMIT") is False
+
+    def test_postgres_limit_is_limit_not_top(self):
+        from backend.core.transpiler import (
+            _contains_construct,
+            _executable_upper,
+        )
+
+        sql = "SELECT * FROM t LIMIT 5"
+        masked = _executable_upper(sql)
+        assert _contains_construct(masked, sql, "postgres", "LIMIT") is True
+        assert _contains_construct(masked, sql, "postgres", "TOP") is False
+
+    def test_mysql_limit_is_limit_not_top(self):
+        from backend.core.transpiler import (
+            _contains_construct,
+            _executable_upper,
+        )
+
+        sql = "SELECT * FROM t LIMIT 5"
+        masked = _executable_upper(sql)
+        assert _contains_construct(masked, sql, "mysql", "LIMIT") is True
+        assert _contains_construct(masked, sql, "mysql", "TOP") is False
+
+    def test_bare_limit_and_top_columns_are_no_clauses(self):
+        from backend.core.transpiler import (
+            _contains_construct,
+            _executable_upper,
+        )
+
+        sql = "SELECT limit FROM t"
+        masked = _executable_upper(sql)
+        assert _contains_construct(masked, sql, "postgres", "LIMIT") is False
+        assert _contains_construct(masked, sql, "postgres", "TOP") is False
+
+    def test_tsql_top_does_not_trigger_oracle_limit_advisory(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "tsql", "oracle",
+            source_sql="SELECT TOP 5 * FROM t",
+            final_sql="SELECT * FROM t FETCH FIRST 5 ROWS ONLY",
+        )
+        assert not any(
+            "Oracle uses FETCH FIRST" in n for n in notes
+        ), notes
+
+    def test_tsql_top_limit_claim_still_supported(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "tsql", "mysql",
+            source_sql="SELECT TOP 5 * FROM t",
+            final_sql="SELECT * FROM t LIMIT 5",
+        )
+        assert any(
+            "TOP" in n and "LIMIT" in n for n in notes
+        ), notes
+
+    def test_real_limit_to_oracle_advisory_still_retained(self, transpiler):
+        result = transpiler.transpile(
+            "SELECT * FROM t LIMIT 5", "postgres", "oracle"
+        )
+        assert any(
+            "Oracle uses FETCH FIRST" in n
+            for n in result.compatibility_notes
+        ), result.compatibility_notes
