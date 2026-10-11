@@ -226,6 +226,22 @@ _TOP_SELECT_PATTERN = re.compile(
     r"(?<![\w$])SELECT\s+(?:(?:ALL|DISTINCT)\s+)?TOP(?=\s|\()"
 )
 
+# Dialects in which sqlglot accepts TOP as a SELECT clause.  Derived
+# from actual parse behavior with the installed sqlglot (verified by
+# probing every SUPPORTED_DIALECTS entry):
+# * parsing ``SELECT TOP 1 * FROM t`` yields a Limit node in exactly
+#   oracle, tsql, snowflake and redshift;
+# * in each of those dialects a bare column named ``top`` at SELECT
+#   position does not parse at all, so counting TOP matches there can
+#   never miscount a column;
+# * in every other supported dialect ``top`` is an ordinary identifier
+#   (e.g. postgres/mysql ``SELECT top FROM t LIMIT 5`` parses with top
+#   as a Column) while TOP as a clause does not parse.
+# TOP evidence is therefore only counted for dialects in this set —
+# dialects without TOP grammar never produce TOP evidence from the
+# text position alone.
+_TOP_CLAUSE_DIALECTS = frozenset({"oracle", "tsql", "snowflake", "redshift"})
+
 # SQL identifier character model: Unicode word characters (letters,
 # digits, underscore — Python's ``\w``) plus ``$`` (a T-SQL / Databricks
 # identifier character).  sqlglot tokenizes ``limit$column`` and
@@ -313,9 +329,16 @@ def _contains_clause_construct(
         # parse).  Counting therefore associates TOP and LIMIT
         # evidence with their own query levels instead of classifying
         # the whole statement with one global match:
-        # * TOP evidence: at least one SELECT-position TOP exists;
+        # * TOP evidence: at least one SELECT-position TOP exists in a
+        #   dialect whose grammar actually accepts TOP (see
+        #   _TOP_CLAUSE_DIALECTS — a column named ``top`` in e.g.
+        #   postgres/mysql never counts);
         # * LIMIT evidence: at least one Limit node is NOT a TOP.
-        top_count = len(_TOP_SELECT_PATTERN.findall(masked_upper))
+        top_count = (
+            len(_TOP_SELECT_PATTERN.findall(masked_upper))
+            if dialect in _TOP_CLAUSE_DIALECTS
+            else 0
+        )
         if construct == "TOP":
             return top_count > 0
         return top_count < len(limit_nodes)

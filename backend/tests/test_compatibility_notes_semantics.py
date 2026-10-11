@@ -1269,3 +1269,93 @@ class TestB23H_SelectScopedTopLimitEvidence:
         assert any(
             "Oracle uses FETCH FIRST" in n for n in notes
         ), notes
+
+
+# ── B2-3i — TOP evidence must respect source-dialect grammar ────────────────
+
+class TestB23I_TopEvidenceRespectsSourceDialect:
+    """In dialects without TOP syntax, a column named ``top`` must not
+    contribute TOP evidence, and the real LIMIT must still count."""
+
+    def test_postgres_top_column_not_top(self):
+        from backend.core.transpiler import (
+            _contains_construct,
+            _executable_upper,
+        )
+
+        sql = "SELECT top FROM t LIMIT 5"
+        masked = _executable_upper(sql)
+        assert _contains_construct(masked, sql, "postgres", "TOP") is False
+        assert _contains_construct(masked, sql, "postgres", "LIMIT") is True
+
+    def test_postgres_all_top_column_not_top(self):
+        from backend.core.transpiler import (
+            _contains_construct,
+            _executable_upper,
+        )
+
+        sql = "SELECT ALL top FROM t LIMIT 5"
+        masked = _executable_upper(sql)
+        assert _contains_construct(masked, sql, "postgres", "TOP") is False
+        assert _contains_construct(masked, sql, "postgres", "LIMIT") is True
+
+    def test_mysql_top_column_not_top(self):
+        from backend.core.transpiler import (
+            _contains_construct,
+            _executable_upper,
+        )
+
+        sql = "SELECT top FROM t LIMIT 5"
+        masked = _executable_upper(sql)
+        assert _contains_construct(masked, sql, "mysql", "TOP") is False
+        assert _contains_construct(masked, sql, "mysql", "LIMIT") is True
+
+    def test_tsql_real_top_still_detected(self):
+        from backend.core.transpiler import (
+            _contains_construct,
+            _executable_upper,
+        )
+
+        sql = "SELECT TOP 5 * FROM t"
+        masked = _executable_upper(sql)
+        assert _contains_construct(masked, sql, "tsql", "TOP") is True
+        assert _contains_construct(masked, sql, "tsql", "LIMIT") is False
+
+    def test_snowflake_real_top_and_limit_still_detected(self):
+        from backend.core.transpiler import (
+            _contains_construct,
+            _executable_upper,
+        )
+
+        top_sql = "SELECT TOP 5 * FROM t"
+        masked = _executable_upper(top_sql)
+        assert _contains_construct(masked, top_sql, "snowflake", "TOP") is True
+        assert _contains_construct(masked, top_sql, "snowflake", "LIMIT") is False
+
+        limit_sql = "SELECT * FROM t LIMIT 5"
+        masked = _executable_upper(limit_sql)
+        assert _contains_construct(masked, limit_sql, "snowflake", "LIMIT") is True
+        assert _contains_construct(masked, limit_sql, "snowflake", "TOP") is False
+
+    def test_nested_top_limit_still_both_detected(self):
+        from backend.core.transpiler import (
+            _contains_construct,
+            _executable_upper,
+        )
+
+        for sql in (
+            "SELECT * FROM (SELECT TOP 5 * FROM inner_table) s LIMIT 10",
+            "SELECT TOP 5 * FROM (SELECT * FROM inner_table LIMIT 10) s",
+        ):
+            masked = _executable_upper(sql)
+            assert _contains_construct(masked, sql, "snowflake", "TOP") is True, sql
+            assert _contains_construct(masked, sql, "snowflake", "LIMIT") is True, sql
+
+    def test_postgres_top_column_keeps_limit_advisory(self, transpiler):
+        result = transpiler.transpile(
+            "SELECT top FROM t LIMIT 5", "postgres", "oracle"
+        )
+        assert any(
+            "Oracle uses FETCH FIRST" in n
+            for n in result.compatibility_notes
+        ), result.compatibility_notes
