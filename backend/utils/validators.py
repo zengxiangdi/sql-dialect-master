@@ -303,13 +303,6 @@ def split_sql_statements(sql: str, dialect: str = "postgres") -> list[str]:
             statements.append(statement)
         stmt_chars.clear()
 
-    def consume_line() -> None:
-        """Append the rest of the current line verbatim."""
-        nonlocal i
-        while i < n and sql[i] != "\n":
-            stmt_chars.append(sql[i])
-            i += 1
-
     def peek_block_word() -> str:
         """Return the next identifier word at ``i`` (uppercased) or ''."""
         match = _WORD_RE.match(sql, i)
