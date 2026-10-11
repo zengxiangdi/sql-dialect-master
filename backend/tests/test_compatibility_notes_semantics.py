@@ -886,3 +886,150 @@ class TestB23D_IdentifierBoundariesAndConstructSemantics:
         assert any(
             "ARRAY_JOIN" in n for n in result.compatibility_notes
         ), result.compatibility_notes
+
+
+# ── B2-3e — clause keywords need syntax context, not just token text ────────
+
+class TestB23E_KeywordSyntaxContext:
+    """A bare identifier whose text equals LIMIT/TOP/MERGE/PIVOT/UNPIVOT/
+    AUTO_INCREMENT is a column, not a clause.  Only real clause syntax
+    (verified against the parsed AST) may trigger advisories/claims."""
+
+    def test_unqualified_limit_column_not_clause(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "postgres", "oracle",
+            source_sql="SELECT limit FROM t",
+            final_sql="SELECT limit FROM t",
+        )
+        assert not any(
+            "Oracle uses FETCH FIRST" in n for n in notes
+        ), notes
+
+    def test_unqualified_top_column_not_clause(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "tsql", "mysql",
+            source_sql="SELECT top FROM t",
+            final_sql="SELECT * FROM t LIMIT 5",
+        )
+        assert not any(
+            "TOP" in n and "LIMIT" in n for n in notes
+        ), notes
+
+    def test_unqualified_merge_column_not_merge_construct(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "postgres", "mysql",
+            source_sql="SELECT merge FROM t",
+            final_sql="SELECT merge FROM t",
+        )
+        assert not any(
+            "MERGE syntax varies" in n for n in notes
+        ), notes
+
+    def test_unqualified_pivot_column_not_pivot_construct(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "oracle", "postgres",
+            source_sql="SELECT pivot FROM t",
+            final_sql="SELECT pivot FROM t",
+        )
+        assert not any(
+            "PIVOT/UNPIVOT syntax varies" in n for n in notes
+        ), notes
+
+    def test_unqualified_unpivot_column_not_pivot_construct(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "oracle", "postgres",
+            source_sql="SELECT unpivot FROM t",
+            final_sql="SELECT unpivot FROM t",
+        )
+        assert not any(
+            "PIVOT/UNPIVOT syntax varies" in n for n in notes
+        ), notes
+
+    def test_unqualified_auto_increment_column_not_advisory(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "mysql", "postgres",
+            source_sql="SELECT auto_increment FROM t",
+            final_sql="SELECT auto_increment FROM t",
+        )
+        assert not any(
+            "AUTO_INCREMENT" in n and "varies" in n for n in notes
+        ), notes
+
+    def test_quoted_identifier_not_clause(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "postgres", "oracle",
+            source_sql='SELECT "limit" FROM t',
+            final_sql='SELECT "limit" FROM t',
+        )
+        assert not any(
+            "Oracle uses FETCH FIRST" in n for n in notes
+        ), notes
+
+    def test_comment_keyword_not_clause(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "postgres", "mysql",
+            source_sql="SELECT 1 -- MERGE INTO t USING s ON (t.id = s.id)",
+            final_sql="SELECT 1",
+        )
+        assert not any(
+            "MERGE syntax varies" in n for n in notes
+        ), notes
+
+    def test_real_limit_clauses_still_detected(self, transpiler):
+        for sql in (
+            "SELECT * FROM t LIMIT 5",
+            "SELECT * FROM t ORDER BY id LIMIT 5",
+        ):
+            result = transpiler.transpile(sql, "postgres", "oracle")
+            assert any(
+                "Oracle uses FETCH FIRST" in n
+                for n in result.compatibility_notes
+            ), (sql, result.compatibility_notes)
+
+    def test_real_top_clause_still_detected(self, transpiler):
+        result = transpiler.transpile(
+            "SELECT TOP 5 * FROM t", "tsql", "mysql"
+        )
+        assert any(
+            "TOP" in n and "LIMIT" in n
+            for n in result.compatibility_notes
+        ), result.compatibility_notes
+
+    def test_real_merge_pivot_unpivot_still_detected(self, transpiler):
+        result = transpiler.transpile(
+            "MERGE INTO t USING s ON (t.id = s.id) "
+            "WHEN MATCHED THEN UPDATE SET t.v = s.v",
+            "postgres", "mysql",
+        )
+        assert any(
+            "MERGE syntax varies" in n
+            for n in result.compatibility_notes
+        ), result.compatibility_notes
+
+        result = transpiler.transpile(
+            "SELECT * FROM t PIVOT (SUM(v) FOR k IN ('a','b'))",
+            "oracle", "postgres",
+        )
+        assert any(
+            "PIVOT/UNPIVOT syntax varies" in n
+            for n in result.compatibility_notes
+        ), result.compatibility_notes
+
+        result = transpiler.transpile(
+            "SELECT * FROM t UNPIVOT (v FOR k IN (a, b))",
+            "oracle", "postgres",
+        )
+        assert any(
+            "PIVOT/UNPIVOT syntax varies" in n
+            for n in result.compatibility_notes
+        ), result.compatibility_notes
+
+    def test_real_auto_increment_type_still_detected(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "mysql", "postgres",
+            source_sql="CREATE TABLE x (id INT AUTO_INCREMENT PRIMARY KEY)",
+            final_sql="CREATE TABLE x (id SERIAL PRIMARY KEY)",
+        )
+        assert any(
+            "AUTO_INCREMENT" in n and "varies" in n for n in notes
+        ), notes

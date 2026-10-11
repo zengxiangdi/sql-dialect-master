@@ -201,6 +201,19 @@ _FUNCTION_FORM_CONSTRUCTS = frozenset({
 # USERDEFINED DataType carrying ``kind == "VARRAY"``.
 _TYPE_CONSTRUCTS = frozenset({"ARRAY", "MAP", "JSON", "VARRAY"})
 
+# Clause/grammar keywords whose evidence requires SYNTAX context: a
+# bare identifier whose text equals one of these is a column, not a
+# clause.  Verified against the parsed AST (see
+# _contains_clause_construct).
+_CLAUSE_AST_CONSTRUCTS = frozenset({
+    "LIMIT", "TOP", "MERGE", "PIVOT", "UNPIVOT", "AUTO_INCREMENT",
+})
+
+# APPLY is a T-SQL join keyword; grammar evidence requires it to follow
+# CROSS or OUTER.  A column named ``apply`` or a reference ``t.apply``
+# never matches.
+_APPLY_PATTERN = r"(?<![\w$])(?:CROSS|OUTER)\s+APPLY(?![\w$])"
+
 # SQL identifier character model: Unicode word characters (letters,
 # digits, underscore — Python's ``\w``) plus ``$`` (a T-SQL / Databricks
 # identifier character).  sqlglot tokenizes ``limit$column`` and
@@ -241,6 +254,43 @@ def _contains_type_construct(sql: str, dialect: str, construct: str) -> bool:
     return False
 
 
+def _contains_clause_construct(sql: str, dialect: str, construct: str) -> bool:
+    """AST evidence that ``sql`` (in ``dialect``) contains the clause keyword.
+
+    A bare identifier whose text equals LIMIT/TOP/MERGE/PIVOT/UNPIVOT/
+    AUTO_INCREMENT is a column, not a clause; only the parsed AST's
+    clause nodes count as evidence:
+    * LIMIT and TOP both parse to ``exp.Limit`` (sqlglot represents
+      T-SQL ``TOP n`` as a Limit node, distinguished from a plain LIMIT
+      by the source dialect);
+    * MERGE parses to ``exp.Merge``;
+    * PIVOT / UNPIVOT parse to ``exp.Pivot`` (the ``unpivot`` flag
+      distinguishes them);
+    * AUTO_INCREMENT parses to ``exp.AutoIncrementColumnConstraint``
+      (DDL column constraint).
+    Parse failures yield no evidence (fail closed).
+    """
+    try:
+        tree = sqlglot.parse_one(sql, read=dialect)
+    except Exception:
+        return False
+    if construct in ("LIMIT", "TOP"):
+        return tree.find(exp.Limit) is not None
+    if construct == "MERGE":
+        return tree.find(exp.Merge) is not None
+    if construct in ("PIVOT", "UNPIVOT"):
+        for node in tree.find_all(exp.Pivot):
+            is_unpivot = bool(getattr(node, "unpivot", False))
+            if construct == "UNPIVOT" and is_unpivot:
+                return True
+            if construct == "PIVOT" and not is_unpivot:
+                return True
+        return False
+    if construct == "AUTO_INCREMENT":
+        return tree.find(exp.AutoIncrementColumnConstraint) is not None
+    return False
+
+
 def _contains_construct(
     masked_upper: str, sql: str, dialect: str, construct: str
 ) -> bool:
@@ -259,15 +309,17 @@ def _contains_construct(
     * type constructs (``ARRAY``, ``MAP``, ``JSON``, ``VARRAY``) are
       verified as DataType nodes in the parsed AST of the given
       dialect, never as standalone tokens;
-    * other single-word constructs (``LIMIT``, ``TOP``, ``MERGE``,
-      ``PIVOT``, ``UNPIVOT``, ``AUTO_INCREMENT``, ``APPLY``, …) match
-      as whole tokens with identifier boundaries on both sides and
-      must not be qualified references (``t.LIMIT`` is not a LIMIT
-      clause).
+    * clause keywords (``LIMIT``, ``TOP``, ``MERGE``, ``PIVOT``,
+      ``UNPIVOT``, ``AUTO_INCREMENT``) are verified as clause AST nodes
+      — a bare column named ``limit`` is not a LIMIT clause;
+    * ``APPLY`` requires the grammar form ``CROSS|OUTER APPLY``;
+    * any other single-word construct matches as a whole token with
+      identifier boundaries and must not be a qualified reference
+      (``t.LIMIT`` is not a LIMIT clause).
 
     ``masked_upper`` must already be the executable-masked, upper-cased
     view produced by ``_executable_upper``; ``sql`` is the original
-    (unmasked) SQL, used for AST-based type evidence.
+    (unmasked) SQL, used for AST-based type and clause evidence.
     """
     words = construct.split()
     if len(words) > 1:
@@ -278,6 +330,10 @@ def _contains_construct(
     name = words[0].rstrip("()")
     if name in _TYPE_CONSTRUCTS:
         return _contains_type_construct(sql, dialect, name)
+    if name in _CLAUSE_AST_CONSTRUCTS:
+        return _contains_clause_construct(sql, dialect, name)
+    if name == "APPLY":
+        return re.search(_APPLY_PATTERN, masked_upper) is not None
     if name in _FUNCTION_FORM_CONSTRUCTS or construct.endswith("()"):
         pattern = _IDENT_START + re.escape(name) + r"\s*\("
         return re.search(pattern, masked_upper) is not None
