@@ -240,7 +240,14 @@ _TOP_SELECT_PATTERN = re.compile(
 # TOP evidence is therefore only counted for dialects in this set —
 # dialects without TOP grammar never produce TOP evidence from the
 # text position alone.
-_TOP_CLAUSE_DIALECTS = frozenset({"oracle", "tsql", "snowflake", "redshift"})
+#
+# Oracle is deliberately ABSENT even though its lenient parser accepts
+# SELECT TOP: Oracle's official row-limiting syntax is OFFSET/FETCH
+# (a Fetch node), not SQL Server-style TOP.  A Limit node in Oracle SQL
+# can only come from lenient-parsed invalid TOP, whose identity cannot
+# be confirmed — handled by the explicit oracle fail-closed guard in
+# _contains_clause_construct instead of by this set.
+_TOP_CLAUSE_DIALECTS = frozenset({"tsql", "snowflake", "redshift"})
 
 # SQL identifier character model: Unicode word characters (letters,
 # digits, underscore — Python's ``\w``) plus ``$`` (a T-SQL / Databricks
@@ -334,6 +341,15 @@ def _contains_clause_construct(
         #   _TOP_CLAUSE_DIALECTS — a column named ``top`` in e.g.
         #   postgres/mysql never counts);
         # * LIMIT evidence: at least one Limit node is NOT a TOP.
+        if dialect == "oracle":
+            # Oracle's official row-limiting is OFFSET/FETCH (a Fetch
+            # node, handled above as "no Limit node").  A Limit node in
+            # Oracle SQL can only come from sqlglot's lenient parse of
+            # the SQL Server-style SELECT TOP, which is not valid
+            # Oracle syntax — neither TOP nor LIMIT identity can be
+            # confirmed, so fail closed for both instead of letting the
+            # fall-through counting reclassify the same input as LIMIT.
+            return False
         top_count = (
             len(_TOP_SELECT_PATTERN.findall(masked_upper))
             if dialect in _TOP_CLAUSE_DIALECTS

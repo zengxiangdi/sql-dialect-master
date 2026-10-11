@@ -1359,3 +1359,72 @@ class TestB23I_TopEvidenceRespectsSourceDialect:
             "Oracle uses FETCH FIRST" in n
             for n in result.compatibility_notes
         ), result.compatibility_notes
+
+
+# ── B2-3j — Oracle TOP is not valid syntax: fail closed ─────────────────────
+
+class TestB23J_OracleTopFailClosed:
+    """Oracle's official row-limiting is OFFSET/FETCH.  sqlglot's
+    lenient oracle parser accepts SELECT TOP and yields a Limit node,
+    but that is not valid Oracle SQL — neither TOP nor LIMIT identity
+    can be confirmed, so evidence fails closed for both."""
+
+    def test_oracle_select_top_not_top_evidence(self):
+        from backend.core.transpiler import (
+            _contains_construct,
+            _executable_upper,
+        )
+
+        sql = "SELECT TOP 5 * FROM t"
+        masked = _executable_upper(sql)
+        assert _contains_construct(masked, sql, "oracle", "TOP") is False
+        assert _contains_construct(masked, sql, "oracle", "LIMIT") is False
+
+    def test_oracle_fetch_first_not_top_or_limit_evidence(self):
+        from backend.core.transpiler import (
+            _contains_construct,
+            _executable_upper,
+        )
+
+        sql = "SELECT * FROM t FETCH FIRST 5 ROWS ONLY"
+        masked = _executable_upper(sql)
+        assert _contains_construct(masked, sql, "oracle", "TOP") is False
+        assert _contains_construct(masked, sql, "oracle", "LIMIT") is False
+
+    def test_tsql_snowflake_redshift_top_preserved(self):
+        from backend.core.transpiler import (
+            _contains_construct,
+            _executable_upper,
+        )
+
+        for dialect in ("tsql", "snowflake", "redshift"):
+            sql = "SELECT TOP 5 * FROM t"
+            masked = _executable_upper(sql)
+            assert _contains_construct(masked, sql, dialect, "TOP") is True, dialect
+            assert _contains_construct(masked, sql, dialect, "LIMIT") is False, dialect
+
+    def test_snowflake_nested_top_limit_still_both(self):
+        from backend.core.transpiler import (
+            _contains_construct,
+            _executable_upper,
+        )
+
+        for sql in (
+            "SELECT * FROM (SELECT TOP 5 * FROM inner_table) s LIMIT 10",
+            "SELECT TOP 5 * FROM (SELECT * FROM inner_table LIMIT 10) s",
+        ):
+            masked = _executable_upper(sql)
+            assert _contains_construct(masked, sql, "snowflake", "TOP") is True, sql
+            assert _contains_construct(masked, sql, "snowflake", "LIMIT") is True, sql
+
+    def test_postgres_mysql_top_column_regression(self):
+        from backend.core.transpiler import (
+            _contains_construct,
+            _executable_upper,
+        )
+
+        for dialect in ("postgres", "mysql"):
+            sql = "SELECT top FROM t LIMIT 5"
+            masked = _executable_upper(sql)
+            assert _contains_construct(masked, sql, dialect, "TOP") is False, dialect
+            assert _contains_construct(masked, sql, dialect, "LIMIT") is True, dialect
