@@ -2,6 +2,58 @@
 
 All notable changes to SQL Dialect Master are documented here.
 
+## [1.1.3] - 2026-10-12
+
+### API and security hardening
+
+- API parsing now rejects empty, multi-statement, and empty-statement SQL
+  inputs with a validation error instead of silently analyzing only the first
+  statement.
+- CPU-heavy conversion, parsing, and NL2SQL work runs outside the async event
+  loop and observes the configured request timeout.
+- Request-size, rate-limit, Redis timeout, readiness-token, cache cleanup, and
+  SQL security boundary handling were hardened, including MySQL ``#`` comments.
+- Configuration values are validated at startup; parser length limits fall
+  back to the transpiler limit and logging settings are applied consistently.
+
+### NL2SQL behavior changes
+
+- DML templates now emit target-specific parameter markers: PostgreSQL and
+  Redshift use ``$n``, Oracle uses ``:n``, T-SQL uses ``@pN``, and MySQL uses
+  ``%s``. These statements remain parameterized templates; callers must bind
+  values before execution.
+- Generated SQL that fails target-dialect validation is now reported as
+  ``success=False`` instead of being returned as a successful result.
+- ``LIMIT 0`` is preserved. Negative and excessively large limits are
+  rejected instead of being silently dropped or producing an unbounded query.
+
+### Frontend behavior changes
+
+- Convert, Diff, Batch, History, NL2SQL, Command Palette, Query Analysis, and
+  Lineage state transitions now invalidate stale results and handle malformed
+  session state safely.
+- Streamlit widget callbacks prevent Swap, Format, and Clear from raising
+  widget-state exceptions.
+- Lineage preserves schema, aliases, and self-joins with unique Mermaid IDs;
+  Query Analysis recognizes aggregate functions without GROUP BY.
+- Runtime verification is clearly marked unavailable until a database
+  connection is configured.
+
+### Packaging and compatibility
+
+- The supported sqlglot range is now ``>=30.18.0,<31.0.0``.
+- The installed package includes the Streamlit entry module and exposes the
+  ``sdm-streamlit`` console command for launching the UI from any directory.
+- DML parameter markers and strict multi-statement parsing are intentional
+  behavior changes for callers that previously relied on generic ``?``
+  markers or first-statement-only parsing.
+
+### Verification
+
+- Full test suite: 2779 passed, 6 skipped (PostgreSQL-dependent locally).
+- Ruff correctness checks, Python compilation, wheel/sdist build, installed
+  wheel smoke test, and Streamlit page smoke tests passed.
+
 ## [1.1.2] - 2026-10-11
 
 ### NL2SQL correctness (B1)
