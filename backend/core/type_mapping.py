@@ -170,7 +170,19 @@ class TypeMapper:
             target: Target dialect
 
         Returns:
-            Dictionary with mapping result
+            Dictionary with mapping result.  ``success`` is True only
+            when the conversion is actually available (``mapping_status
+            == "mapped"``).  ``mapping_status`` distinguishes:
+
+            * ``mapped``             — both dialects have a real mapping
+            * ``unsupported``        — target dialect maps to ``N/A``
+            * ``source_unavailable`` — source dialect maps to ``N/A``
+            * ``unknown_type``       — type absent from mapping data
+            * ``unknown_dialect``    — dialect outside SUPPORTED_DIALECTS
+
+            An ``N/A → N/A`` cell is never ``mapped`` (and never
+            reported as success).  ``mapped`` means a mapping entry
+            exists; it is not a claim of audited semantic equivalence.
         """
         source = source.lower()
         target = target.lower()
@@ -181,6 +193,7 @@ class TypeMapper:
         if invalid_dialects:
             return {
                 "success": False,
+                "mapping_status": "unknown_dialect",
                 "error": (
                     f"Unsupported dialect(s): {', '.join(invalid_dialects)}. "
                     f"Supported: {SUPPORTED_DIALECTS}"
@@ -198,6 +211,7 @@ class TypeMapper:
         if not type_info:
             return {
                 "success": False,
+                "mapping_status": "unknown_type",
                 "error": f"Type {type_name} not found in mappings",
                 "source_type": type_name.upper(),
                 "target_type": None,
@@ -209,6 +223,25 @@ class TypeMapper:
         target_type = type_info.get(target, "N/A")
         notes = type_info.get("notes", "")
 
+        # Distinguish unavailable mappings from successful ones: an
+        # N/A cell on either side means the conversion is not available
+        # and must not be reported as success.
+        if source_type == "N/A":
+            mapping_status = "source_unavailable"
+            error = (
+                f"Type {type_name.upper()} has no mapping available for "
+                f"source dialect {source}"
+            )
+        elif target_type == "N/A":
+            mapping_status = "unsupported"
+            error = (
+                f"Type {type_name.upper()} is not supported by target "
+                f"dialect {target}"
+            )
+        else:
+            mapping_status = "mapped"
+            error = None
+
         # Check for precision warnings
         warnings = []
         if canonical_type_name in self.precision_warnings:
@@ -218,8 +251,9 @@ class TypeMapper:
         warnings.extend(self._get_precision_aware_warnings(canonical_type_name, precision, source, target))
         warnings.extend(self._get_type_specific_warnings(canonical_type_name, source, target))
 
-        return {
-            "success": True,
+        result = {
+            "success": mapping_status == "mapped",
+            "mapping_status": mapping_status,
             "type_name": type_name.upper(),
             "source_dialect": source,
             "target_dialect": target,
@@ -230,6 +264,9 @@ class TypeMapper:
             "category": self.get_type_category(canonical_type_name),
             "precision": precision,
         }
+        if error is not None:
+            result["error"] = error
+        return result
     
     def _get_type_specific_warnings(
         self,

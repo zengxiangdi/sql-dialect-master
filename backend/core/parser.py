@@ -227,11 +227,43 @@ class SQLParser:
                 seen.add(name)
                 functions.append({
                     "name": name,
-                    "args_count": len(func.args) if hasattr(func, 'args') else 0,
+                    "args_count": self._actual_operand_count(func),
                     "is_aggregate": isinstance(func, (exp.AggFunc,)),
                     "is_window": isinstance(getattr(func, 'parent', None), exp.Window)
                 })
         return functions
+
+    @staticmethod
+    def _actual_operand_count(func: exp.Func) -> int:
+        """Count the real operands a function call carries.
+
+        ``len(func.args)`` counts AST *fields* — e.g. ``COUNT(*)`` has
+        three arg slots (this / expressions / big_int) for one operand,
+        and ``COALESCE(a, b, c)`` has four slots for three operands.
+
+        The stable contract is the number of expression operands:
+        * ``this`` counts when it is an sqlglot Expression (the primary
+          operand — ``UPPER(x)``, ``COUNT(*)``, ``SUM(x)``), but not
+          when it is the function name (``Anonymous.this`` is a string)
+          or None (``COUNT()``);
+        * every item of list-valued slots (``expressions``) that is an
+          Expression counts (``COALESCE(a, b, c)`` → this + [b, c]);
+        * non-expression metadata (booleans like ``big_int``, None
+          flags) never counts.
+        """
+        count = 0
+
+        def add(value) -> None:
+            nonlocal count
+            if isinstance(value, exp.Expression):
+                count += 1
+            elif isinstance(value, (list, tuple)):
+                for item in value:
+                    add(item)
+
+        for value in func.args.values():
+            add(value)
+        return count
 
     def _extract_joins(self, ast: exp.Expression) -> List[Dict[str, Any]]:
         """Extract all JOIN operations."""

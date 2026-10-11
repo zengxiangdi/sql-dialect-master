@@ -255,9 +255,22 @@ def split_sql_statements(sql: str, dialect: str = "postgres") -> list[str]:
     - PostgreSQL dollar-quoted strings ($$...$$ or $tag$...$tag$)
     - Empty statements and trailing semicolons filtered out
 
+    Dialect-specific boundaries:
+    - T-SQL: a standalone ``GO`` line (optionally ``GO <count>``) is a
+      batch separator; ``GO`` inside strings/identifiers or on a mixed
+      line is never a separator.
+    - Oracle: semicolons inside PL/SQL blocks (``BEGIN … END``, nested
+      ``CASE … END``, ``IF … END IF``, ``LOOP … END LOOP``,
+      ``WHILE … END WHILE``) are internal; the block is one statement
+      terminated by its closing ``END;``.  ``BEGIN``/``CASE``/``END``
+      are reserved words in Oracle SQL, so tracking them as block
+      markers is safe there.  SQL*Plus ``/`` line terminators are NOT
+      treated as separators (out of scope, kept as statement text).
+
     Args:
         sql: SQL text potentially containing multiple statements
-        dialect: SQL dialect hint (not used for splitting logic)
+        dialect: SQL dialect hint ("tsql" enables GO batches,
+            "oracle" enables PL/SQL block tracking)
 
     Returns:
         List of individual SQL statement strings (original text preserved)
@@ -272,17 +285,61 @@ def split_sql_statements(sql: str, dialect: str = "postgres") -> list[str]:
     in_single = False
     in_double = False
     in_backtick = False
+    at_line_start = True
+    block_depth = 0
+    skip_next_block_word = False
 
     # Sentinel values to distinguish "inside $$" from "not in dollar quote"
     _IN_DOLLAR_EMPTY = object()  # inside $$...$$
     _NOT_IN_DOLLAR = None        # not inside any dollar quote
     dollar_tag = _NOT_IN_DOLLAR
 
+    _WORD_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
+    _GO_LINE_RE = re.compile(r"^GO\b(?:\s+\d+)?\s*$", re.IGNORECASE)
+
+    def flush_statement() -> None:
+        statement = "".join(stmt_chars).strip()
+        if statement:
+            statements.append(statement)
+        stmt_chars.clear()
+
+    def consume_line() -> None:
+        """Append the rest of the current line verbatim."""
+        nonlocal i
+        while i < n and sql[i] != "\n":
+            stmt_chars.append(sql[i])
+            i += 1
+
+    def peek_block_word() -> str:
+        """Return the next identifier word at ``i`` (uppercased) or ''."""
+        match = _WORD_RE.match(sql, i)
+        return match.group(0).upper() if match else ""
+
     while i < n:
         ch = sql[i]
 
+        # ── T-SQL GO batch separator (standalone line only) ──
+        if (
+            dialect.lower() == "tsql"
+            and at_line_start
+            and not in_single and not in_double and not in_backtick
+            and dollar_tag is _NOT_IN_DOLLAR
+            and ch in "Gg"
+        ):
+            line = sql[i:]
+            newline = line.find("\n")
+            line_text = line if newline == -1 else line[:newline]
+            if _GO_LINE_RE.match(line_text):
+                flush_statement()
+                i += len(line_text)
+                if i < n and sql[i] == "\n":
+                    i += 1
+                at_line_start = True
+                continue
+
         # ── Dollar-quoted string content ──
         if dollar_tag is not _NOT_IN_DOLLAR:
+            at_line_start = False
             # We're inside a dollar-quoted string
             if dollar_tag is _IN_DOLLAR_EMPTY:
                 # Looking for closing $$
@@ -308,6 +365,7 @@ def split_sql_statements(sql: str, dialect: str = "postgres") -> list[str]:
 
         # ── Start of dollar-quoted string ──
         if ch == "$" and not in_single and not in_double and not in_backtick:
+            at_line_start = False
             # Check for $$ (empty tag)
             if i + 1 < n and sql[i + 1] == "$":
                 stmt_chars.append("$$")
@@ -336,6 +394,7 @@ def split_sql_statements(sql: str, dialect: str = "postgres") -> list[str]:
 
         # ── Single-quoted strings ──
         if ch == "'" and not in_double and not in_backtick:
+            at_line_start = False
             if i + 1 < n and sql[i + 1] == "'":
                 stmt_chars.append("''")
                 i += 2
@@ -347,6 +406,7 @@ def split_sql_statements(sql: str, dialect: str = "postgres") -> list[str]:
 
         # ── Double-quoted identifiers ──
         if ch == '"' and not in_single and not in_backtick:
+            at_line_start = False
             in_double = not in_double
             stmt_chars.append(ch)
             i += 1
@@ -354,6 +414,7 @@ def split_sql_statements(sql: str, dialect: str = "postgres") -> list[str]:
 
         # ── Backtick identifiers (MySQL) ──
         if ch == "`" and not in_single and not in_double:
+            at_line_start = False
             in_backtick = not in_backtick
             stmt_chars.append(ch)
             i += 1
@@ -361,6 +422,7 @@ def split_sql_statements(sql: str, dialect: str = "postgres") -> list[str]:
 
         # ── Line comments ──
         if ch == "-" and i + 1 < n and sql[i + 1] == "-":
+            at_line_start = False
             stmt_chars.append(ch)
             i += 1
             while i < n and sql[i] != "\n":
@@ -370,6 +432,7 @@ def split_sql_statements(sql: str, dialect: str = "postgres") -> list[str]:
 
         # ── Block comments ──
         if ch == "/" and i + 1 < n and sql[i + 1] == "*":
+            at_line_start = False
             stmt_chars.append("/*")
             i += 2
             while i + 1 < n:
@@ -386,22 +449,43 @@ def split_sql_statements(sql: str, dialect: str = "postgres") -> list[str]:
                     i += 1
             continue
 
+        # ── Oracle PL/SQL block-depth keyword tracking ──
+        if dialect.lower() == "oracle" and ch.isalpha():
+            word = peek_block_word()
+            if word:
+                if skip_next_block_word:
+                    skip_next_block_word = False
+                elif word == "BEGIN":
+                    block_depth += 1
+                elif word == "CASE":
+                    block_depth += 1
+                elif word == "END":
+                    block_depth = max(0, block_depth - 1)
+                    # "END IF" / "END LOOP" / "END WHILE": the trailing
+                    # keyword closes the same block — do not re-push it.
+                    after = sql[i + len(word):]
+                    trailing = re.match(r"^\s+(IF|LOOP|WHILE)\b", after, re.IGNORECASE)
+                    if trailing:
+                        skip_next_block_word = True
+                elif word in ("IF", "LOOP", "WHILE") and block_depth > 0:
+                    block_depth += 1
+                stmt_chars.append(sql[i:i + len(word)])
+                i += len(word)
+                at_line_start = False
+                continue
+
         # ── Statement terminator ──
-        if ch == ";" and not in_single and not in_double and not in_backtick:
-            statement = "".join(stmt_chars).strip()
-            if statement:
-                statements.append(statement)
-            stmt_chars = []
+        if ch == ";" and not in_single and not in_double and not in_backtick and block_depth == 0:
+            flush_statement()
             i += 1
+            at_line_start = False
             continue
 
         # ── Normal character ──
         stmt_chars.append(ch)
         i += 1
+        at_line_start = ch == "\n"
 
     # Last statement without trailing semicolon
-    last = "".join(stmt_chars).strip()
-    if last:
-        statements.append(last)
-
+    flush_statement()
     return statements
