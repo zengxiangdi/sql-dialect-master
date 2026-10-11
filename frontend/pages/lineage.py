@@ -7,6 +7,8 @@ import streamlit as st
 from frontend.app_context_v2 import DIALECTS, get_dialect_label
 from frontend.core.design_tokens import ColorTokens
 from frontend.core.escaping import esc
+from frontend.core.fingerprints import input_fingerprint
+from frontend.core.sql_inputs import parse_single_sql
 from frontend.core.state import SessionState
 from frontend.core.viewmodels import (
     LineageOutputColumn,
@@ -48,13 +50,19 @@ def render_lineage_page(theme: ColorTokens) -> None:
         placeholder="SELECT u.name AS user_name, COUNT(o.id) AS order_count FROM users u LEFT JOIN orders o ON u.id = o.user_id GROUP BY u.name",
     )
 
+    fingerprint = input_fingerprint(sql, dialect)
+    if state.get_raw("lineage_last_fingerprint") != fingerprint:
+        state.lineage_last_vm = None
+
     if st.button("Analyze", type="primary", key="lineage_analyze", use_container_width=True):
+        state.lineage_last_vm = None
         if not sql.strip():
             st.warning("Please enter SQL to analyze.")
         else:
             try:
                 vm = _build_lineage(sql, dialect)
                 state.lineage_last_vm = vm
+                state.set_raw("lineage_last_fingerprint", fingerprint)
                 st.rerun()
             except Exception as e:  # noqa: BLE001
                 st.error(f"Parse error: {esc(str(e))}")
@@ -90,17 +98,22 @@ def render_lineage_page(theme: ColorTokens) -> None:
 
 def _build_lineage(sql: str, dialect: str) -> LineageViewModel:
     """Build a LineageViewModel from SQL using sqlglot AST."""
-    parsed = sqlglot.parse_one(sql, read=dialect)
+    parsed = parse_single_sql(sql, dialect)
 
     # Extract tables
     tables = []
-    seen = set()
+    seen: set[tuple[str, str]] = set()
     for t in parsed.find_all(sqlglot.exp.Table):
         name = t.name
+        # Preserve catalog/schema qualification in the display label.  The
+        # alias remains the node identity for joins and self-joins.
+        qualifiers = [str(part) for part in (getattr(t, "catalog", None), getattr(t, "db", None), name) if part]
+        name = ".".join(qualifiers)
         alias = t.alias or name
-        if name not in seen:
-            tables.append(LineageTable(name=name, alias=alias))
-            seen.add(name)
+        identity = (name, alias)
+        if identity not in seen:
+            tables.append(LineageTable(name=name, alias=alias, node_id=f"table_{len(tables)}"))
+            seen.add(identity)
 
     # Extract output columns from SELECT
     output_columns = []
@@ -113,6 +126,7 @@ def _build_lineage(sql: str, dialect: str) -> LineageViewModel:
                 output_columns.append(LineageOutputColumn(
                     name=str(col_name),
                     expression=str(expr),
+                    node_id=f"column_{len(output_columns)}",
                 ))
 
     # Extract column references
@@ -139,9 +153,12 @@ def _build_mermaid(vm: LineageViewModel) -> str:
 
     # Source tables
     lines.append("    subgraph sources[\"Sources\"]")
-    for t in vm.tables:
-        safe_id = sanitize_mermaid_id(t.name)
-        lines.append(f"        {safe_id}[\"{esc(sanitize_mermaid_label(t.name))}\"]")
+    table_ids: dict[int, str] = {}
+    for i, t in enumerate(vm.tables):
+        safe_id = sanitize_mermaid_id(t.node_id or f"table_{i}")
+        table_ids[i] = safe_id
+        label = t.name if not t.alias or t.alias == t.name else f"{t.name} ({t.alias})"
+        lines.append(f"        {safe_id}[\"{esc(sanitize_mermaid_label(label))}\"]")
     lines.append("    end")
 
     # Query node
@@ -150,18 +167,18 @@ def _build_mermaid(vm: LineageViewModel) -> str:
     # Output
     lines.append("    subgraph output[\"Output\"]")
     lines.append('        RESULT["Result Set"]')
-    for oc in vm.output_columns[:6]:
-        safe_id = sanitize_mermaid_id(oc.name)
+    output_ids: dict[int, str] = {}
+    for i, oc in enumerate(vm.output_columns[:6]):
+        safe_id = sanitize_mermaid_id(oc.node_id or f"column_{i}")
+        output_ids[i] = safe_id
         lines.append(f"        {safe_id}[\"{esc(sanitize_mermaid_label(oc.name))}\"]")
     lines.append("    end")
 
     # Edges
-    for t in vm.tables:
-        safe_id = sanitize_mermaid_id(t.name)
+    for safe_id in table_ids.values():
         lines.append(f"    {safe_id} --> QUERY")
     lines.append("    QUERY --> RESULT")
-    for oc in vm.output_columns[:6]:
-        safe_id = sanitize_mermaid_id(oc.name)
+    for safe_id in output_ids.values():
         lines.append(f"    RESULT --> {safe_id}")
 
     lines.append("```")

@@ -118,10 +118,14 @@ SEMANTIC_STATUS_LABELS: dict[str, str] = {
 }
 
 SEMANTIC_STATUS_COLOR: dict[str, str] = {
-    "equivalent": "success",
-    "structurally_equivalent": "success",
+    # Values use the canonical StatusKind vocabulary consumed by all status
+    # renderers.  ``success``/``danger`` were legacy color names and caused
+    # equivalent/different results to fall back to neutral or report success
+    # as false in the view models.
+    "equivalent": "valid",
+    "structurally_equivalent": "valid",
     "potentially_different": "warning",
-    "definitely_different": "danger",
+    "definitely_different": "error",
     "unknown": "warning",
     "parse_error": "error",
 }

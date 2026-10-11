@@ -106,6 +106,7 @@ def _render_history_entry(
                     action="open_conversion",
                     sql=entry.get("sql", ""),
                     dialect=entry.get("src", "postgres"),
+                    target_dialect=entry.get("tgt", "mysql"),
                     origin="history",
                 )
                 st.session_state.sdm_navigation_intent = intent
@@ -114,12 +115,14 @@ def _render_history_entry(
             if st.button("Copy", key=f"hist_copy_{identity}"):
                 copy_sql(entry.get("sql", ""), key=f"hist_copy_sql_{identity}")
         with col_fav:
-            if not state.is_favorite(identity):
-                if st.button("☆", key=f"hist_fav_{identity}"):
-                    state.add_favorite(identity)
-                    st.rerun()
-            else:
-                st.button("★", key=f"hist_fav_{identity}", disabled=True)
+            is_favorite = state.is_favorite(identity)
+            if st.button(
+                "★" if is_favorite else "☆",
+                key=f"hist_fav_{identity}",
+                help="Remove from favorites" if is_favorite else "Add to favorites",
+            ):
+                state.toggle_favorite(identity)
+                st.rerun()
         with col_del:
             if st.button("Del", key=f"hist_del_{identity}"):
                 state.remove_history_entry(identity)

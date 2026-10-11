@@ -12,6 +12,8 @@ from datetime import UTC, datetime
 
 import streamlit as st
 
+from backend.core.constants import MAX_BATCH_SIZE
+from backend.core.exceptions import ValidationError
 from frontend.app_context_v2 import (
     DIALECTS,
     batch_convert_sql,
@@ -24,6 +26,7 @@ from frontend.core.design_tokens import (
     ColorTokens,
 )
 from frontend.core.escaping import esc
+from frontend.core.fingerprints import input_fingerprint
 from frontend.core.navigation import create_navigation_intent
 from frontend.core.state import SessionState
 from frontend.core.viewmodels import (
@@ -31,6 +34,57 @@ from frontend.core.viewmodels import (
     ConversionViewModel,
 )
 from frontend.ui.status import render_batch_result, render_result_panel
+
+
+def _clear_conversion_result(state: SessionState) -> None:
+    """Drop conversion output whenever its source tuple changes."""
+    state.convert_last_vm = None
+    state.convert_target_sql = ""
+    state.convert_last_fingerprint = None
+
+
+def _invalidate_stale_conversion(state: SessionState, fingerprint: str) -> None:
+    """Invalidate a conversion result computed for different inputs."""
+    if (
+        (state.convert_last_vm is not None or state.convert_target_sql)
+        and state.convert_last_fingerprint != fingerprint
+    ):
+        _clear_conversion_result(state)
+
+
+def _invalidate_stale_batch(state: SessionState, fingerprint: str) -> None:
+    """Invalidate a batch result computed for different inputs."""
+    if state.batch_last_vm is not None and state.batch_last_fingerprint != fingerprint:
+        state.batch_last_vm = None
+        state.batch_last_fingerprint = None
+
+
+def _swap_dialects() -> None:
+    """Swap converter dialect widget values in a button callback.
+
+    Streamlit invokes callbacks before the next script run, which permits
+    updating widget keys safely without mutating them after instantiation.
+    """
+    src = st.session_state.get("convert_src", "postgres")
+    tgt = st.session_state.get("convert_tgt", "mysql")
+    st.session_state["convert_src"] = tgt
+    st.session_state["convert_tgt"] = src
+    _clear_conversion_result(SessionState.get())
+
+
+def _format_source_sql() -> None:
+    """Format the source editor value from a Streamlit callback."""
+    sql = st.session_state.get("convert_src_sql", "")
+    dialect = st.session_state.get("convert_src", "postgres")
+    if sql.strip():
+        st.session_state["convert_src_sql"] = format_sql_local(sql, dialect)
+    _clear_conversion_result(SessionState.get())
+
+
+def _clear_source_sql() -> None:
+    """Clear the source editor value from a Streamlit callback."""
+    st.session_state["convert_src_sql"] = ""
+    _clear_conversion_result(SessionState.get())
 
 
 def render_convert_page(theme: ColorTokens) -> None:
@@ -59,9 +113,12 @@ def render_convert_page(theme: ColorTokens) -> None:
     # Swap button between selectors
     col_swap, _ = st.columns([1, 10])
     with col_swap:
-        if st.button("⇄", key="swap_dialects", help="Swap source and target dialects"):
-            st.session_state.convert_src, st.session_state.convert_tgt = st.session_state.convert_tgt, st.session_state.convert_src
-            st.rerun()
+        st.button(
+            "⇄",
+            key="swap_dialects",
+            help="Swap source and target dialects",
+            on_click=_swap_dialects,
+        )
 
     # ── SQL editors (two-panel) ────────────────────────────────────
     col_src, col_tgt = st.columns([1, 1])
@@ -83,14 +140,25 @@ def render_convert_page(theme: ColorTokens) -> None:
 
         col_fmt, col_clear = st.columns([1, 1])
         with col_fmt:
-            if st.button("Format", key="format_src", use_container_width=True, type="secondary"):
-                formatted = format_sql_local(src_sql, src_dialect)
-                st.session_state.convert_src_sql = formatted
-                st.rerun()
+            st.button(
+                "Format",
+                key="format_src",
+                use_container_width=True,
+                type="secondary",
+                on_click=_format_source_sql,
+            )
         with col_clear:
-            if st.button("Clear", key="clear_src", use_container_width=True):
-                st.session_state.convert_src_sql = ""
-                st.rerun()
+            st.button(
+                "Clear",
+                key="clear_src",
+                use_container_width=True,
+                on_click=_clear_source_sql,
+            )
+
+    # A result belongs to the exact source/target/dialect tuple that produced
+    # it.  Invalidate it before rendering the target panel if any input changed.
+    current_fingerprint = input_fingerprint(src_sql, src_dialect, tgt_dialect)
+    _invalidate_stale_conversion(state, current_fingerprint)
 
     with col_tgt:
         st.markdown(
@@ -133,6 +201,7 @@ def render_convert_page(theme: ColorTokens) -> None:
         vm = ConversionViewModel.from_transpile_result(result)
         state.convert_last_vm = vm
         state.convert_target_sql = vm.target_sql or ""
+        state.convert_last_fingerprint = current_fingerprint
 
         # Add to history
         _add_to_history(state, vm, theme)
@@ -229,18 +298,37 @@ def _render_batch_section(src_dialect: str, tgt_dialect: str, theme: ColorTokens
     with col_bt:
         batch_tgt = st.selectbox("Target", DIALECTS, index=DIALECTS.index("mysql") if "mysql" in DIALECTS else 0,
                                    key="batch_tgt", label_visibility="collapsed")
+
+    batch_fingerprint = input_fingerprint(batch_sql, batch_src, batch_tgt)
+    _invalidate_stale_batch(state, batch_fingerprint)
+
     with col_bb:
         if st.button("Convert All", key="batch_convert_btn", type="primary", use_container_width=True):
             if not batch_sql.strip():
                 st.warning("Please enter SQL statements.")
             else:
+                batch_error: str | None = None
                 with st.spinner("Batch converting..."):
-                    # Use canonical backend for proper semicolon splitting
-                    statements = split_sql_statements(batch_sql, batch_src)
-                    results = batch_convert_sql(statements, batch_src, batch_tgt)
-                    bvm = BatchConversionViewModel.from_results(statements, results)
-                    state.batch_last_vm = bvm
-                st.rerun()
+                    try:
+                        # Use canonical backend for proper semicolon splitting
+                        statements = split_sql_statements(batch_sql, batch_src)
+                        if len(statements) > MAX_BATCH_SIZE:
+                            raise ValidationError(
+                                f"Batch contains {len(statements)} statements; maximum is {MAX_BATCH_SIZE}",
+                                field="statements",
+                                value=str(len(statements)),
+                            )
+                        results = batch_convert_sql(statements, batch_src, batch_tgt)
+                    except ValidationError as exc:
+                        batch_error = str(exc)
+                    else:
+                        bvm = BatchConversionViewModel.from_results(statements, results)
+                        state.batch_last_vm = bvm
+                        state.batch_last_fingerprint = batch_fingerprint
+                if batch_error:
+                    st.error(f"Batch conversion failed: {esc(batch_error)}")
+                else:
+                    st.rerun()
 
     bvm: BatchConversionViewModel | None = state.batch_last_vm
     if bvm is not None:

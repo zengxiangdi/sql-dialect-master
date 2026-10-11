@@ -3,7 +3,7 @@
 # The canonical package metadata lives in pyproject.toml.
 # For normal installation use: python -m pip install -e .
 
-sqlglot>=25.0.0
+sqlglot>=30.18.0,<31.0.0
 streamlit>=1.38.0
 fastapi>=0.115.0
 uvicorn>=0.30.0

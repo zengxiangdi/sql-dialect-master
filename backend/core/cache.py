@@ -48,6 +48,8 @@ class TTLCache:
         """
         if max_size <= 0:
             raise ValueError("max_size must be greater than 0")
+        if ttl < 0:
+            raise ValueError("ttl must be greater than or equal to 0")
         self._cache: OrderedDict[str, CacheEntry] = OrderedDict()
         self._max_size = max_size
         self._ttl = ttl
@@ -222,10 +224,18 @@ class TTLCache:
                 except Exception as e:
                     logger.error(f"Background cleanup error: {e}")
 
-        thread = threading.Thread(target=cleanup_loop, daemon=True, name="CacheCleanup")
         with self._lock:
+            # Check, assign and start under the same lock.  Keeping the
+            # assignment inside the critical section closes the TOCTOU window
+            # where two concurrent callers both observe no live thread and
+            # each start a cleanup worker.
+            if self._cleanup_thread is not None and self._cleanup_thread.is_alive():
+                raise RuntimeError(
+                    "background cleanup is already running for this cache"
+                )
+            thread = threading.Thread(target=cleanup_loop, daemon=True, name="CacheCleanup")
             self._cleanup_thread = thread
-        thread.start()
+            thread.start()
         logger.info(f"Started background cache cleanup (interval={interval}s)")
         return thread
 

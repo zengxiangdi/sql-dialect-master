@@ -11,6 +11,7 @@ Enterprise-grade multi-database SQL conversion API:
 Exact counts are derived from the canonical data files at runtime —
 see backend.core.metadata — and must not be restated here.
 """
+import asyncio
 import logging
 import time
 from datetime import datetime
@@ -19,6 +20,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.core.config import get_dialect_api_info, settings, setup_logging
@@ -32,9 +34,26 @@ from backend.core.type_mapping import TypeMapper
 
 from backend.api.readiness import health_probe_response
 
-# Configure logging for the application
-logger = setup_logging(level=logging.INFO)
+# Configure logging for the application from the validated settings object.
+# Keep an INFO fallback for defensive compatibility with custom settings
+# objects, while normal AppSettings values are resolved from SDM_LOG_LEVEL.
+_log_level = getattr(logging, settings.log_level.upper(), logging.INFO)
+logger = setup_logging(level=_log_level, log_file=settings.log_file or None)
 api_logger = logging.getLogger(__name__)
+
+
+async def _run_cpu_bound(func, *args):
+    """Run parser/transpiler work off-loop with the configured timeout."""
+    try:
+        return await asyncio.wait_for(
+            run_in_threadpool(func, *args),
+            timeout=settings.request_timeout,
+        )
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(
+            status_code=504,
+            detail="Request processing timed out",
+        ) from exc
 
 # API metadata
 API_VERSION = settings.api_version
@@ -199,7 +218,10 @@ class ConvertRequest(BaseModel):
     sql: str = Field(..., description="Source SQL statement to convert")
     source_dialect: str = Field(..., description="Source database dialect")
     target_dialect: str = Field(..., description="Target database dialect")
-    pretty: bool = Field(True, description="Format output SQL with indentation")
+    pretty: bool = Field(
+        settings.transpiler_pretty_default,
+        description="Format output SQL with indentation",
+    )
 
     model_config = ConfigDict(json_schema_extra={
         "example": {
@@ -402,11 +424,14 @@ async def convert_sql(request: ConvertRequest):
             detail=f"Unsupported target dialect: {request.target_dialect}. Supported: {SUPPORTED_DIALECTS}"
         )
 
-    result = transpiler.transpile(
+    # sqlglot parsing/transpilation is CPU-bound.  Keep it off the event loop
+    # so one large request cannot stall unrelated async requests.
+    result = await _run_cpu_bound(
+        transpiler.transpile,
         request.sql,
         source_dialect,
         target_dialect,
-        request.pretty
+        request.pretty,
     )
     return ConvertResponse(
         success=result.success,
@@ -431,7 +456,10 @@ async def parse_sql(request: ParseRequest):
     """
     dialect = normalize_dialect(request.dialect)
     parser = SQLParser(dialect)
-    elements = parser.extract_elements(request.sql)
+    parsed = await _run_cpu_bound(parser.parse, request.sql)
+    if not parsed.success:
+        raise HTTPException(status_code=422, detail=parsed.error or "SQL parsing failed")
+    elements = await _run_cpu_bound(parser.extract_elements, request.sql)
     return {
         "success": True,
         "dialect": dialect,
@@ -458,7 +486,7 @@ async def list_functions(
     if search:
         functions = func_encyclopedia.search(search, limit)
     elif category:
-        functions = func_encyclopedia.list_by_category(category)
+        functions = func_encyclopedia.list_by_category(category)[:limit]
     else:
         functions = func_encyclopedia.functions[:limit]
 
@@ -598,7 +626,8 @@ async def generate_sql(request: NL2SQLRequest):
                 "dotted identifier"
             ),
         )
-    result = nl2sql_generator.generate(
+    result = await _run_cpu_bound(
+        nl2sql_generator.generate,
         request.text,
         dialect,
         request.table_hint,
@@ -611,7 +640,7 @@ async def generate_sql(request: NL2SQLRequest):
         dialect=dialect,
         explanation=result.explanation,
         confidence=result.confidence,
-        suggestions=result.suggestions
+        suggestions=list(result.suggestions[: settings.nl2sql_max_suggestions])
     )
 
 @app.get("/health", tags=["system"])

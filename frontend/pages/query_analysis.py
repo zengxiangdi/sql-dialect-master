@@ -10,6 +10,8 @@ import streamlit as st
 from frontend.app_context_v2 import DIALECTS, get_dialect_label
 from frontend.core.design_tokens import ColorTokens
 from frontend.core.escaping import esc
+from frontend.core.fingerprints import input_fingerprint
+from frontend.core.sql_inputs import parse_single_sql
 from frontend.core.state import SessionState
 
 
@@ -49,13 +51,19 @@ def render_query_analysis_page(theme: ColorTokens) -> None:
         placeholder="SELECT u.name, COUNT(o.id) AS order_count FROM users u JOIN orders o ON u.id = o.user_id GROUP BY u.name ORDER BY order_count DESC LIMIT 10",
     )
 
+    fingerprint = input_fingerprint(sql, dialect)
+    if state.get_raw("qa_last_fingerprint") != fingerprint:
+        state.qa_last_result = None
+
     if st.button("Analyze", type="primary", key="qa_analyze", use_container_width=True):
+        state.qa_last_result = None
         if not sql.strip():
             st.warning("Please enter SQL to analyze.")
         else:
             try:
                 result = _analyze_sql(sql, dialect)
                 state.qa_last_result = result
+                state.set_raw("qa_last_fingerprint", fingerprint)
                 st.rerun()
             except Exception as e:  # noqa: BLE001
                 st.error(f"Parse error: {esc(str(e))}")
@@ -86,15 +94,15 @@ def render_query_analysis_page(theme: ColorTokens) -> None:
         for hint in result["hints"][:5]:
             st.info(esc(hint))
 
-    if result.get("limit"):
+    if result.get("limit") is not None:
         st.markdown(f'**Limit:** `{esc(result["limit"])}`')
 
 
 def _analyze_sql(sql: str, dialect: str) -> dict:
     """Perform static analysis on SQL."""
-    parsed = sqlglot.parse_one(sql, read=dialect)
+    parsed = parse_single_sql(sql, dialect)
 
-    tables = list({t.name for t in parsed.find_all(sqlglot.exp.Table)})
+    tables = list(dict.fromkeys(".".join(part.name for part in t.parts) for t in parsed.find_all(sqlglot.exp.Table)))
     joins = list(parsed.find_all(sqlglot.exp.Join))
     groups = list(parsed.find_all(sqlglot.exp.Group))
     orders = list(parsed.find_all(sqlglot.exp.Order))
@@ -113,7 +121,7 @@ def _analyze_sql(sql: str, dialect: str) -> dict:
     return {
         "tables": tables,
         "join_count": len(joins),
-        "has_aggregation": bool(groups),
+        "has_aggregation": bool(groups) or parsed.find(sqlglot.exp.AggFunc) is not None,
         "has_sorting": bool(orders),
         "limit": str(limit.expression) if limit else None,
         "hints": hints,

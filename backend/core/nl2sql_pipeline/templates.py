@@ -360,6 +360,22 @@ def generate_from_template(
                 "Target dialect parser rejected the generated SQL",
                 parse_adjustment,
             ))
+            return NL2SQLResult(
+                success=False,
+                input_text=match_groups.get("match", ""),
+                sql=None,
+                dialect=dialect,
+                explanation=(
+                    "Generated SQL failed target-dialect validation: "
+                    + " | ".join(explanation_parts)
+                ),
+                confidence=0.0,
+                evidence=evidence,
+                suggestions=[
+                    "Review the requested syntax or choose a compatible target dialect."
+                ],
+                parsed_elements=analysis,
+            )
 
         suggestions = template_suggestions(template, table, columns, dialect)
 

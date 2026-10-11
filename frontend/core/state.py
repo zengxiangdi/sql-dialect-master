@@ -50,6 +50,7 @@ from frontend.core.navigation import (
 
 _STATE_VERSION_KEY = "sdm_state_version"
 _CURRENT_VERSION = 1
+MAX_HISTORY_ENTRIES = 100
 
 # ── Type aliases ──────────────────────────────────────────────────────
 
@@ -232,10 +233,13 @@ class SessionState:
     _KEY_FINDING = "sdm_selected_finding_index"
     _KEY_CONVERT_VM = "convert_last_vm"
     _KEY_CONVERT_TARGET_SQL = "convert_target_sql"
+    _KEY_CONVERT_FINGERPRINT = "convert_last_fingerprint"
     _KEY_BATCH_VM = "batch_last_vm"
+    _KEY_BATCH_FINGERPRINT = "batch_last_fingerprint"
     _KEY_NL_VM = "nl_last_vm"
     _KEY_NL_ERROR = "nl_generation_error"
     _KEY_DIFF_VM = "diff_last_vm"
+    _KEY_DIFF_FINGERPRINT = "diff_last_fingerprint"
     _KEY_LINEAGE_VM = "lineage_last_vm"
     _KEY_QA_RESULT = "qa_last_result"
 
@@ -268,8 +272,7 @@ class SessionState:
         if self._KEY_THEME not in raw:
             raw[self._KEY_THEME] = "dark"
         # History default
-        if self._KEY_HISTORY not in raw:
-            raw[self._KEY_HISTORY] = []
+        self._normalize_history()
         # Favorites default
         if self._KEY_FAVORITES not in raw:
             raw[self._KEY_FAVORITES] = []
@@ -286,14 +289,20 @@ class SessionState:
             raw[self._KEY_CONVERT_VM] = None
         if self._KEY_CONVERT_TARGET_SQL not in raw:
             raw[self._KEY_CONVERT_TARGET_SQL] = ""
+        if self._KEY_CONVERT_FINGERPRINT not in raw:
+            raw[self._KEY_CONVERT_FINGERPRINT] = None
         if self._KEY_BATCH_VM not in raw:
             raw[self._KEY_BATCH_VM] = None
+        if self._KEY_BATCH_FINGERPRINT not in raw:
+            raw[self._KEY_BATCH_FINGERPRINT] = None
         if self._KEY_NL_VM not in raw:
             raw[self._KEY_NL_VM] = None
         if self._KEY_NL_ERROR not in raw:
             raw[self._KEY_NL_ERROR] = None
         if self._KEY_DIFF_VM not in raw:
             raw[self._KEY_DIFF_VM] = None
+        if self._KEY_DIFF_FINGERPRINT not in raw:
+            raw[self._KEY_DIFF_FINGERPRINT] = None
         if self._KEY_LINEAGE_VM not in raw:
             raw[self._KEY_LINEAGE_VM] = None
         if self._KEY_QA_RESULT not in raw:
@@ -326,24 +335,7 @@ class SessionState:
                 )
 
         # Migrate history entries to canonical shape
-        history = raw.get(self._KEY_HISTORY, [])
-        if history and isinstance(history, list):
-            cleaned: list[dict[str, Any]] = []
-            import uuid
-            for entry in history:
-                if not isinstance(entry, dict):
-                    continue
-                if "identity" not in entry or not entry["identity"]:
-                    # Generate a stable identity for entries that lack one
-                    entry["identity"] = uuid.uuid4().hex[:8]
-                cleaned.append(entry)
-            if len(cleaned) != len(history):
-                raw[self._KEY_HISTORY] = cleaned
-                logger = __import__("logging").getLogger(__name__)
-                logger.warning(
-                    "Migrated %d invalid history entries",
-                    len(history) - len(cleaned),
-                )
+        self._normalize_history()
 
         raw[_STATE_VERSION_KEY] = _CURRENT_VERSION
 
@@ -361,11 +353,48 @@ class SessionState:
 
     @property
     def history(self) -> list[dict[str, Any]]:
-        return list(self._raw.get(self._KEY_HISTORY, []))
+        return list(self._normalize_history())
 
     @history.setter
     def history(self, value: list[dict[str, Any]]) -> None:
-        self._raw[self._KEY_HISTORY] = value
+        self._raw[self._KEY_HISTORY] = list(value) if isinstance(value, list) else []
+        self._normalize_history()
+
+    def _normalize_history(self) -> list[dict[str, Any]]:
+        """Repair malformed history state at the session boundary.
+
+        Streamlit sessions can outlive code versions and may contain ``None``,
+        non-dict values, or widget-hostile identities.  Keep only dictionaries,
+        give each entry a bounded stable identity, and retain the newest entries
+        when a session grows without bound.
+        """
+        import re
+        import uuid
+
+        raw_history = self._raw.get(self._KEY_HISTORY)
+        if not isinstance(raw_history, list):
+            self._raw[self._KEY_HISTORY] = []
+            return []
+        cleaned: list[dict[str, Any]] = []
+        seen_identities: set[str] = set()
+        identity_re = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+        for value in raw_history:
+            if not isinstance(value, dict):
+                continue
+            entry = dict(value)
+            identity = entry.get("identity")
+            if (
+                not isinstance(identity, str)
+                or not identity_re.fullmatch(identity)
+                or identity in seen_identities
+            ):
+                entry["identity"] = uuid.uuid4().hex[:8]
+            seen_identities.add(entry["identity"])
+            cleaned.append(entry)
+        if len(cleaned) > MAX_HISTORY_ENTRIES:
+            cleaned = cleaned[-MAX_HISTORY_ENTRIES:]
+        self._raw[self._KEY_HISTORY] = cleaned
+        return cleaned
 
     def add_history_entry(
         self,
@@ -394,13 +423,12 @@ class SessionState:
         if self._KEY_HISTORY not in self._raw:
             self._raw[self._KEY_HISTORY] = []
         self._raw[self._KEY_HISTORY].append(entry)
+        self._normalize_history()
         return identity
 
     def remove_history_entry(self, identity: str) -> bool:
         """Remove a history entry by identity. Returns True if found."""
-        if self._KEY_HISTORY not in self._raw:
-            return False
-        history: list[dict[str, Any]] = self._raw[self._KEY_HISTORY]
+        history = self._normalize_history()
         before = len(history)
         self._raw[self._KEY_HISTORY] = [
             e for e in history if e.get("identity") != identity
@@ -412,7 +440,7 @@ class SessionState:
         return removed > 0
 
     def history_count(self) -> int:
-        return len(self._raw.get(self._KEY_HISTORY, []))
+        return len(self._normalize_history())
 
     # ── Favorites ──────────────────────────────────────────────────────
 
@@ -497,12 +525,30 @@ class SessionState:
         self._raw[self._KEY_CONVERT_TARGET_SQL] = value or ""
 
     @property
+    def convert_last_fingerprint(self) -> str | None:
+        value = self._raw.get(self._KEY_CONVERT_FINGERPRINT)
+        return value if isinstance(value, str) else None
+
+    @convert_last_fingerprint.setter
+    def convert_last_fingerprint(self, value: str | None) -> None:
+        self._raw[self._KEY_CONVERT_FINGERPRINT] = value
+
+    @property
     def batch_last_vm(self) -> Any:
         return self._raw.get(self._KEY_BATCH_VM)
 
     @batch_last_vm.setter
     def batch_last_vm(self, value: Any) -> None:
         self._raw[self._KEY_BATCH_VM] = value
+
+    @property
+    def batch_last_fingerprint(self) -> str | None:
+        value = self._raw.get(self._KEY_BATCH_FINGERPRINT)
+        return value if isinstance(value, str) else None
+
+    @batch_last_fingerprint.setter
+    def batch_last_fingerprint(self, value: str | None) -> None:
+        self._raw[self._KEY_BATCH_FINGERPRINT] = value
 
     # ── NL2SQL ──────────────────────────────────────────────────────────
 
@@ -531,6 +577,15 @@ class SessionState:
     @diff_last_vm.setter
     def diff_last_vm(self, value: Any) -> None:
         self._raw[self._KEY_DIFF_VM] = value
+
+    @property
+    def diff_last_fingerprint(self) -> str | None:
+        value = self._raw.get(self._KEY_DIFF_FINGERPRINT)
+        return value if isinstance(value, str) else None
+
+    @diff_last_fingerprint.setter
+    def diff_last_fingerprint(self, value: str | None) -> None:
+        self._raw[self._KEY_DIFF_FINGERPRINT] = value
 
     @property
     def selected_finding_index(self) -> int | None:

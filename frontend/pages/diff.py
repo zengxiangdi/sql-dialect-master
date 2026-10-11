@@ -14,6 +14,7 @@ import streamlit as st
 from backend.core.semantic_diff import diff_sql_ast
 from frontend.app_context_v2 import DIALECTS
 from frontend.core.design_tokens import ColorTokens
+from frontend.core.fingerprints import input_fingerprint
 from frontend.core.navigation import consume_navigation_intent
 from frontend.core.state import SessionState
 from frontend.core.viewmodels import SemanticDiffViewModel
@@ -26,20 +27,31 @@ def render_diff_page(theme: ColorTokens) -> None:
     state = SessionState.get()
 
     _render_header(theme)
-    _render_input_section(theme)
 
     # Process navigation intent from Convert → Diff handoff
     intent = consume_navigation_intent()
-    if intent and intent.action == "open_diff" and not state.diff_last_vm:
+    # Apply it before creating widgets.  Streamlit forbids assigning a widget
+    # key after that widget has been instantiated in the current run.
+    if intent and intent.action == "open_diff":
         st.session_state.diff_src_sql = intent.get_payload("source", "")
         st.session_state.diff_tgt_sql = intent.get_payload("target", "")
         st.session_state.diff_src_dialect = intent.get_payload("src_dialect", "postgres")
         st.session_state.diff_tgt_dialect = intent.get_payload("tgt_dialect", "mysql")
+        state.diff_last_vm = None
+        state.diff_last_fingerprint = None
         state.selected_finding_index = None
+
+    _render_input_section(theme)
 
     # Get saved inputs (widget keys — managed by Streamlit)
     src_sql = st.session_state.get("diff_src_sql", "")
     tgt_sql = st.session_state.get("diff_tgt_sql", "")
+    src_dialect = st.session_state.get("diff_src_dialect", "postgres")
+    tgt_dialect = st.session_state.get("diff_tgt_dialect", "mysql")
+    current_fingerprint = input_fingerprint(src_sql, tgt_sql, src_dialect, tgt_dialect)
+    if state.diff_last_vm is not None and state.diff_last_fingerprint != current_fingerprint:
+        state.diff_last_vm = None
+        state.diff_last_fingerprint = None
 
     # Render results if available
     vm: SemanticDiffViewModel | None = state.diff_last_vm
@@ -141,6 +153,7 @@ def _run_comparison(theme: ColorTokens) -> None:
         diff=backend_result,
     )
     state.diff_last_vm = vm
+    state.diff_last_fingerprint = input_fingerprint(src_sql, tgt_sql, src_dialect, tgt_dialect)
     state.clear_finding_selection()
     st.rerun()
 

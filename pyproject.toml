@@ -5,7 +5,7 @@ description = "SQL Dialect Master - Multi-database SQL conversion engine"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "sqlglot>=25.0.0",
+    "sqlglot>=30.18.0,<31.0.0",
     "streamlit>=1.38.0",
     "fastapi>=0.115.0",
     "uvicorn>=0.30.0",
@@ -19,6 +19,7 @@ dev = [
     "pytest>=8.3.0",
     "pytest-cov>=5.0.0",
     "httpx>=0.27.0",
+    "requests>=2.31.0",
 ]
 qa = [
     "ruff>=0.6",
@@ -33,6 +34,9 @@ redis = [
     "redis>=5.0.0",
 ]
 
+[project.scripts]
+sdm-streamlit = "backend.frontend_entrypoint:main"
+
 [build-system]
 requires = ["setuptools>=75.0.0"]
 build-backend = "setuptools.build_meta"
@@ -40,6 +44,13 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["backend*", "frontend*"]
 exclude = ["backend.tests*", "backend.benchmarks*"]
+
+# The Streamlit application is a top-level module documented as the
+# user-facing entry point (``streamlit run sdm_local_v2.py``).  Include it in
+# source and wheel distributions so an installed package has the same entry
+# point as a source checkout.
+[tool.setuptools]
+py-modules = ["sdm_local_v2"]
 
 [tool.setuptools.package-data]
 "backend.core" = ["*.json"]

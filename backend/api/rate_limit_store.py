@@ -65,6 +65,8 @@ class InMemoryRateLimitStore:
 class RedisRateLimitStore:
     """Atomic fixed-window store backed by Redis for multi-worker deployments."""
 
+    DEFAULT_TIMEOUT_SECONDS = 3.0
+
     _SCRIPT = """
     local count = redis.call('INCR', KEYS[1])
     if count == 1 then
@@ -74,14 +76,29 @@ class RedisRateLimitStore:
     return {count, ttl}
     """
 
-    def __init__(self, url: str, namespace: str = "sdm:rate-limit:") -> None:
+    def __init__(
+        self,
+        url: str,
+        namespace: str = "sdm:rate-limit:",
+        timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+    ) -> None:
         if not url:
             raise ValueError("Redis URL is required when rate-limit backend is redis")
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive")
         try:
             import redis
         except ImportError as exc:
             raise RuntimeError("Redis rate limiting requires the optional 'redis' package") from exc
-        self._client = redis.Redis.from_url(url, decode_responses=False)
+        # Bound both connection establishment and command execution.  A
+        # stalled Redis node must not block API startup or every request that
+        # checks the distributed rate-limit store.
+        self._client = redis.Redis.from_url(
+            url,
+            decode_responses=False,
+            socket_connect_timeout=timeout_seconds,
+            socket_timeout=timeout_seconds,
+        )
         self._client.ping()
         self._script = self._client.register_script(self._SCRIPT)
         self._namespace = namespace

@@ -66,6 +66,13 @@ python -m pip install -e ".[dev,semantic]"
 streamlit run sdm_local_v2.py
 ```
 
+After installing the package, the same workspace can be launched from any
+working directory with:
+
+```bash
+sdm-streamlit
+```
+
 Open http://localhost:8501 in your browser.
 
 ### Run FastAPI Backend

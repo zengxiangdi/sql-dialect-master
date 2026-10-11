@@ -56,6 +56,28 @@ def add_limit(sql: str, limit: int, dialect: str) -> str:
     return f"{sql}\nLIMIT {limit}"
 
 
+def parameter_placeholder(index: int, dialect: str) -> str:
+    """Return a DB-API/native bind marker for ``dialect``.
+
+    NL2SQL has no values to bind, so DML output is a parameterized template.
+    A single ``?`` marker is not executable by several supported drivers
+    (notably PostgreSQL, Oracle and T-SQL); use each target's conventional
+    marker while keeping numbering stable across one statement.
+    """
+    dialect = (dialect or "").lower()
+    if dialect in {"postgres", "redshift"}:
+        return f"${index}"
+    if dialect == "oracle":
+        return f":{index}"
+    if dialect == "tsql":
+        return f"@p{index}"
+    if dialect == "mysql":
+        return "%s"
+    # Hive/Spark/Trino/DuckDB/Snowflake and ClickHouse clients commonly accept
+    # positional question-mark binds or adapt them at their DB-API boundary.
+    return "?"
+
+
 # ── Renderer ────────────────────────────────────────────────────────────────
 
 def render_sql(ir: QueryIR) -> Tuple[Optional[str], str, float, GenerationEvidence]:
@@ -204,7 +226,7 @@ def render_sql(ir: QueryIR) -> Tuple[Optional[str], str, float, GenerationEviden
         if ordering:
             sql += f"\nORDER BY {ordering[0]} {ordering[1]}"
             explanation_parts.append(f"排序: {ordering[0]} {ordering[1]}")
-        if limit:
+        if limit is not None:
             sql = add_limit(sql, limit, dialect)
             explanation_parts.append(f"限制: {limit}条")
             evidence.items.append(EvidenceItem(
@@ -213,18 +235,24 @@ def render_sql(ir: QueryIR) -> Tuple[Optional[str], str, float, GenerationEviden
             ))
     elif operation == "INSERT":
         cols = columns if columns != ["*"] else ["col1", "col2"]
-        placeholders = ", ".join(["?"] * len(cols))
+        placeholders = ", ".join(
+            parameter_placeholder(index, dialect)
+            for index in range(1, len(cols) + 1)
+        )
         sql = f"INSERT INTO {table} ({', '.join(cols)})\nVALUES ({placeholders})"
         explanation_parts.append(f"插入到: {table}")
     elif operation == "UPDATE":
         update_cols = columns if columns != ["*"] else ["column"]
-        set_clause = ", ".join([f"{c} = ?" for c in update_cols])
+        set_clause = ", ".join(
+            f"{c} = {parameter_placeholder(index, dialect)}"
+            for index, c in enumerate(update_cols, start=1)
+        )
         sql = f"UPDATE {table}\nSET {set_clause}"
         if conditions:
             condition_sql = conditions if isinstance(conditions, str) else " AND ".join(conditions)
             sql += f"\nWHERE {condition_sql}"
         else:
-            sql += "\nWHERE id = ?"
+            sql += f"\nWHERE id = {parameter_placeholder(len(update_cols) + 1, dialect)}"
         explanation_parts.append(f"更新: {table}")
     elif operation == "DELETE":
         sql = f"DELETE FROM {table}"
@@ -232,7 +260,7 @@ def render_sql(ir: QueryIR) -> Tuple[Optional[str], str, float, GenerationEviden
             condition_sql = conditions if isinstance(conditions, str) else " AND ".join(conditions)
             sql += f"\nWHERE {condition_sql}"
         else:
-            sql += "\nWHERE id = ?"
+            sql += f"\nWHERE id = {parameter_placeholder(1, dialect)}"
         explanation_parts.append(f"删除: {table}")
     else:
         sql = f"-- 无法解析: {operation}"
@@ -254,5 +282,12 @@ def render_sql(ir: QueryIR) -> Tuple[Optional[str], str, float, GenerationEviden
             "Target dialect parser rejected the generated SQL",
             parse_adjustment,
         ))
+        # A generated statement that the target parser rejects must never be
+        # advertised as a successful/executable result.  Keep the invariant
+        # ``sql is None iff success is False`` used by API and UI consumers.
+        return None, (
+            "Generated SQL failed target-dialect validation: "
+            + " | ".join(explanation_parts)
+        ), 0.0, evidence
     confidence = evidence.score
     return sql, " | ".join(explanation_parts), confidence, evidence

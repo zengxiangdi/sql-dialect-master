@@ -95,6 +95,5 @@ def _render_function_row(func: dict, theme: ColorTokens) -> None:
                 cols = st.columns(min(3, len(items) - i))
                 for j, (dialect, syntax) in enumerate(items[i:i+3]):
                     with cols[j]:
-                        st.markdown(
-                            f'**{esc(dialect.upper())}**\n`{esc(syntax)}`'
-                        )
+                        st.markdown(f"**{esc(dialect.upper())}**")
+                        st.code(str(syntax), language="sql")

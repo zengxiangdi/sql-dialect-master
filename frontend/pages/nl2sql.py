@@ -30,6 +30,17 @@ EXAMPLE_QUERIES: dict[str, str] = {
 }
 
 
+def _apply_selected_example() -> None:
+    """Copy a quick example only when the selector changes.
+
+    Keeping this in the selectbox callback prevents every rerun from
+    overwriting edits made in the natural-language text area.
+    """
+    selected = st.session_state.get("nl_example_sel", "")
+    if selected in EXAMPLE_QUERIES:
+        st.session_state["nl_input_text"] = EXAMPLE_QUERIES[selected]
+
+
 def render_nl2sql_page(theme: ColorTokens) -> None:
     """Render the NL2SQL workspace."""
     state = SessionState.get()
@@ -63,14 +74,13 @@ def _render_input_section(theme: ColorTokens) -> None:
     with col_nl:
         # Example selector
         examples = list(EXAMPLE_QUERIES.keys())
-        selected_example = st.selectbox(
+        st.selectbox(
             "Quick example",
             [""] + examples,
             key="nl_example_sel",
             label_visibility="collapsed",
+            on_change=_apply_selected_example,
         )
-        if selected_example:
-            st.session_state.nl_input_text = EXAMPLE_QUERIES[selected_example]
 
         st.text_area(
             "Describe your query",

@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import re
+import threading
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -27,6 +28,17 @@ from .rules import DYNAMIC_SEPARATOR_FAIL_NOTE
 logger = logging.getLogger(__name__)
 _DANGEROUS_OPERATION_PATTERN = re.compile(
     r"\b(DROP|TRUNCATE|ALTER|CREATE|GRANT|REVOKE)\b", re.IGNORECASE
+)
+_DANGEROUS_OPERATION_TYPES = (
+    exp.Drop,
+    exp.TruncateTable,
+    exp.Alter,
+    exp.Create,
+    exp.Grant,
+    exp.Revoke,
+)
+_SYSTEM_CATALOG_NAMES = frozenset(
+    {"information_schema", "sys", "sysobjects", "pg_catalog", "all_tables"}
 )
 
 
@@ -169,7 +181,7 @@ _CONVERSION_NOTE_EVIDENCE = (
 )
 
 
-def _executable_upper(sql: str) -> str:
+def _executable_upper(sql: str, dialect: str | None = None) -> str:
     """Upper-cased executable-only view of ``sql`` for construct detection.
 
     Comments, string literals and quoted identifiers are replaced by
@@ -181,7 +193,7 @@ def _executable_upper(sql: str) -> str:
     conversion-claim checks, so no claim path falls back to raw
     substring matching.
     """
-    return mask_non_executable(sql).upper()
+    return mask_non_executable(sql, dialect=dialect).upper()
 
 
 # Constructs whose evidence requires a FUNCTION-CALL form: the name
@@ -505,6 +517,7 @@ class SQLTranspiler:
         self._security_enabled = settings.security_check_enabled
         self._rule_cache_snapshot_signature = None
         self._rule_cache_snapshot_version = None
+        self._rule_cache_lock = threading.RLock()
 
     def transpile(
         self,
@@ -564,7 +577,7 @@ class SQLTranspiler:
         security_enabled = settings.security_check_enabled
         self._security_enabled = security_enabled
         if security_enabled:
-            security_result = self._validate_security(sql)
+            security_result = self._validate_security(sql, source.strip().lower())
             security_warnings = list(security_result["warnings"])
             multiple_statements = security_result.get("multiple_statements")
             executable_sql = security_result.get("executable_sql")
@@ -611,6 +624,9 @@ class SQLTranspiler:
                 return TranspileResult(**cached)
 
         if multiple_statements is None:
+            # Preserve the lightweight statement-count helper's one-argument
+            # contract (callers/tests may wrap it); the security-enabled path
+            # already performed dialect-aware masking above.
             multiple_statements = self._has_multiple_statements(sql)
         if multiple_statements:
             return TranspileResult(
@@ -752,13 +768,13 @@ class SQLTranspiler:
             )
 
     @staticmethod
-    def _has_multiple_statements(sql: str) -> bool:
+    def _has_multiple_statements(sql: str, dialect: str | None = None) -> bool:
         """Return true when SQL contains more than one parsed statement."""
         if not isinstance(sql, str) or not sql.strip():
             return False
         if ";" not in sql:
             return False
-        if ";" not in mask_non_executable(sql):
+        if ";" not in mask_non_executable(sql, dialect=dialect):
             return False
         try:
             return len(sqlglot.parse(sql)) > 1
@@ -1031,14 +1047,15 @@ class SQLTranspiler:
 
     def _rule_cache_version(self) -> str:
         """Reuse the rule-version hash until the effective rule state changes."""
-        signature = self._rule_cache_state()
-        if signature != self._rule_cache_snapshot_signature:
-            payload = self._build_rule_cache_payload()
-            self._rule_cache_snapshot_signature = signature
-            self._rule_cache_snapshot_version = hashlib.sha256(
-                payload.encode("utf-8")
-            ).hexdigest()[:16]
-        return self._rule_cache_snapshot_version
+        with self._rule_cache_lock:
+            signature = self._rule_cache_state()
+            if signature != self._rule_cache_snapshot_signature:
+                payload = self._build_rule_cache_payload()
+                self._rule_cache_snapshot_signature = signature
+                self._rule_cache_snapshot_version = hashlib.sha256(
+                    payload.encode("utf-8")
+                ).hexdigest()[:16]
+            return self._rule_cache_snapshot_version
 
     def _cache_key(self, sql: str, source: str, target: str, pretty: bool, validate: bool = True,) -> str:
         rule_version = self._rule_cache_version()
@@ -1072,8 +1089,8 @@ class SQLTranspiler:
         if not source_sql and not final_sql:
             return notes
 
-        source_upper = _executable_upper(source_sql)
-        final_upper = _executable_upper(final_sql)
+        source_upper = _executable_upper(source_sql, source)
+        final_upper = _executable_upper(final_sql, target)
 
         # Class B (static table): notes that claim a conversion happened.
         # Marker identifies the note; the claim survives only with source
@@ -1125,7 +1142,7 @@ class SQLTranspiler:
         return notes
 
     def _generate_warnings(self, sql: str, source: str, target: str) -> List[str]:
-        return self._generate_warnings_masked(mask_non_executable(sql), source, target)
+        return self._generate_warnings_masked(mask_non_executable(sql, dialect=source), source, target)
 
     @staticmethod
     def _generate_warnings_masked(masked_sql: str, source: str, target: str) -> List[str]:
@@ -1211,18 +1228,32 @@ class SQLTranspiler:
             logger.warning("Generic parser fallback used for %s output: %s", dialect, target_message)
             return None, warning, "generic_only"
 
-    def _validate_security(self, sql: str) -> Dict[str, Any]:
+    def _validate_security(self, sql: str, dialect: str | None = None) -> Dict[str, Any]:
         result = {"blocked": False, "reason": None, "warnings": [], "executable_sql": None}
-        executable_sql = mask_non_executable(sql)
+        executable_sql = mask_non_executable(sql, dialect=dialect)
         result["executable_sql"] = executable_sql
         dangerous_operation = _DANGEROUS_OPERATION_PATTERN.search(executable_sql)
         if dangerous_operation:
-            message = f"Dangerous SQL operation detected: {dangerous_operation.group(1).upper()}"
-            if settings.security_block_dangerous:
-                result["blocked"] = True
-                result["reason"] = message
-                return result
-            result["warnings"].append(f"🔒 Security: {message}")
+            # A keyword can also be a perfectly legal column/alias (for
+            # example ``SELECT create FROM audit``).  Parse only when the
+            # cheap lexical candidate is present and block only an actual DDL
+            # root node.  If parsing fails, retain fail-closed behavior.
+            try:
+                parsed = sqlglot.parse(sql, read=dialect) if dialect else sqlglot.parse(sql)
+                actual_operation = any(
+                    isinstance(statement, _DANGEROUS_OPERATION_TYPES)
+                    for statement in parsed
+                    if statement is not None
+                )
+            except Exception:
+                actual_operation = True
+            if actual_operation:
+                message = f"Dangerous SQL operation detected: {dangerous_operation.group(1).upper()}"
+                if settings.security_block_dangerous:
+                    result["blocked"] = True
+                    result["reason"] = message
+                    return result
+                result["warnings"].append(f"🔒 Security: {message}")
         if ";" not in sql or ";" not in executable_sql:
             result["multiple_statements"] = False
         else:
@@ -1240,6 +1271,27 @@ class SQLTranspiler:
                 logger.debug("SQL statement parsing failed during security validation: %s", exc)
         for pattern, message in DANGEROUS_SQL_PATTERNS:
             if pattern.search(executable_sql):
+                if message == "System table access detected":
+                    # Catalog words in a selected column or alias are not a
+                    # catalog access.  Inspect parsed table references and
+                    # preserve fail-closed behavior only on parse failure.
+                    try:
+                        parsed = sqlglot.parse(sql, read=dialect) if dialect else sqlglot.parse(sql)
+                        system_table = any(
+                            isinstance(table, exp.Table)
+                            and (
+                                table.name.lower() in _SYSTEM_CATALOG_NAMES
+                                or (table.db or "").lower() in _SYSTEM_CATALOG_NAMES
+                                or (table.catalog or "").lower() in _SYSTEM_CATALOG_NAMES
+                            )
+                            for statement in parsed
+                            if statement is not None
+                            for table in statement.find_all(exp.Table)
+                        )
+                    except Exception:
+                        system_table = True
+                    if not system_table:
+                        continue
                 if settings.security_block_dangerous:
                     result["blocked"] = True
                     result["reason"] = message

@@ -7,6 +7,7 @@ import logging
 import os
 import secrets
 import time
+import uuid
 import weakref
 from datetime import datetime
 from typing import Any
@@ -15,6 +16,8 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
+
+from backend.core.config import settings
 
 _READINESS_CACHE_TTL_SECONDS = 5.0
 _READINESS_TIMEOUT_SECONDS = 3.0
@@ -26,22 +29,37 @@ _HEALTH_PROBE_PATHS = {"/ready", "/health/deep"}
 
 def _probe_allowed(request: Request) -> bool:
     """Allow health probes only from loopback or with the configured probe secret."""
-    token = os.getenv("SDM_HEALTH_PROBE_TOKEN", "").strip()
+    configured = settings.health_probe_token
+    token = configured.get_secret_value().strip() if configured else ""
+    # Keep process-level test/dev overrides effective after module import;
+    # production configuration still comes from the validated singleton above
+    # (including values loaded from .env).
+    if not token:
+        token = os.environ.get("SDM_HEALTH_PROBE_TOKEN", "").strip()
     supplied = request.headers.get("X-Health-Probe-Token", "")
     if token and supplied and secrets.compare_digest(supplied, token):
         return True
+    # Once a token is configured, require it even for loopback callers.  This
+    # avoids trusting an unverified X-Forwarded-For chain in front of a proxy.
+    if token:
+        return False
     client = request.client
     return bool(client and client.host in {"127.0.0.1", "::1", "localhost"})
 
 
-def _health_probe_denied_response() -> JSONResponse:
+def _health_probe_denied_response(request: Request) -> JSONResponse:
     """Return a stable denial response for public health probe requests."""
+    request_id = getattr(request.state, "request_id", None) or str(uuid.uuid4())
+    headers = {"X-Request-ID": request_id}
+    content = {
+        "success": False,
+        "error": {"code": 403, "message": "health probe access denied"},
+    }
+    content["request_id"] = request_id
     return JSONResponse(
         status_code=403,
-        content={
-            "success": False,
-            "error": {"code": 403, "message": "health probe access denied"},
-        },
+        content=content,
+        headers=headers,
     )
 
 
@@ -50,7 +68,7 @@ async def health_probe_response(request: Request) -> JSONResponse:
     if request.url.path not in _HEALTH_PROBE_PATHS or request.method not in {"GET", "HEAD"}:
         raise ValueError("health_probe_response called for a non-probe request")
     if not _probe_allowed(request):
-        return _health_probe_denied_response()
+        return _health_probe_denied_response(request)
     if request.url.path == "/ready":
         return await readiness_response(request)
     return await deep_health_response(request)

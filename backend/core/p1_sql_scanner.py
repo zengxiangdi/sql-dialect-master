@@ -4,8 +4,13 @@ from __future__ import annotations
 from typing import Iterator, Tuple
 
 
-def executable_segments(sql: str) -> Iterator[Tuple[int, int]]:
-    """Yield [start, end) ranges outside strings, quoted identifiers and comments."""
+def executable_segments(sql: str, dialect: str | None = None) -> Iterator[Tuple[int, int]]:
+    """Yield [start, end) ranges outside strings, quoted identifiers/comments.
+
+    MySQL treats ``#`` through end-of-line as a comment.  It is enabled only
+    when the caller supplies ``dialect="mysql"`` so ``#`` remains available
+    to dialects where it can be a meaningful token or identifier.
+    """
     i = 0
     start = 0
     n = len(sql)
@@ -28,6 +33,13 @@ def executable_segments(sql: str) -> Iterator[Tuple[int, int]]:
                 start = i
                 continue
             ch = sql[i]
+            if dialect and dialect.lower() == "mysql" and ch == "#":
+                if start < i:
+                    yield start, i
+                state = "line_comment"
+                i += 1
+                start = i
+                continue
             if ch == "q" or ch == "Q":
                 if i + 2 < n and sql[i + 1] == "'":
                     opener = sql[i + 2]
@@ -154,19 +166,19 @@ def executable_segments(sql: str) -> Iterator[Tuple[int, int]]:
         yield start, n
 
 
-def mask_non_executable(sql: str) -> str:
+def mask_non_executable(sql: str, dialect: str | None = None) -> str:
     """Replace non-code characters with spaces while preserving positions."""
     masked = list(sql)
-    for start, end in _non_executable_ranges(sql):
+    for start, end in _non_executable_ranges(sql, dialect=dialect):
         for i in range(start, end):
             masked[i] = " "
     return "".join(masked)
 
 
-def _non_executable_ranges(sql: str):
+def _non_executable_ranges(sql: str, dialect: str | None = None):
     covered = []
     cursor = 0
-    for start, end in executable_segments(sql):
+    for start, end in executable_segments(sql, dialect=dialect):
         if cursor < start:
             covered.append((cursor, start))
         cursor = end

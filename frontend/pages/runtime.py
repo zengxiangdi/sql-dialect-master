@@ -22,7 +22,7 @@ def render_runtime_page(theme: ColorTokens) -> None:
                 Runtime Verification
             </div>
             <div style="font-size:12px; color:{theme.text_muted}; margin-top:2px;">
-                Execute SQL against connected databases to verify semantics
+                Database runtime verification (not configured)
             </div>
         </div>
         """,
@@ -39,7 +39,7 @@ def render_runtime_page(theme: ColorTokens) -> None:
             </div>
             <div style="font-size:12px;">
                 Runtime verification requires a connected database. This feature
-                is available via the API when a database connection is configured.
+                is not available in this local workspace yet.
             </div>
         </div>
         """,
@@ -52,7 +52,7 @@ def render_runtime_page(theme: ColorTokens) -> None:
     st.markdown(
         f"""
         <div style="font-size:12px; color:{theme.text_secondary}; line-height:1.8;">
-            <p>When a database connection is available, the Runtime workspace will:</p>
+            <p>A future runtime workspace may:</p>
             <ul style="margin:8px 0 8px 20px; padding:0;">
                 <li>Execute source and target SQL against connected databases</li>
                 <li>Compare result sets for semantic equivalence</li>

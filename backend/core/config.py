@@ -14,7 +14,7 @@ import sys
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, TypedDict
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # =============================================================================
@@ -220,18 +220,20 @@ class AppSettings(BaseSettings):
         "http://localhost:8501,http://localhost:8000,"
         "http://127.0.0.1:8501,http://127.0.0.1:8000"
     )
-    max_batch_size: int = 100
-    request_timeout: int = 30
+    max_batch_size: int = Field(100, gt=0)
+    request_timeout: int = Field(30, gt=0)
     
     # Cache settings
     cache_enabled: bool = True
-    cache_ttl: int = 300
+    # Zero intentionally disables expiry (TTLCache contract); negatives are
+    # invalid because they are indistinguishable from that mode at runtime.
+    cache_ttl: int = Field(300, ge=0)
     cache_max_size: int = Field(1000, gt=0)
     
     # Rate limiting
     rate_limit_enabled: bool = True
-    rate_limit_requests: int = 100
-    rate_limit_window: int = 60
+    rate_limit_requests: int = Field(100, gt=0)
+    rate_limit_window: int = Field(60, gt=0)
     # Storage backend selection: strict lowercase values; no case or
     # whitespace normalization — a Literal rejects any other spelling at
     # settings construction instead of silently coercing it.
@@ -243,9 +245,9 @@ class AppSettings(BaseSettings):
     redis_url: Optional[SecretStr] = None
     
     # NL2SQL settings
-    nl2sql_confidence_threshold: float = 0.6
-    nl2sql_max_suggestions: int = 5
-    nl2sql_max_input_length: int = 8192
+    nl2sql_confidence_threshold: float = Field(0.6, ge=0.0, le=1.0)
+    nl2sql_max_suggestions: int = Field(5, ge=0)
+    nl2sql_max_input_length: int = Field(8192, gt=0)
 
     # SQL Transpiler / Parser settings
     #
@@ -254,12 +256,16 @@ class AppSettings(BaseSettings):
     # to ``transpiler_max_sql_length``.  Business code must read the
     # settings object — never ``os.getenv`` directly.
     transpiler_pretty_default: bool = True
-    transpiler_max_sql_length: int = 100000
-    parser_max_sql_length: int = 100000
+    transpiler_max_sql_length: int = Field(100000, gt=0)
+    parser_max_sql_length: Optional[int] = Field(None, gt=0)
     
     # Function encyclopedia
-    function_search_limit: int = 50
-    function_fuzzy_threshold: float = 0.4
+    function_search_limit: int = Field(50, gt=0)
+    function_fuzzy_threshold: float = Field(0.4, ge=0.0, le=1.0)
+
+    # Readiness probes.  SecretStr keeps the value out of settings reprs and
+    # structured logs while still allowing deployment through SDM_ env vars.
+    health_probe_token: Optional[SecretStr] = None
     
     # Security settings
     security_check_enabled: bool = True
@@ -268,6 +274,23 @@ class AppSettings(BaseSettings):
     # Logging settings
     log_level: str = "INFO"
     log_file: str = ""
+
+    @model_validator(mode="after")
+    def _apply_parser_length_fallback(self) -> "AppSettings":
+        """Keep parser and transpiler limits aligned unless explicitly set."""
+        if self.parser_max_sql_length is None:
+            self.parser_max_sql_length = self.transpiler_max_sql_length
+        return self
+
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def _normalize_log_level(cls, value: str) -> str:
+        normalized = str(value).strip().upper()
+        if normalized not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
+            raise ValueError(
+                "log_level must be one of DEBUG, INFO, WARNING, ERROR, CRITICAL"
+            )
+        return normalized
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert settings to dictionary."""

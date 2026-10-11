@@ -219,6 +219,36 @@ class PipelineNL2SQLGenerator:
                 suggestions=["Please shorten the natural-language query and try again."],
                 evidence=GenerationEvidence(),
             )
+        # Validate an explicitly requested row limit before the extraction
+        # stage.  This turns huge numeric literals into a controlled failed
+        # generation instead of an uncaught int-conversion exception (500 at
+        # the API boundary), and prevents silently dropping the limit.
+        try:
+            self._extract_limit(text)
+        except ValueError as exc:
+            return NL2SQLResult(
+                success=False,
+                input_text=text,
+                dialect=normalized_dialect,
+                explanation=str(exc),
+                confidence=0.0,
+                suggestions=["Use a LIMIT value no greater than 1000000."],
+                evidence=GenerationEvidence(),
+            )
+        if re.search(
+            r"(?:最近|过去|last|past)\s*-\d+\s*(?:天|周|月|年|days?|weeks?|months?|years?)",
+            text,
+            re.IGNORECASE,
+        ):
+            return NL2SQLResult(
+                success=False,
+                input_text=text,
+                dialect=normalized_dialect,
+                explanation="Date interval cannot be negative",
+                confidence=0.0,
+                suggestions=["Use a non-negative date interval."],
+                evidence=GenerationEvidence(),
+            )
         dialect = normalized_dialect
         table_hint = normalized_table_hint
         if column_hints_error:

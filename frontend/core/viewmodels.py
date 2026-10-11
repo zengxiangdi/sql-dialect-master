@@ -96,7 +96,16 @@ class ConversionViewModel:
         new_semantic = semantic_status_map.get(diff.semantic_classification, "unknown")
         label = SEMANTIC_STATUS_LABELS.get(diff.semantic_classification, diff.semantic_classification)
         color_key = SEMANTIC_STATUS_COLOR.get(diff.semantic_classification, "neutral")
-        status: StatusKind = color_key  # type: ignore[assignment]
+        status_map: dict[str, StatusKind] = {
+            "valid": "valid",
+            "success": "valid",
+            "danger": "error",
+            "warning": "warning",
+            "error": "error",
+            "info": "info",
+            "neutral": "neutral",
+        }
+        status: StatusKind = status_map.get(color_key, "neutral")
 
         enriched = cls(
             status=status,
@@ -369,7 +378,16 @@ class SemanticDiffViewModel:
 
         label = SEMANTIC_STATUS_LABELS.get(diff.semantic_classification, diff.semantic_classification)
         color_key = SEMANTIC_STATUS_COLOR.get(diff.semantic_classification, "neutral")
-        status: StatusKind = color_key  # type: ignore[assignment]
+        status_map: dict[str, StatusKind] = {
+            "valid": "valid",
+            "success": "valid",
+            "danger": "error",
+            "warning": "warning",
+            "error": "error",
+            "info": "info",
+            "neutral": "neutral",
+        }
+        status: StatusKind = status_map.get(color_key, "neutral")
 
         findings = [
             SemanticFindingViewModel.from_backend(i, sd)
@@ -410,6 +428,7 @@ class SemanticDiffViewModel:
 class LineageTable:
     name: str
     alias: str | None = None
+    node_id: str | None = None
 
 
 @dataclass
@@ -418,6 +437,7 @@ class LineageOutputColumn:
     expression: str = ""
     source_table: str | None = None
     source_column: str | None = None
+    node_id: str | None = None
 
 
 @dataclass

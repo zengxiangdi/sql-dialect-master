@@ -83,8 +83,23 @@ if _pending and _pending.is_valid and _pending.target_page in PAGE_MAP:
     elif _pending.action == "open_conversion" and _pending.get_payload("sql"):
         st.session_state.convert_src_sql = _pending.get_payload("sql")
         st.session_state.convert_src = _pending.get_payload("dialect", "postgres")
+        st.session_state.convert_tgt = _pending.get_payload("target_dialect", "mysql")
         _state.convert_target_sql = ""
         _state.convert_last_vm = None
+        _state.convert_last_fingerprint = None
+    elif _pending.action == "new_conversion":
+        # Start a clean workspace when invoked from the command palette.
+        st.session_state.convert_src_sql = ""
+        st.session_state.convert_src = "postgres"
+        st.session_state.convert_tgt = "mysql"
+        st.session_state.batch_sql_input = ""
+        st.session_state.batch_src = "postgres"
+        st.session_state.batch_tgt = "mysql"
+        _state.convert_target_sql = ""
+        _state.convert_last_vm = None
+        _state.convert_last_fingerprint = None
+        _state.batch_last_vm = None
+        _state.batch_last_fingerprint = None
     elif _pending.action == "select_finding" and _pending.has_payload("finding_index"):
         _state.selected_finding_index = _pending.get_payload("finding_index")
     st.rerun()

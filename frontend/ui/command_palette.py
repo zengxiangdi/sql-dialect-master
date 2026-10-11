@@ -47,6 +47,15 @@ COMMANDS: list[Command] = [
 ]
 
 CATEGORY_ORDER = ["Workspace", "Library", "System"]
+_PALETTE_OPEN_KEY = "sdm_command_palette_open"
+
+
+def _open_palette() -> None:
+    st.session_state[_PALETTE_OPEN_KEY] = True
+
+
+def _close_palette() -> None:
+    st.session_state[_PALETTE_OPEN_KEY] = False
 
 
 def render_command_palette(theme: ColorTokens) -> None:
@@ -56,13 +65,22 @@ def render_command_palette(theme: ColorTokens) -> None:
     # as the palette trigger. The actual keyboard shortcut is documented.
 
     # Palette trigger button in topbar
-    if st.button("⌘K", key="cmd_palette_trigger", help="Open command palette",
-                  use_container_width=False):
+    st.button(
+        "⌘K",
+        key="cmd_palette_trigger",
+        help="Open command palette",
+        use_container_width=False,
+        on_click=_open_palette,
+    )
+    if st.session_state.get(_PALETTE_OPEN_KEY, False):
         _show_palette(theme)
 
 
 def _show_palette(theme: ColorTokens) -> None:
     """Show the command palette modal."""
+    close_col, _ = st.columns([1, 8])
+    with close_col:
+        st.button("Close", key="cmd_palette_close", on_click=_close_palette)
     query = st.text_input(
         "Search commands...",
         key="cmd_palette_query",
@@ -131,6 +149,7 @@ def _execute_command(cmd: Command) -> None:
         target_page=_action_to_page(cmd.action),
         action=cmd.action,
     )
+    st.session_state[_PALETTE_OPEN_KEY] = False
     st.session_state.sdm_navigation_intent = intent
     st.rerun()
 

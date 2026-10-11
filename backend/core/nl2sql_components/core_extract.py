@@ -9,6 +9,12 @@ import re
 from typing import Dict, List, Optional
 
 
+# Generated SQL is intended to be reviewed and parameterized by a caller.
+# Refuse unbounded/absurd row counts before integer conversion (which can
+# raise ValueError for thousands of digits on modern Python versions).
+MAX_NL2SQL_LIMIT = 1_000_000
+
+
 def detect_operation(text: str, keywords: Dict[str, str]) -> str:
     """Detect SQL operation type from text.
 
@@ -101,14 +107,30 @@ def extract_limit(text: str) -> Optional[int]:
     '前10', 'top 10', 'limit 10', '10条', '10行'.
     """
     patterns = [
-        r"前\s*(\d+)", r"top\s*(\d+)", r"limit\s*(\d+)",
-        r"first\s*(\d+)", r"(\d+)\s*条", r"(\d+)\s*个",
-        r"(\d+)\s*行", r"(\d+)\s*rows?", r"only\s*(\d+)",
+        r"前\s*(-?\d+)", r"top\s*(-?\d+)", r"limit\s*(-?\d+)",
+        r"first\s*(-?\d+)", r"(-?\d+)\s*条", r"(-?\d+)\s*个",
+        r"(-?\d+)\s*行", r"(-?\d+)\s*rows?", r"only\s*(-?\d+)",
     ]
     for pattern in patterns:
         match = re.search(pattern, text, re.IGNORECASE)
         if match:
-            return int(match.group(1))
+            raw_value = match.group(1)
+            # Keep the conversion bounded and deterministic.  Raising here is
+            # handled by the generator as a client-facing failed generation;
+            # silently dropping an invalid limit could produce an unbounded
+            # query.
+            if raw_value.startswith("-"):
+                raise ValueError("LIMIT cannot be negative")
+            if len(raw_value) > len(str(MAX_NL2SQL_LIMIT)):
+                raise ValueError(
+                    f"LIMIT exceeds maximum supported value of {MAX_NL2SQL_LIMIT}"
+                )
+            value = int(raw_value)
+            if value > MAX_NL2SQL_LIMIT:
+                raise ValueError(
+                    f"LIMIT exceeds maximum supported value of {MAX_NL2SQL_LIMIT}"
+                )
+            return value
     return None
 
 

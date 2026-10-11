@@ -5,6 +5,7 @@ import streamlit as st
 
 from frontend.core.design_tokens import ColorTokens
 from frontend.core.escaping import esc
+from frontend.core.navigation import create_navigation_intent
 from frontend.templates_v2 import TEMPLATES
 
 
@@ -65,5 +66,21 @@ def _deterministic_key(prefix: str, value: str) -> str:
 
 def _load_template(sql: str) -> None:
     """Load a template SQL into the Convert workspace."""
-    st.session_state.convert_src_sql = sql
+    # Route through the same handoff contract as History and NL2SQL.  Main
+    # clears stale conversion output and applies both dialect widget values
+    # before the Convert page creates them.
+    source_dialect = st.session_state.get("convert_src", "postgres")
+    target_dialect = st.session_state.get("convert_tgt", "mysql")
+    if not isinstance(source_dialect, str) or not source_dialect:
+        source_dialect = "postgres"
+    if not isinstance(target_dialect, str) or not target_dialect:
+        target_dialect = "mysql"
+    st.session_state.sdm_navigation_intent = create_navigation_intent(
+        target_page="convert",
+        action="open_conversion",
+        sql=sql,
+        dialect=source_dialect,
+        target_dialect=target_dialect,
+        origin="templates",
+    )
     st.query_params["page"] = "convert"

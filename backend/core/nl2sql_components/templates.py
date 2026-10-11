@@ -86,7 +86,7 @@ class QueryTemplate:
 DEFAULT_QUERY_TEMPLATES = [
     QueryTemplate(
         name="top_n_query",
-        pattern=rf"(?:查询|获取|get|show|find)?\s*(?:前|top|bottom|最低|最少|lowest|smallest)\s*(\d+)\s*(?:个|条|名)?\s*(.{{1,{_TEMPLATE_CAPTURE_LIMIT}}}?)(?:按|by)?\s*(.{{1,{_TEMPLATE_CAPTURE_LIMIT}}})?\s*(?:排序|排列|order)?",
+        pattern=rf"(?:查询|获取|get|show|find)?\s*(?:前|top|bottom|最低|最少|lowest|smallest)\s*(-?\d+)\s*(?:个|条|名)?\s*(.{{1,{_TEMPLATE_CAPTURE_LIMIT}}}?)(?:按|by)?\s*(.{{1,{_TEMPLATE_CAPTURE_LIMIT}}})?\s*(?:排序|排列|order)?",
         sql_template="SELECT * FROM {table} ORDER BY {order_col} DESC LIMIT {n}",
         priority=90,
     ),
@@ -98,7 +98,7 @@ DEFAULT_QUERY_TEMPLATES = [
     ),
     QueryTemplate(
         name="time_range_query",
-        pattern=r"(?:查询|获取|get|find)?\s*(?:最近|过去|last|past)\s*(\d+)\s*(天|周|月|年|days?|weeks?|months?|years?)(?:的|内的)?\s*(.+)",
+        pattern=r"(?:查询|获取|get|find)?\s*(?:最近|过去|last|past)\s*(-?\d+)\s*(天|周|月|年|days?|weeks?|months?|years?)(?:的|内的)?\s*(.+)",
         sql_template="SELECT * FROM {table} WHERE {date_col} >= DATE_SUB(CURRENT_DATE, {interval})",
         priority=85,
     ),
