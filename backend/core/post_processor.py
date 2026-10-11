@@ -10,7 +10,7 @@ from typing import Tuple, List, Callable
 import sqlglot
 from sqlglot import exp
 
-from .rules import rule_engine, RuleEngine, DYNAMIC_SEPARATOR_FAIL_NOTE
+from .rules import rule_engine, RuleEngine
 from .function_call_scanner import replace_function_calls
 from .p1_sql_scanner import mask_non_executable
 
