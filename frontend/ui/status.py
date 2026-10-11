@@ -53,6 +53,7 @@ def render_conversion_status(
 
 def render_result_panel(
     sql: str,
+    source_sql: str,
     source_dialect: str,
     target_dialect: str,
     warnings: list[str],
@@ -68,6 +69,7 @@ def render_result_panel(
 
     Args:
         sql: Converted SQL
+        source_sql: The user's original SQL (semantic-diff source)
         source_dialect: Source dialect name
         target_dialect: Target dialect name
         warnings: List of warning strings
@@ -142,12 +144,10 @@ def render_result_panel(
         )
     with col_diff:
         if st.button("Semantic Diff", key="to_diff_btn"):
-            from frontend.core.navigation import create_navigation_intent
-            intent = create_navigation_intent(
-                target_page="diff",
-                action="open_diff",
-                source=sql,
-                target=sql,
+            from frontend.core.navigation import create_diff_navigation_intent
+            intent = create_diff_navigation_intent(
+                source_sql=source_sql,
+                target_sql=sql,
                 src_dialect=source_dialect,
                 tgt_dialect=target_dialect,
             )

@@ -38,7 +38,9 @@ def render_templates_page(theme: ColorTokens) -> None:
         for label, sql in items:
             short_label = label.replace(f"{cat} · ", "")
             with st.expander(f"{esc(short_label)}", expanded=False):
-                st.code(esc(sql), language="sql")
+                # st.code renders its argument literally — pass the raw
+                # SQL; HTML escaping is only for markdown/HTML regions.
+                st.code(sql, language="sql")
                 st.button(
                     "Use in Convert",
                     key=_deterministic_key("tpl", f"{cat}::{label}"),

@@ -58,13 +58,13 @@ def render_sql_editor(
     st.markdown(f"{label_html}{dialect_badge}")
 
     sql = st.text_area(
+        label,
         key=key,
         value=value,
         height=height,
         placeholder=placeholder,
         label_visibility="collapsed",
         disabled=disabled,
-        horizontal=True,
     )
 
     return sql

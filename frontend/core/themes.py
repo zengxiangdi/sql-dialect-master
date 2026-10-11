@@ -30,13 +30,19 @@ def list_themes() -> list[str]:
 def export_theme(theme: ColorTokens) -> str:
     """Export theme tokens to JSON string.
 
+    ColorTokens is a frozen dataclass (not a pydantic model), so
+    serialization goes through ``dataclasses.asdict`` + ``json.dumps``;
+    the output round-trips through ``validate_theme_json``.
+
     Args:
         theme: ColorTokens instance
 
     Returns:
         JSON representation
     """
-    return theme.model_dump_json(indent=2)
+    from dataclasses import asdict
+
+    return json.dumps(asdict(theme), indent=2)
 
 
 def validate_theme_json(json_str: str) -> dict:

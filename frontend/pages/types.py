@@ -6,6 +6,7 @@ import streamlit as st
 from frontend.app_context_v2 import DIALECTS, get_dialect_label, get_page_data
 from frontend.core.design_tokens import ColorTokens
 from frontend.core.escaping import esc
+from frontend.core.type_status import classify_mapping_status
 
 TYPE_CATEGORIES = {
     "String Types": ["STRING", "VARCHAR", "CHAR", "TEXT", "MEDIUMTEXT", "LONGTEXT"],
@@ -59,12 +60,7 @@ def render_types_page(theme: ColorTokens) -> None:
     for type_name, type_map in mappings.items():
         src_type = type_map.get(src_db, "N/A")
         tgt_type = type_map.get(tgt_db, "N/A")
-        if src_type == tgt_type:
-            status = "exact"
-        elif tgt_type != "N/A":
-            status = "mapped"
-        else:
-            status = "missing"
+        status = classify_mapping_status(src_type, tgt_type)
         table_data.append({
             "Type": type_name,
             esc(src_db.upper()): src_type,
