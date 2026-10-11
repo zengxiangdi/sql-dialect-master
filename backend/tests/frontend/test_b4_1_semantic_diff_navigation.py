@@ -7,7 +7,6 @@ original SQL exists (NL2SQL), no self-comparison may be offered.
 """
 from __future__ import annotations
 
-import pytest
 from streamlit.testing.v1 import AppTest
 
 from frontend.core.navigation import create_diff_navigation_intent
