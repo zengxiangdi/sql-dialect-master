@@ -2,6 +2,7 @@
 """SQL Transpiler - Convert SQL between different database dialects."""
 import asyncio
 import hashlib
+import json
 import logging
 import re
 from dataclasses import dataclass, field
@@ -21,6 +22,7 @@ from .config import (
 from .exceptions import ErrorCode, ValidationError
 from .p1_sql_scanner import mask_non_executable
 from .post_processor import PostProcessor
+from .rules import DYNAMIC_SEPARATOR_FAIL_NOTE
 
 logger = logging.getLogger(__name__)
 _DANGEROUS_OPERATION_PATTERN = re.compile(
@@ -94,6 +96,403 @@ class TranspileResult:
             "warnings": self.warnings,
             "target_validation_state": self.target_validation_state,
         }
+
+
+# The single field list that determines a rule's effective conversion
+# behavior — and therefore the transpiler cache identity.  BOTH
+# ``_rule_cache_state`` and ``_build_rule_cache_payload`` derive from
+# this list so the two can never drift.  If a new ``TransformRule``
+# field changes what a rule does, it must be added here.
+_RULE_SIGNATURE_FIELDS = (
+    "name",
+    "source",
+    "target",
+    "pattern",
+    "replacement",
+    "note",
+    "category",
+    "priority",
+    "enabled",
+    "function_name",
+    "structured_replacement",
+    "structured_replacer",
+    "full_sql_rewriter",
+)
+
+# Signature fields that hold callables; they serialize through
+# ``_callable_cache_identity`` in the payload.
+_RULE_CALLABLE_FIELDS = ("structured_replacer", "full_sql_rewriter")
+
+
+# Conversion-claim evidence for the static compatibility-notes table.
+# Each entry maps a distinctive note substring to the evidence the
+# claim needs before it is emitted:
+#   source_constructs  — must appear in the user's ORIGINAL SQL
+#   target_constructs  — must appear in the FINAL SQL; an empty tuple
+#                        marks a source-construct advisory (no
+#                        conversion claimed, source evidence only)
+#
+# Classification rule (B2-3a): a static note is a conversion-result
+# claim (Class B, evidence-gated) when its copy explicitly states the
+# conversion happened — "… transformation" or "… converted to …" — or
+# when a prior audit batch (B2-3) explicitly gated that family
+# (LISTAGG/ARRAY_JOIN, CONNECT BY, LATERAL VIEW).  Bare "X → Y" notes
+# without completion wording describe a generic source→target mapping
+# (dialect-pair information) and remain Class A advisories; that choice
+# is deliberate and documented here, and is locked in by
+# TestB23A_T1_StaticClaimClassificationComplete — any NEW note with
+# completion wording that is not listed below fails that test.
+#
+# Marker order matters for nested substrings: put the more specific
+# marker first ("converted to JSON/VARRAY" before "converted to JSON").
+_CONVERSION_NOTE_EVIDENCE = (
+    ("LISTAGG → ARRAY_JOIN", ("LISTAGG",), ("ARRAY_JOIN",)),
+    ("ARRAY_AGG → LISTAGG", ("ARRAY_AGG",), ("LISTAGG",)),
+    ("CONNECT BY → WITH RECURSIVE", ("CONNECT BY",), ("WITH RECURSIVE",)),
+    ("LATERAL VIEW EXPLODE → JSON_TABLE", ("LATERAL VIEW",), ("JSON_TABLE",)),
+    ("LATERAL VIEW EXPLODE → UNNEST", ("LATERAL VIEW",), ("UNNEST",)),
+    ("LATERAL VIEW EXPLODE → LATERAL FLATTEN", ("LATERAL VIEW",), ("FLATTEN",)),
+    ("UNNEST → LATERAL VIEW EXPLODE", ("UNNEST",), ("LATERAL VIEW",)),
+    ("FLATTEN → LATERAL VIEW EXPLODE", ("FLATTEN",), ("LATERAL VIEW",)),
+    ("CROSS/OUTER APPLY → LATERAL VIEW", ("APPLY",), ("LATERAL VIEW",)),
+    ("LATERAL VIEW EXPLODE may need manual adjustment", ("LATERAL VIEW",), ()),
+    # B2-3a: remaining explicit conversion claims ("transformation" /
+    # "converted to" wording) from the static table.
+    ("GROUP_CONCAT → STRING_AGG transformation", ("GROUP_CONCAT",), ("STRING_AGG",)),
+    ("IFNULL → COALESCE transformation", ("IFNULL",), ("COALESCE",)),
+    ("STRING_AGG → GROUP_CONCAT transformation", ("STRING_AGG",), ("GROUP_CONCAT",)),
+    ("ARRAY types → JSON transformation", ("ARRAY",), ("JSON",)),
+    ("TOP → LIMIT transformation", ("TOP",), ("LIMIT",)),
+    ("GETDATE() → NOW() transformation", ("GETDATE",), ("NOW()",)),
+    ("Hive ARRAY/MAP types converted to JSON/VARRAY", ("ARRAY", "MAP"), ("JSON", "VARRAY")),
+    ("Hive ARRAY/MAP types converted to JSON", ("ARRAY", "MAP"), ("JSON",)),
+)
+
+
+def _executable_upper(sql: str) -> str:
+    """Upper-cased executable-only view of ``sql`` for construct detection.
+
+    Comments, string literals and quoted identifiers are replaced by
+    spaces (``mask_non_executable``), so construct evidence is taken
+    only from real SQL code: a construct spelled inside a comment, a
+    string literal or a quoted identifier is not evidence that the
+    source used it or that the final SQL produced it.  Used uniformly
+    by both the static-table evidence filter and the dynamic
+    conversion-claim checks, so no claim path falls back to raw
+    substring matching.
+    """
+    return mask_non_executable(sql).upper()
+
+
+# Constructs whose evidence requires a FUNCTION-CALL form: the name
+# immediately followed by ``(``, with an identifier boundary before it.
+# A column named ``STRING_AGG_backup`` therefore never counts as a
+# STRING_AGG call.
+_FUNCTION_FORM_CONSTRUCTS = frozenset({
+    "GROUP_CONCAT", "STRING_AGG", "IFNULL", "COALESCE",
+    "LISTAGG", "ARRAY_JOIN", "ARRAY_AGG", "JSON_TABLE",
+    "UNNEST", "FLATTEN", "GETDATE", "NOW",
+})
+
+# Constructs whose evidence requires TYPE context.  A bare token (a
+# column named ``json``) is not evidence of a type conversion; these
+# are verified against the parsed AST as DataType nodes (see
+# _contains_type_construct).  VARRAY is parsed by sqlglot as a
+# USERDEFINED DataType carrying ``kind == "VARRAY"``.
+_TYPE_CONSTRUCTS = frozenset({"ARRAY", "MAP", "JSON", "VARRAY"})
+
+# Clause/grammar keywords whose evidence requires SYNTAX context: a
+# bare identifier whose text equals one of these is a column, not a
+# clause.  Verified against the parsed AST (see
+# _contains_clause_construct).
+_CLAUSE_AST_CONSTRUCTS = frozenset({
+    "LIMIT", "TOP", "MERGE", "PIVOT", "UNPIVOT", "AUTO_INCREMENT",
+})
+
+# APPLY is a T-SQL join keyword; grammar evidence requires it to follow
+# CROSS or OUTER.  A column named ``apply`` or a reference ``t.apply``
+# never matches.
+_APPLY_PATTERN = r"(?<![\w$])(?:CROSS|OUTER)\s+APPLY(?![\w$])"
+
+# TOP grammar: TOP only ever appears immediately after
+# ``SELECT [ALL | DISTINCT]`` — a position a LIMIT clause never
+# occupies.  Used on the executable-masked text together with
+# ``exp.Limit`` evidence to distinguish TOP from LIMIT where the AST
+# cannot (sqlglot parses both to identical Limit nodes and Snowflake
+# supports both keywords).  Each TOP clause contributes exactly one
+# match and corresponds to exactly one Limit node, so the counts can be
+# compared per SELECT level (see _contains_clause_construct).
+_TOP_SELECT_PATTERN = re.compile(
+    r"(?<![\w$])SELECT\s+(?:(?:ALL|DISTINCT)\s+)?TOP(?=\s|\()"
+)
+
+# Dialects in which sqlglot accepts TOP as a SELECT clause.  Derived
+# from actual parse behavior with the installed sqlglot (verified by
+# probing every SUPPORTED_DIALECTS entry):
+# * parsing ``SELECT TOP 1 * FROM t`` yields a Limit node in exactly
+#   oracle, tsql, snowflake and redshift;
+# * in each of those dialects a bare column named ``top`` at SELECT
+#   position does not parse at all, so counting TOP matches there can
+#   never miscount a column;
+# * in every other supported dialect ``top`` is an ordinary identifier
+#   (e.g. postgres/mysql ``SELECT top FROM t LIMIT 5`` parses with top
+#   as a Column) while TOP as a clause does not parse.
+# TOP evidence is therefore only counted for dialects in this set —
+# dialects without TOP grammar never produce TOP evidence from the
+# text position alone.
+#
+# Oracle is deliberately ABSENT even though its lenient parser accepts
+# SELECT TOP: Oracle's official row-limiting syntax is OFFSET/FETCH
+# (a Fetch node), not SQL Server-style TOP.  A Limit node in Oracle SQL
+# can only come from lenient-parsed invalid TOP, whose identity cannot
+# be confirmed — handled by the explicit oracle fail-closed guard in
+# _contains_clause_construct instead of by this set.
+_TOP_CLAUSE_DIALECTS = frozenset({"tsql", "snowflake", "redshift"})
+
+# SQL identifier character model: Unicode word characters (letters,
+# digits, underscore — Python's ``\w``) plus ``$`` (a T-SQL / Databricks
+# identifier character).  sqlglot tokenizes ``limit$column`` and
+# ``LIMIT列`` as a single identifier, so the boundary classes must
+# include both.
+_IDENT_START = r"(?<![\w$])"
+_IDENT_END = r"(?![\w$])"
+# Clause keywords additionally must not be a qualified reference:
+# ``t.LIMIT`` / ``t.TOP`` are column references, not LIMIT/TOP clauses.
+_IDENT_OR_DOT_START = r"(?<![\w$.])"
+
+
+def _contains_type_construct(sql: str, dialect: str, construct: str) -> bool:
+    """AST evidence that ``sql`` (in ``dialect``) contains the TYPE construct.
+
+    ARRAY/MAP/JSON/VARRAY claims describe type conversions, so a
+    standalone token or an ordinary identifier/reference is not
+    evidence.  Parse with sqlglot in the given dialect and look for a
+    DataType node naming the construct:
+    * ARRAY — ``ARRAY<…>`` (Hive family), ``TEXT[]`` (Postgres),
+    * MAP — ``MAP<…>``,
+    * JSON — ``tags JSON``, ``CAST(x AS JSON)``,
+    * VARRAY — a USERDEFINED DataType with ``kind == "VARRAY"``.
+    Parse failures yield no evidence (fail closed).
+    """
+    try:
+        tree = sqlglot.parse_one(sql, read=dialect)
+    except Exception:
+        return False
+    for node in tree.walk():
+        if not isinstance(node, exp.DataType):
+            continue
+        if construct == "VARRAY":
+            if node.args.get("kind") == "VARRAY":
+                return True
+        elif getattr(node.this, "name", None) == construct:
+            return True
+    return False
+
+
+def _contains_clause_construct(
+    sql: str, dialect: str, construct: str, masked_upper: str = ""
+) -> bool:
+    """AST evidence that ``sql`` (in ``dialect``) contains the clause keyword.
+
+    A bare identifier whose text equals LIMIT/TOP/MERGE/PIVOT/UNPIVOT/
+    AUTO_INCREMENT is a column, not a clause; only the parsed AST's
+    clause nodes count as evidence:
+    * LIMIT and TOP both parse to ``exp.Limit``.  sqlglot provides no
+      AST field distinguishing them (verified against the installed
+      version: ``SELECT TOP 5`` and ``… LIMIT 5`` both parse to
+      Limit(expression=5) with every other arg None), and the dialect
+      cannot decide either because Snowflake supports both keywords.
+      ``exp.Limit`` therefore counts as "a row-limit construct exists"
+      per SELECT level, and the TOP/LIMIT distinction comes from the
+      strictly position-constrained TOP grammar on the executable-
+      masked text: TOP only ever appears immediately after
+      ``SELECT [ALL | DISTINCT]``, a position a LIMIT clause never
+      occupies.  Each TOP clause contributes exactly one match and one
+      Limit node, so counting associates each construct with its own
+      query level — nested queries can carry real TOP and real LIMIT
+      evidence at the same time.
+    * MERGE parses to ``exp.Merge``;
+    * PIVOT / UNPIVOT parse to ``exp.Pivot`` (the ``unpivot`` flag
+      distinguishes them);
+    * AUTO_INCREMENT parses to ``exp.AutoIncrementColumnConstraint``
+      (DDL column constraint).
+    Parse failures yield no evidence (fail closed).
+    """
+    try:
+        tree = sqlglot.parse_one(sql, read=dialect)
+    except Exception:
+        return False
+    if construct in ("LIMIT", "TOP"):
+        limit_nodes = list(tree.find_all(exp.Limit))
+        if not limit_nodes:
+            return False
+        # A bare column named limit/top yields no Limit node at all
+        # (it parses as a Column), and unparseable SQL already failed
+        # closed above.  Each SELECT level that has a row-limit
+        # construct contributes exactly one Limit node, and each TOP
+        # clause contributes exactly one position-constrained match in
+        # the masked text (verified: nested queries yield one Limit
+        # node per SELECT; a same-level TOP+LIMIT combination does not
+        # parse).  Counting therefore associates TOP and LIMIT
+        # evidence with their own query levels instead of classifying
+        # the whole statement with one global match:
+        # * TOP evidence: at least one SELECT-position TOP exists in a
+        #   dialect whose grammar actually accepts TOP (see
+        #   _TOP_CLAUSE_DIALECTS — a column named ``top`` in e.g.
+        #   postgres/mysql never counts);
+        # * LIMIT evidence: at least one Limit node is NOT a TOP.
+        if dialect == "oracle":
+            # Oracle's official row-limiting is OFFSET/FETCH (a Fetch
+            # node, handled above as "no Limit node").  A Limit node in
+            # Oracle SQL can only come from sqlglot's lenient parse of
+            # the SQL Server-style SELECT TOP, which is not valid
+            # Oracle syntax — neither TOP nor LIMIT identity can be
+            # confirmed, so fail closed for both instead of letting the
+            # fall-through counting reclassify the same input as LIMIT.
+            return False
+        top_count = (
+            len(_TOP_SELECT_PATTERN.findall(masked_upper))
+            if dialect in _TOP_CLAUSE_DIALECTS
+            else 0
+        )
+        if construct == "TOP":
+            return top_count > 0
+        return top_count < len(limit_nodes)
+    if construct == "MERGE":
+        return tree.find(exp.Merge) is not None
+    if construct in ("PIVOT", "UNPIVOT"):
+        for node in tree.find_all(exp.Pivot):
+            is_unpivot = bool(getattr(node, "unpivot", False))
+            if construct == "UNPIVOT" and is_unpivot:
+                return True
+            if construct == "PIVOT" and not is_unpivot:
+                return True
+        return False
+    if construct == "AUTO_INCREMENT":
+        return tree.find(exp.AutoIncrementColumnConstraint) is not None
+    return False
+
+
+def _contains_construct(
+    masked_upper: str, sql: str, dialect: str, construct: str
+) -> bool:
+    """Boundary-aware construct detection on executable-masked text.
+
+    Matching semantics per construct kind (uniform for the static
+    evidence table and the dynamic claims):
+
+    * multi-word constructs (e.g. ``WITH RECURSIVE``, ``LATERAL VIEW``,
+      ``CONNECT BY``) match as a whole phrase with identifier
+      boundaries on both sides;
+    * function constructs (``GROUP_CONCAT``, ``STRING_AGG``,
+      ``IFNULL``, ``COALESCE``, ``LISTAGG``, ``ARRAY_JOIN``, …) require
+      the call form ``NAME(`` so identifiers like
+      ``GROUP_CONCAT_backup`` or ``schema$LISTAGG`` never match;
+    * type constructs (``ARRAY``, ``MAP``, ``JSON``, ``VARRAY``) are
+      verified as DataType nodes in the parsed AST of the given
+      dialect, never as standalone tokens;
+    * clause keywords (``LIMIT``, ``TOP``, ``MERGE``, ``PIVOT``,
+      ``UNPIVOT``, ``AUTO_INCREMENT``) are verified as clause AST nodes
+      — a bare column named ``limit`` is not a LIMIT clause;
+    * ``APPLY`` requires the grammar form ``CROSS|OUTER APPLY``;
+    * any other single-word construct matches as a whole token with
+      identifier boundaries and must not be a qualified reference
+      (``t.LIMIT`` is not a LIMIT clause).
+
+    ``masked_upper`` must already be the executable-masked, upper-cased
+    view produced by ``_executable_upper``; ``sql`` is the original
+    (unmasked) SQL, used for AST-based type and clause evidence.
+    """
+    words = construct.split()
+    if len(words) > 1:
+        pattern = (
+            _IDENT_START + r"\s+".join(re.escape(word) for word in words) + _IDENT_END
+        )
+        return re.search(pattern, masked_upper) is not None
+    name = words[0].rstrip("()")
+    if name in _TYPE_CONSTRUCTS:
+        return _contains_type_construct(sql, dialect, name)
+    if name in _CLAUSE_AST_CONSTRUCTS:
+        return _contains_clause_construct(sql, dialect, name, masked_upper)
+    if name == "APPLY":
+        return re.search(_APPLY_PATTERN, masked_upper) is not None
+    if name in _FUNCTION_FORM_CONSTRUCTS or construct.endswith("()"):
+        pattern = _IDENT_START + re.escape(name) + r"\s*\("
+        return re.search(pattern, masked_upper) is not None
+    pattern = _IDENT_OR_DOT_START + re.escape(name) + _IDENT_END
+    return re.search(pattern, masked_upper) is not None
+
+
+class _CallableIdentity:
+    """Identity wrapper for callable signature fields.
+
+    Python tuple equality calls element ``==``; a callable class may
+    override ``__eq__`` with semantic (non-identity) logic, which would
+    let two behaviorally different callables compare equal and reuse a
+    stale cache version.  This wrapper forces strict object identity
+    (``is``) so two distinct callable objects never compare equal.
+
+    The wrapper also holds a strong reference to the callable: the
+    previous signature snapshot keeps the old callable alive for as long
+    as the snapshot exists, so its ``id()`` cannot be reused by a later
+    callable (identity-reuse guard for the payload serialization).
+    """
+
+    __slots__ = ("callable",)
+
+    def __init__(self, fn):
+        self.callable = fn
+
+    def __eq__(self, other):
+        return (
+            isinstance(other, _CallableIdentity)
+            and self.callable is other.callable
+        )
+
+    def __hash__(self):
+        return id(self.callable)
+
+
+def _rule_signature_value(rule, field: str):
+    """Return the cache-signature value for one ``TransformRule`` field.
+
+    ``category`` normalizes to its string value; every other field is
+    returned as-is.  Callable fields are wrapped in ``_CallableIdentity``
+    so tuple comparison in ``_rule_cache_state`` detects callable-object
+    replacement by identity (``is``), never by ``==``.
+    """
+    if field == "category":
+        return rule.category.value
+    value = getattr(rule, field)
+    if field in _RULE_CALLABLE_FIELDS and value is not None:
+        return _CallableIdentity(value)
+    return value
+
+
+def _callable_cache_identity(fn) -> Optional[str]:
+    """Process-local payload identity for a callable signature field.
+
+    The transpiler cache is an in-memory, per-instance TTL cache (see
+    ``SQLTranspiler.__init__``); it is never persisted across processes.
+    Within that scope the callable object's ``id()`` is a stable,
+    unique identity for the process lifetime of the rule callables and
+    detects callable *replacement*.  The ``module.qualname`` prefix is
+    informational only — the operative identity is ``id()``, so two
+    distinct callables that happen to share a qualname still produce
+    different identities.
+
+    Limitation (deliberate): this identity does NOT detect changes to
+    mutable closure state *inside* a callable.  The current rule
+    contract's callables are pure module-level functions without
+    closure state; if that contract ever allows mutable state, an
+    explicit auditable version field must be introduced — object
+    identity must not be relied on for that.
+    """
+    if fn is None:
+        return None
+    module = getattr(fn, "__module__", "?")
+    qualname = getattr(fn, "__qualname__", repr(fn))
+    return f"{module}.{qualname}#id:{id(fn)}"
 
 
 class SQLTranspiler:
@@ -252,7 +651,9 @@ class SQLTranspiler:
             final_sql, transformations = self.post_processor.process(transpiled, source, target)
             if ast_notes:
                 transformations = ast_notes + transformations
-            compat_notes = self._get_compatibility_notes(source, target, sql)
+            compat_notes = self._get_compatibility_notes(
+                source, target, source_sql=sql, final_sql=final_sql
+            )
             if executable_sql is not None:
                 warnings = security_warnings + self._generate_warnings_masked(
                     executable_sql, source, target
@@ -261,6 +662,56 @@ class SQLTranspiler:
                 warnings = security_warnings + self._generate_warnings(sql, source, target)
 
             target_validation_state = "target_valid"
+
+            # B2-1d: when the dynamic-separator fail-closed path fires,
+            # strip the static "STRING_AGG → GROUP_CONCAT transformation"
+            # compatibility note so a failed result does not carry a
+            # note claiming the conversion succeeded.
+            def _strip_contradictory_agg_notes(notes: list) -> list:
+                return [
+                    n for n in notes
+                    if not (
+                        "STRING_AGG" in n and "GROUP_CONCAT" in n
+                        and n != DYNAMIC_SEPARATOR_FAIL_NOTE
+                    )
+                ]
+
+            if DYNAMIC_SEPARATOR_FAIL_NOTE in transformations:
+                # B2-1b fail-closed: the structured rewriter left an
+                # unconvertible dynamic GROUP_CONCAT SEPARATOR in place
+                # and recorded the fail-closed note.  Refuse to report
+                # success: the target SQL contains a source-dialect
+                # STRING_AGG call that MySQL cannot execute.
+                return TranspileResult(
+                    success=False, source_sql=sql, source_dialect=source, target_dialect=target,
+                    error=DYNAMIC_SEPARATOR_FAIL_NOTE,
+                    error_code=ErrorCode.VALIDATION_FAILED.value,
+                    compatibility_notes=_strip_contradictory_agg_notes(compat_notes),
+                    transformations=transformations,
+                    warnings=warnings, target_validation_state="invalid",
+                )
+            # B2-1b structural guard: even when sqlglot transpiled a
+            # STRING_AGG whose dynamic separator it emitted natively
+            # (e.g. `SEPARATOR CONCAT(',', UPPER(x))`), MySQL's actual
+            # GROUP_CONCAT grammar accepts only a string literal in the
+            # SEPARATOR slot.  sqlglot's MySQL dialect is more permissive
+            # than real MySQL here, so a parse-OK result is not
+            # execution evidence — detect the non-Literal separator and
+            # fail closed.
+            if target == "mysql" and self._group_concat_dynamic_separator(final_sql):
+                guard_note = (
+                    "B2-1b fail-closed: GROUP_CONCAT SEPARATOR must be a "
+                    "string literal in MySQL; the dynamic separator produced "
+                    "by transpilation cannot be expressed in the target "
+                    "and the conversion is not executable on MySQL."
+                )
+                return TranspileResult(
+                    success=False, source_sql=sql, source_dialect=source, target_dialect=target,
+                    error=guard_note, error_code=ErrorCode.VALIDATION_FAILED.value,
+                    compatibility_notes=_strip_contradictory_agg_notes(compat_notes),
+                    transformations=transformations,
+                    warnings=warnings, target_validation_state="invalid",
+                )
             if validate:
                 (
                     validation_error,
@@ -544,31 +995,39 @@ class SQLTranspiler:
             ast.set("where", None)
 
     def _rule_cache_state(self):
-        """Return a mutation-sensitive structural signature for the current rules."""
+        """Return a mutation-sensitive structural signature for the current rules.
+
+        Derived from ``_RULE_SIGNATURE_FIELDS`` — the SAME field list
+        ``_build_rule_cache_payload`` uses, so the two can never drift.
+        Callable fields (``structured_replacer`` /
+        ``full_sql_rewriter``) are compared by object identity: replacing
+        the callable object changes the signature.
+        """
         return tuple(
-            (
-                rule.name,
-                rule.source,
-                rule.target,
-                rule.pattern,
-                rule.replacement,
-                rule.note,
-                rule.category.value,
-                rule.priority,
-                rule.enabled,
-            )
+            tuple(_rule_signature_value(rule, field_name) for field_name in _RULE_SIGNATURE_FIELDS)
             for rule in self.post_processor.engine.rules
         )
 
     def _build_rule_cache_payload(self) -> str:
-        """Build the canonical rule payload used by the existing cache identity."""
-        return "\n".join(
-            "|".join([
-                rule.name, rule.source, rule.target, rule.pattern, rule.replacement,
-                rule.note, rule.category.value, str(rule.priority), str(rule.enabled),
-            ])
-            for rule in self.post_processor.engine.rules
-        )
+        """Build the canonical rule payload used by the cache identity.
+
+        Derived from the SAME ``_RULE_SIGNATURE_FIELDS`` list as
+        ``_rule_cache_state``.  JSON encoding gives unambiguous field
+        boundaries (no delimiter-collision risk).  Callable fields
+        serialize through ``_callable_cache_identity`` so the payload
+        reflects the same callable replacement the state detects.
+        """
+        records = []
+        for rule in self.post_processor.engine.rules:
+            record = {}
+            for field_name in _RULE_SIGNATURE_FIELDS:
+                value = _rule_signature_value(rule, field_name)
+                if field_name in _RULE_CALLABLE_FIELDS:
+                    fn = value.callable if isinstance(value, _CallableIdentity) else value
+                    value = _callable_cache_identity(fn)
+                record[field_name] = value
+            records.append(record)
+        return json.dumps(records, sort_keys=True)
 
     def _rule_cache_version(self) -> str:
         """Reuse the rule-version hash until the effective rule state changes."""
@@ -586,43 +1045,83 @@ class SQLTranspiler:
         security_version = f"{settings.security_check_enabled}|{settings.security_block_dangerous}"
         return f"v4|{rule_version}|{security_version}|{sql}|{source}|{target}|{pretty}|{validate}"
 
-    def _get_compatibility_notes(self, source: str, target: str, sql: str = "") -> List[str]:
+    def _get_compatibility_notes(
+        self,
+        source: str,
+        target: str,
+        source_sql: str = "",
+        final_sql: str = "",
+    ) -> List[str]:
+        """Compatibility notes, split by semantic responsibility.
+
+        **Source-construct advisories** (class A) are detected from
+        ``source_sql`` — the user's original SQL.  A successfully
+        converted final SQL no longer contains the source construct
+        (e.g. LIMIT becomes FETCH FIRST), so a final-only check would
+        wrongly drop these advisories.
+
+        **Conversion-result claims** (class B) assert a transformation
+        actually happened.  They are retained only when the claimed
+        target construct appears in ``final_sql`` AND the source
+        construct appears in ``source_sql``.  The old code checked the
+        original SQL for the target construct (which never appears
+        there), dropping real claims for the wrong reason, while
+        appending claims for conversions that never happened.
+        """
         notes = list(get_compatibility_notes(source, target))
-        if not sql:
+        if not source_sql and not final_sql:
             return notes
 
-        # Filter out notes for transformations that were NOT actually applied.
-        # sqlglot may have handled the conversion natively, or may have left
-        # the source construct unchanged. Only emit notes when the target SQL
-        # actually contains the expected transformed output.
-        sql_upper = sql.upper()
+        source_upper = _executable_upper(source_sql)
+        final_upper = _executable_upper(final_sql)
+
+        # Class B (static table): notes that claim a conversion happened.
+        # Marker identifies the note; the claim survives only with source
+        # and final evidence.  An empty target tuple marks an advisory
+        # that describes the source construct (source evidence only).
         filtered = []
         for note in notes:
             upper_note = note.upper()
-            if "LISTAGG" in upper_note and "ARRAY_JOIN" not in upper_note:
-                # Note claims ARRAY_JOIN conversion but we don't see it in output
-                continue
-            if "ARRAY_JOIN" in upper_note and "ARRAY_JOIN" not in sql_upper:
-                continue
-            if "CONNECT BY" in upper_note and "WITH RECURSIVE" not in sql_upper:
-                continue
-            if "LATERAL VIEW" in upper_note and ("UNNEST" not in sql_upper and "JSON_TABLE" not in sql_upper):
-                continue
-            filtered.append(note)
+            dropped = False
+            for marker, source_constructs, target_constructs in _CONVERSION_NOTE_EVIDENCE:
+                if marker.upper() in upper_note:
+                    if not any(
+                        _contains_construct(source_upper, source_sql, source, c)
+                        for c in source_constructs
+                    ):
+                        dropped = True
+                        break
+                    # An empty target tuple marks a source-construct
+                    # advisory: no final-SQL evidence required.
+                    if target_constructs and not any(
+                        _contains_construct(final_upper, final_sql, target, c)
+                        for c in target_constructs
+                    ):
+                        dropped = True
+                        break
+                    break
+            if not dropped:
+                filtered.append(note)
         notes = filtered
 
-        if "LIMIT" in sql_upper and target == "oracle":
+        # Class A: source-construct advisories (generic, not claims of a
+        # completed conversion).
+        if _contains_construct(source_upper, source_sql, source, "LIMIT") and target == "oracle":
             notes.append("Oracle uses FETCH FIRST n ROWS ONLY (12c+) or ROWNUM for LIMIT")
-        if "AUTO_INCREMENT" in sql_upper and target != "mysql":
+        if _contains_construct(source_upper, source_sql, source, "AUTO_INCREMENT") and target != "mysql":
             notes.append("AUTO_INCREMENT syntax varies by database")
-        if "LATERAL VIEW" in sql_upper and target not in ["hive", "spark", "databricks"]:
-            notes.append("LATERAL VIEW is Hive/Spark specific, converted to UNNEST/JSON_TABLE")
-        if "CONNECT BY" in sql_upper and target != "oracle":
-            notes.append("CONNECT BY is Oracle specific, converted to WITH RECURSIVE")
-        if "MERGE" in sql_upper:
+        if _contains_construct(source_upper, source_sql, source, "MERGE"):
             notes.append("MERGE syntax varies significantly between databases")
-        if "PIVOT" in sql_upper or "UNPIVOT" in sql_upper:
+        if _contains_construct(source_upper, source_sql, source, "PIVOT") or _contains_construct(source_upper, source_sql, source, "UNPIVOT"):
             notes.append("PIVOT/UNPIVOT syntax varies by database")
+
+        # Class B (dynamic): conversion claims, verified by the final SQL.
+        if _contains_construct(source_upper, source_sql, source, "LATERAL VIEW") and target not in ["hive", "spark", "databricks"]:
+            if _contains_construct(final_upper, final_sql, target, "UNNEST") or _contains_construct(final_upper, final_sql, target, "JSON_TABLE"):
+                notes.append("LATERAL VIEW is Hive/Spark specific, converted to UNNEST/JSON_TABLE")
+        if _contains_construct(source_upper, source_sql, source, "CONNECT BY") and target != "oracle":
+            if _contains_construct(final_upper, final_sql, target, "WITH RECURSIVE"):
+                notes.append("CONNECT BY is Oracle specific, converted to WITH RECURSIVE")
         return notes
 
     def _generate_warnings(self, sql: str, source: str, target: str) -> List[str]:
@@ -657,6 +1156,26 @@ class SQLTranspiler:
         """Validate target SQL, preserving the original error-only interface."""
         error, _, _ = self._validate_output_detailed(sql, dialect)
         return error
+
+    def _group_concat_dynamic_separator(self, sql: str) -> bool:
+        """True when any GROUP_CONCAT in ``sql`` has a non-Literal SEPARATOR.
+
+        Real MySQL's ``GROUP_CONCAT(expr [SEPARATOR str_val])`` requires a
+        string literal in the SEPARATOR slot; sqlglot's MySQL dialect
+        accepts arbitrary expressions there, so a parse-OK result is not
+        evidence the output is executable MySQL.  Used only when
+        ``target == "mysql"`` as a fail-closed guard.
+        """
+        try:
+            tree = sqlglot.parse_one(sql, read="mysql")
+        except Exception:
+            # Unparseable output is already caught by _validate_output_detailed.
+            return False
+        for gc in tree.find_all(exp.GroupConcat):
+            sep = gc.args.get("separator")
+            if sep is not None and not isinstance(sep, exp.Literal):
+                return True
+        return False
 
     def _validate_output_detailed(
         self, sql: str, dialect: str

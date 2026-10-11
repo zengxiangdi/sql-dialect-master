@@ -12,9 +12,9 @@ Supports configuration via:
 import logging
 import sys
 from enum import Enum
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Any, Dict, List, Literal, Optional, TypedDict
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # =============================================================================
@@ -232,6 +232,15 @@ class AppSettings(BaseSettings):
     rate_limit_enabled: bool = True
     rate_limit_requests: int = 100
     rate_limit_window: int = 60
+    # Storage backend selection: strict lowercase values; no case or
+    # whitespace normalization — a Literal rejects any other spelling at
+    # settings construction instead of silently coercing it.
+    rate_limit_backend: Literal["memory", "redis"] = "memory"
+    # Redis connection URL, required only when the backend is redis.
+    # SecretStr keeps the password out of repr / logs / serialization;
+    # the store factory reads the actual value only to build the Redis
+    # client.  Default None = not configured.
+    redis_url: Optional[SecretStr] = None
     
     # NL2SQL settings
     nl2sql_confidence_threshold: float = 0.6
