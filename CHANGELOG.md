@@ -2,6 +2,77 @@
 
 All notable changes to SQL Dialect Master are documented here.
 
+## [1.1.2] - 2026-10-11
+
+### NL2SQL correctness (B1)
+
+- Aggregate columns now resolve to the user's named metric — "average price
+  grouped by category" produces ``AVG(price)``, never ``AVG(age)``.
+- Plural English time ranges (``last 3 weeks`` / ``last 2 months`` /
+  ``last 1 year``) keep their unit in both the SQL and the explanation.
+- Top-N + filter inputs emit WHERE → GROUP BY → ORDER BY → LIMIT in order,
+  with the threshold bound to the operator word (``前10条金额大于100`` → ``> 100``).
+- Multiple known relations compose into one WHERE via AND-ed EXISTS clauses.
+- Chinese relational intent (``查询有订单的用户``) produces real
+  EXISTS / NOT EXISTS end-to-end; unknown pairs (``查询有发票的用户``) fail
+  closed with ``success=False`` and an explicit explanation.
+
+### STRING_AGG / cache / compatibility evidence / configuration (B2)
+
+- Dynamic ``STRING_AGG`` separators that MySQL cannot express fail closed
+  instead of being quoted into malformed literals; the original SQL is
+  preserved byte-for-byte and never silently rewritten.
+- Rule-cache signatures cover every behavior-affecting rule field
+  (``function_name``, ``structured_replacement``, ``structured_replacer``,
+  ``full_sql_rewriter``), including callable identity — rule-set swaps
+  invalidate the cache; unchanged rules keep a stable version.
+- Compatibility notes split source-construct advisories (source SQL) from
+  conversion-result claims (verified against the final SQL, through the
+  executable mask with identifier boundaries, AST type/clause evidence, and
+  per-SELECT-level TOP/LIMIT distinction).
+- Redis rate-limit backend and URL now flow through ``AppSettings``
+  (``rate_limit_backend`` Literal, ``redis_url`` SecretStr); no raw env
+  reads, no silent downgrade to memory.
+
+### API and core contracts (B3)
+
+- ``TypeMapper.map_type`` reports ``mapping_status`` (``mapped`` /
+  ``unsupported`` / ``source_unavailable`` / ``unknown_type`` /
+  ``unknown_dialect``); ``N/A → N/A`` is never success.
+- Parser ``args_count`` counts actual expression operands, not AST arg fields.
+- Illegal ``table_hint`` values are 4xx validation errors at the API
+  boundary (before any generation), while direct orchestrator calls keep
+  their explicit ValueError.
+- The statement splitter now honors T-SQL standalone ``GO`` batches and keeps
+  Oracle PL/SQL blocks (including nested CASE / IF / LOOP / WHILE) as single
+  statements with exact content preservation.
+
+### Frontend correctness (B4)
+
+- Semantic Diff receives the original source SQL and the real conversion
+  result (never a self-comparison); the NL2SQL page no longer offers a
+  meaningless self-diff.
+- Type mapping status recognizes ``N/A`` before equality — both-missing
+  cells are never labelled ``exact``.
+- Template code blocks render raw SQL (no HTML-escaped entities).
+- The SQL editor no longer passes unsupported widget parameters.
+- ``export_theme`` serializes the frozen ``ColorTokens`` dataclass to stable,
+  validated JSON.
+
+### Testing and documentation (B5)
+
+- Release-gate independent semantic expectations cover NL2SQL values,
+  transpiler target structures, TypeMapper targets, splitter boundaries and
+  frontend navigation payloads.
+- CHANGELOG and CONTRIBUTING reflect the current repository structure.
+
+### Verification boundary
+
+Static SQL-structure verification (sqlglot parse/AST evidence) covers the
+12-dialect conversion matrix.  Runtime evidence exists only where a real
+engine executes in CI (DuckDB in-process; PostgreSQL when available);
+native MySQL / Oracle / T-SQL execution is not claimed in this release.
+
 ## [1.1.0] - 2026-09-21
 
 ### Added

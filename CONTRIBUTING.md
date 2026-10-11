@@ -25,7 +25,7 @@ Thank you for your interest in contributing to SQL Dialect Master! We welcome co
    pip install -r requirements.txt
    
    # Install test dependencies
-   pip install pytest pytest-cov black isort
+   pip install -r requirements-lock.txt && pip install -e . --no-deps
    ```
 
 ## 🏗️ Project Architecture
@@ -34,9 +34,11 @@ Thank you for your interest in contributing to SQL Dialect Master! We welcome co
   - `backend/core`: Contains the business logic (Transpiler, NL2SQL, Rules).
   - `backend/api`: REST API endpoints.
 - **Frontend**: Built with Streamlit.
-  - `sdm_local.py`: Entry point.
-  - `frontend/tabs`: Modular logic for each UI tab.
-  - `frontend/components.py`: Reusable UI widgets.
+  - `sdm_local_v2.py`: Entry point (Frontend v2 architecture).
+  - `frontend/pages/`: One module per workspace page.
+  - `frontend/ui/`: Reusable UI components (status, editor, diff, command palette).
+  - `frontend/core/`: Design tokens, themes, navigation, state, view models, escaping.
+  - `frontend/app_context_v2.py`: Data access and dialect labels for pages.
 
 ## 🧪 Running Tests
 
@@ -55,10 +57,10 @@ pytest --cov=backend
 
 ## 📝 Coding Guidelines
 
-- **Style**: We follow PEP 8. Please run `black .` and `isort .` before committing.
+- **Style**: We follow PEP 8. Please run `ruff check backend/core backend/api --select E9,F --ignore F401` before committing.
 - **Type Hints**: Use Python type hints for function arguments and return values.
 - **Documentation**: Add docstrings to modules, classes, and functions (Google style).
-- **Modularity**: Keep components small and focused (e.g., separate UI logic into `frontend/tabs`).
+- **Modularity**: Keep components small and focused (e.g., separate UI logic into `frontend/ui`).
 
 ## 🚀 Adding New Features
 
