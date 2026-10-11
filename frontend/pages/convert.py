@@ -146,6 +146,7 @@ def render_convert_page(theme: ColorTokens) -> None:
         st.markdown("---")
         render_result_panel(
             sql=vm.target_sql or "",
+            source_sql=vm.source_sql,
             source_dialect=vm.source_dialect,
             target_dialect=vm.target_dialect,
             warnings=vm.warnings,

@@ -75,6 +75,28 @@ def create_navigation_intent(
     )
 
 
+def create_diff_navigation_intent(
+    source_sql: str,
+    target_sql: str,
+    src_dialect: str,
+    tgt_dialect: str,
+) -> NavigationIntent:
+    """Build the Semantic Diff handoff payload from a conversion result.
+
+    The SOURCE is the user's original SQL and the TARGET is the real
+    conversion output — the two are never assumed equal.  Callers with
+    no original SQL must not use this helper to self-compare.
+    """
+    return create_navigation_intent(
+        target_page="diff",
+        action="open_diff",
+        source=source_sql,
+        target=target_sql,
+        src_dialect=src_dialect,
+        tgt_dialect=tgt_dialect,
+    )
+
+
 # ── Known actions per page ─────────────────────────────────────────────
 
 PAGE_ACTIONS: dict[str, list[ActionKind]] = {

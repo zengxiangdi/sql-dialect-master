@@ -269,7 +269,7 @@ def _render_action_buttons(vm: NL2SQLViewModel, theme: ColorTokens) -> None:
     if not sql:
         return
 
-    col_copy, col_dl, col_convert, col_diff = st.columns(4)
+    col_copy, col_dl, col_convert = st.columns(3)
 
     with col_copy:
         copy_sql(sql)
@@ -290,16 +290,6 @@ def _render_action_buttons(vm: NL2SQLViewModel, theme: ColorTokens) -> None:
             st.session_state.sdm_navigation_intent = intent
             st.rerun()
 
-    with col_diff:
-        if st.button("Semantic Diff", key="nl_to_diff", use_container_width=True):
-            from frontend.core.navigation import create_navigation_intent
-            intent = create_navigation_intent(
-                target_page="diff",
-                action="open_diff",
-                source=sql,
-                target=sql,
-                src_dialect=vm.dialect,
-                tgt_dialect=vm.dialect,
-            )
-            st.session_state.sdm_navigation_intent = intent
-            st.rerun()
+    # No Semantic Diff entry here: NL2SQL has no original SQL to
+    # compare against — self-comparing the generated SQL would fake a
+    # source.  The Convert page offers the real source→target diff.
