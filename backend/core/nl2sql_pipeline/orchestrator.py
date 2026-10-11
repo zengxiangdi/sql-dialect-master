@@ -67,6 +67,13 @@ from .validation import validate_sql as _validate_sql_impl
 
 logger = logging.getLogger(__name__)
 
+# Canonical table_hint identifier rule, shared by the orchestrator (which
+# raises ValueError for direct callers) and the API boundary (which
+# converts the violation into a 4xx validation error before generation).
+SAFE_TABLE_HINT = re.compile(
+    r"[A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)*"
+)
+
 
 class PipelineNL2SQLGenerator:
     """NL2SQL pipeline base class.
@@ -180,13 +187,10 @@ class PipelineNL2SQLGenerator:
                 f"Unsupported dialect: {dialect}. "
                 f"Supported: {', '.join(SUPPORTED_DIALECTS)}"
             )
-        _SAFE_TABLE_HINT = re.compile(
-            r"[A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)*"
-        )
         normalized_table_hint = (
             table_hint.strip() if isinstance(table_hint, str) else table_hint
         )
-        if normalized_table_hint and not _SAFE_TABLE_HINT.fullmatch(normalized_table_hint):
+        if normalized_table_hint and not SAFE_TABLE_HINT.fullmatch(normalized_table_hint):
             raise ValueError(
                 "table_hint must be a simple SQL identifier or dotted identifier"
             )

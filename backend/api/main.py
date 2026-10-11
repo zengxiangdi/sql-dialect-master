@@ -25,6 +25,7 @@ from backend.core.config import get_dialect_api_info, settings, setup_logging
 from backend.core import metadata as meta
 from backend.core.functions_lookup import FunctionEncyclopedia
 from backend.core.nl2sql import NL2SQLGenerator
+from backend.core.nl2sql_pipeline.orchestrator import SAFE_TABLE_HINT
 from backend.core.parser import SUPPORTED_DIALECTS, SQLParser
 from backend.core.transpiler import SQLTranspiler
 from backend.core.type_mapping import TypeMapper
@@ -568,7 +569,7 @@ async def map_type(request: TypeMapRequest):
         target_dialect,
     )
     return {
-        "success": True,
+        "success": result.get("success", False),
         **result,
         "timestamp": datetime.now().isoformat()
     }
@@ -586,6 +587,17 @@ async def generate_sql(request: NL2SQLRequest):
     - "Get top 10 users by score" → SELECT * FROM users ORDER BY score DESC LIMIT 10
     """
     dialect = normalize_dialect(request.dialect)
+    # Validate table_hint at the API boundary: an illegal identifier is
+    # a client error (4xx), never an internal ValueError → 500.  The
+    # same rule backs the orchestrator's direct-caller ValueError.
+    if request.table_hint and not SAFE_TABLE_HINT.fullmatch(request.table_hint.strip()):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Invalid table_hint: must be a simple SQL identifier or "
+                "dotted identifier"
+            ),
+        )
     result = nl2sql_generator.generate(
         request.text,
         dialect,

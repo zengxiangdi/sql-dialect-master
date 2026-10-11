@@ -68,6 +68,11 @@ class TestTypeMapMatrixCompleteness:
         result = type_mapper.map_type(type_name, source, target)
         
         assert result["success"] is True, f"Mapping failed for {type_name}: {source} → {target}"
+        # The bundled matrix is complete, so every cell is a real
+        # mapping — never an N/A masquerading as success.
+        assert result["mapping_status"] == "mapped", (
+            f"Mapping status mismatch for {type_name}: {source} → {target}"
+        )
         assert "source_type" in result
         assert "target_type" in result
         assert result["source_dialect"] == source
