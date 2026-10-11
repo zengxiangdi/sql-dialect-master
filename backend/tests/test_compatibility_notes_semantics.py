@@ -1189,3 +1189,83 @@ class TestB23G_SnowflakeTopAndLimit:
         assert any(
             "TOP" in n and "LIMIT" in n for n in notes
         ), notes
+
+
+# ── B2-3h — TOP/LIMIT evidence scoped per SELECT query ───────────────────────
+
+class TestB23H_SelectScopedTopLimitEvidence:
+    """Evidence must associate each row-limit construct with its own
+    SELECT level: a TOP in one level and a LIMIT in another are BOTH
+    real, and `SELECT ALL TOP` is a valid TOP form."""
+
+    def test_tsql_select_all_top_is_top_not_limit(self):
+        from backend.core.transpiler import (
+            _contains_construct,
+            _executable_upper,
+        )
+
+        sql = "SELECT ALL TOP 5 * FROM t"
+        masked = _executable_upper(sql)
+        assert _contains_construct(masked, sql, "tsql", "TOP") is True
+        assert _contains_construct(masked, sql, "tsql", "LIMIT") is False
+
+    def test_snowflake_select_all_top_is_top_not_limit(self):
+        from backend.core.transpiler import (
+            _contains_construct,
+            _executable_upper,
+        )
+
+        sql = "SELECT ALL TOP 5 * FROM t"
+        masked = _executable_upper(sql)
+        assert _contains_construct(masked, sql, "snowflake", "TOP") is True
+        assert _contains_construct(masked, sql, "snowflake", "LIMIT") is False
+
+    def test_snowflake_inner_top_outer_limit_both_detected(self):
+        from backend.core.transpiler import (
+            _contains_construct,
+            _executable_upper,
+        )
+
+        sql = "SELECT * FROM (SELECT TOP 5 * FROM inner_table) s LIMIT 10"
+        masked = _executable_upper(sql)
+        assert _contains_construct(masked, sql, "snowflake", "TOP") is True
+        assert _contains_construct(masked, sql, "snowflake", "LIMIT") is True
+
+    def test_snowflake_outer_top_inner_limit_both_detected(self):
+        from backend.core.transpiler import (
+            _contains_construct,
+            _executable_upper,
+        )
+
+        sql = "SELECT TOP 5 * FROM (SELECT * FROM inner_table LIMIT 10) s"
+        masked = _executable_upper(sql)
+        assert _contains_construct(masked, sql, "snowflake", "TOP") is True
+        assert _contains_construct(masked, sql, "snowflake", "LIMIT") is True
+
+    def test_inner_top_does_not_suppress_outer_limit_advisory(
+        self, transpiler
+    ):
+        notes = transpiler._get_compatibility_notes(
+            "snowflake", "oracle",
+            source_sql=(
+                "SELECT * FROM (SELECT TOP 5 * FROM inner_table) s LIMIT 10"
+            ),
+            final_sql="SELECT * FROM t FETCH FIRST 5 ROWS ONLY",
+        )
+        assert any(
+            "Oracle uses FETCH FIRST" in n for n in notes
+        ), notes
+
+    def test_outer_top_does_not_suppress_inner_limit_advisory(
+        self, transpiler
+    ):
+        notes = transpiler._get_compatibility_notes(
+            "snowflake", "oracle",
+            source_sql=(
+                "SELECT TOP 5 * FROM (SELECT * FROM inner_table LIMIT 10) s"
+            ),
+            final_sql="SELECT * FROM t FETCH FIRST 5 ROWS ONLY",
+        )
+        assert any(
+            "Oracle uses FETCH FIRST" in n for n in notes
+        ), notes

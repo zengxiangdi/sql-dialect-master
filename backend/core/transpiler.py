@@ -215,13 +215,15 @@ _CLAUSE_AST_CONSTRUCTS = frozenset({
 _APPLY_PATTERN = r"(?<![\w$])(?:CROSS|OUTER)\s+APPLY(?![\w$])"
 
 # TOP grammar: TOP only ever appears immediately after
-# ``SELECT [DISTINCT]`` — a position a LIMIT clause never occupies.
-# Used on the executable-masked text together with ``exp.Limit``
-# evidence to distinguish TOP from LIMIT where the AST cannot (sqlglot
-# parses both to identical Limit nodes and Snowflake supports both
-# keywords).
+# ``SELECT [ALL | DISTINCT]`` — a position a LIMIT clause never
+# occupies.  Used on the executable-masked text together with
+# ``exp.Limit`` evidence to distinguish TOP from LIMIT where the AST
+# cannot (sqlglot parses both to identical Limit nodes and Snowflake
+# supports both keywords).  Each TOP clause contributes exactly one
+# match and corresponds to exactly one Limit node, so the counts can be
+# compared per SELECT level (see _contains_clause_construct).
 _TOP_SELECT_PATTERN = re.compile(
-    r"(?<![\w$])SELECT\s+(?:DISTINCT\s+)?TOP(?=\s|\()"
+    r"(?<![\w$])SELECT\s+(?:(?:ALL|DISTINCT)\s+)?TOP(?=\s|\()"
 )
 
 # SQL identifier character model: Unicode word characters (letters,
@@ -277,11 +279,15 @@ def _contains_clause_construct(
       version: ``SELECT TOP 5`` and ``… LIMIT 5`` both parse to
       Limit(expression=5) with every other arg None), and the dialect
       cannot decide either because Snowflake supports both keywords.
-      ``exp.Limit`` therefore counts as "a row-limit construct exists",
-      and the TOP/LIMIT distinction comes from the strictly
-      position-constrained TOP grammar on the executable-masked text:
-      TOP only ever appears immediately after SELECT [DISTINCT], a
-      position a LIMIT clause never occupies.
+      ``exp.Limit`` therefore counts as "a row-limit construct exists"
+      per SELECT level, and the TOP/LIMIT distinction comes from the
+      strictly position-constrained TOP grammar on the executable-
+      masked text: TOP only ever appears immediately after
+      ``SELECT [ALL | DISTINCT]``, a position a LIMIT clause never
+      occupies.  Each TOP clause contributes exactly one match and one
+      Limit node, so counting associates each construct with its own
+      query level — nested queries can carry real TOP and real LIMIT
+      evidence at the same time.
     * MERGE parses to ``exp.Merge``;
     * PIVOT / UNPIVOT parse to ``exp.Pivot`` (the ``unpivot`` flag
       distinguishes them);
@@ -294,15 +300,25 @@ def _contains_clause_construct(
     except Exception:
         return False
     if construct in ("LIMIT", "TOP"):
-        limit = tree.find(exp.Limit)
-        if limit is None:
+        limit_nodes = list(tree.find_all(exp.Limit))
+        if not limit_nodes:
             return False
         # A bare column named limit/top yields no Limit node at all
         # (it parses as a Column), and unparseable SQL already failed
-        # closed above.  With a Limit node present, only the SELECT-
-        # position grammar decides between TOP and LIMIT.
-        is_top = _TOP_SELECT_PATTERN.search(masked_upper) is not None
-        return is_top if construct == "TOP" else not is_top
+        # closed above.  Each SELECT level that has a row-limit
+        # construct contributes exactly one Limit node, and each TOP
+        # clause contributes exactly one position-constrained match in
+        # the masked text (verified: nested queries yield one Limit
+        # node per SELECT; a same-level TOP+LIMIT combination does not
+        # parse).  Counting therefore associates TOP and LIMIT
+        # evidence with their own query levels instead of classifying
+        # the whole statement with one global match:
+        # * TOP evidence: at least one SELECT-position TOP exists;
+        # * LIMIT evidence: at least one Limit node is NOT a TOP.
+        top_count = len(_TOP_SELECT_PATTERN.findall(masked_upper))
+        if construct == "TOP":
+            return top_count > 0
+        return top_count < len(limit_nodes)
     if construct == "MERGE":
         return tree.find(exp.Merge) is not None
     if construct in ("PIVOT", "UNPIVOT"):
