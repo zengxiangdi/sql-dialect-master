@@ -214,6 +214,16 @@ _CLAUSE_AST_CONSTRUCTS = frozenset({
 # never matches.
 _APPLY_PATTERN = r"(?<![\w$])(?:CROSS|OUTER)\s+APPLY(?![\w$])"
 
+# TOP grammar: TOP only ever appears immediately after
+# ``SELECT [DISTINCT]`` — a position a LIMIT clause never occupies.
+# Used on the executable-masked text together with ``exp.Limit``
+# evidence to distinguish TOP from LIMIT where the AST cannot (sqlglot
+# parses both to identical Limit nodes and Snowflake supports both
+# keywords).
+_TOP_SELECT_PATTERN = re.compile(
+    r"(?<![\w$])SELECT\s+(?:DISTINCT\s+)?TOP(?=\s|\()"
+)
+
 # SQL identifier character model: Unicode word characters (letters,
 # digits, underscore — Python's ``\w``) plus ``$`` (a T-SQL / Databricks
 # identifier character).  sqlglot tokenizes ``limit$column`` and
@@ -254,15 +264,24 @@ def _contains_type_construct(sql: str, dialect: str, construct: str) -> bool:
     return False
 
 
-def _contains_clause_construct(sql: str, dialect: str, construct: str) -> bool:
+def _contains_clause_construct(
+    sql: str, dialect: str, construct: str, masked_upper: str = ""
+) -> bool:
     """AST evidence that ``sql`` (in ``dialect``) contains the clause keyword.
 
     A bare identifier whose text equals LIMIT/TOP/MERGE/PIVOT/UNPIVOT/
     AUTO_INCREMENT is a column, not a clause; only the parsed AST's
     clause nodes count as evidence:
-    * LIMIT and TOP both parse to ``exp.Limit`` (sqlglot represents
-      T-SQL ``TOP n`` as a Limit node, distinguished from a plain LIMIT
-      by the source dialect);
+    * LIMIT and TOP both parse to ``exp.Limit``.  sqlglot provides no
+      AST field distinguishing them (verified against the installed
+      version: ``SELECT TOP 5`` and ``… LIMIT 5`` both parse to
+      Limit(expression=5) with every other arg None), and the dialect
+      cannot decide either because Snowflake supports both keywords.
+      ``exp.Limit`` therefore counts as "a row-limit construct exists",
+      and the TOP/LIMIT distinction comes from the strictly
+      position-constrained TOP grammar on the executable-masked text:
+      TOP only ever appears immediately after SELECT [DISTINCT], a
+      position a LIMIT clause never occupies.
     * MERGE parses to ``exp.Merge``;
     * PIVOT / UNPIVOT parse to ``exp.Pivot`` (the ``unpivot`` flag
       distinguishes them);
@@ -278,22 +297,12 @@ def _contains_clause_construct(sql: str, dialect: str, construct: str) -> bool:
         limit = tree.find(exp.Limit)
         if limit is None:
             return False
-        # sqlglot represents T-SQL ``TOP n`` as a Limit node and
-        # provides no AST field distinguishing it from a LIMIT clause
-        # (verified against the installed sqlglot: both parse to
-        # Limit(expression=n) with every other arg None).  The reliable
-        # criterion is therefore dialect-constrained:
-        # * in T-SQL, the only source of a Limit node is TOP — a
-        #   genuine LIMIT clause does not exist there, and
-        #   OFFSET/FETCH parses to Offset/Fetch nodes, not Limit;
-        # * in every other supported dialect, a Limit node is a LIMIT
-        #   clause — TOP does not exist there.
         # A bare column named limit/top yields no Limit node at all
         # (it parses as a Column), and unparseable SQL already failed
-        # closed above.
-        if construct == "TOP":
-            return dialect == "tsql"
-        return dialect != "tsql"
+        # closed above.  With a Limit node present, only the SELECT-
+        # position grammar decides between TOP and LIMIT.
+        is_top = _TOP_SELECT_PATTERN.search(masked_upper) is not None
+        return is_top if construct == "TOP" else not is_top
     if construct == "MERGE":
         return tree.find(exp.Merge) is not None
     if construct in ("PIVOT", "UNPIVOT"):
@@ -349,7 +358,7 @@ def _contains_construct(
     if name in _TYPE_CONSTRUCTS:
         return _contains_type_construct(sql, dialect, name)
     if name in _CLAUSE_AST_CONSTRUCTS:
-        return _contains_clause_construct(sql, dialect, name)
+        return _contains_clause_construct(sql, dialect, name, masked_upper)
     if name == "APPLY":
         return re.search(_APPLY_PATTERN, masked_upper) is not None
     if name in _FUNCTION_FORM_CONSTRUCTS or construct.endswith("()"):

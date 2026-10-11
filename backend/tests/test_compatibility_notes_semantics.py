@@ -1115,3 +1115,77 @@ class TestB23F_LimitTopDistinction:
             "Oracle uses FETCH FIRST" in n
             for n in result.compatibility_notes
         ), result.compatibility_notes
+
+
+# ── B2-3g — Snowflake supports BOTH TOP and LIMIT ────────────────────────────
+
+class TestB23G_SnowflakeTopAndLimit:
+    """sqlglot parses Snowflake TOP and LIMIT to identical Limit nodes,
+    so the dialect cannot decide.  Evidence combines the Limit node with
+    the position-constrained TOP grammar (TOP only after SELECT)."""
+
+    def test_snowflake_top_is_top_not_limit(self):
+        from backend.core.transpiler import (
+            _contains_construct,
+            _executable_upper,
+        )
+
+        sql = "SELECT TOP 5 * FROM t"
+        masked = _executable_upper(sql)
+        assert _contains_construct(masked, sql, "snowflake", "TOP") is True
+        assert _contains_construct(masked, sql, "snowflake", "LIMIT") is False
+
+    def test_snowflake_limit_is_limit_not_top(self):
+        from backend.core.transpiler import (
+            _contains_construct,
+            _executable_upper,
+        )
+
+        sql = "SELECT * FROM t LIMIT 5"
+        masked = _executable_upper(sql)
+        assert _contains_construct(masked, sql, "snowflake", "LIMIT") is True
+        assert _contains_construct(masked, sql, "snowflake", "TOP") is False
+
+    def test_snowflake_top_does_not_trigger_oracle_limit_advisory(
+        self, transpiler
+    ):
+        notes = transpiler._get_compatibility_notes(
+            "snowflake", "oracle",
+            source_sql="SELECT TOP 5 * FROM t",
+            final_sql="SELECT * FROM t FETCH FIRST 5 ROWS ONLY",
+        )
+        assert not any(
+            "Oracle uses FETCH FIRST" in n for n in notes
+        ), notes
+
+    def test_snowflake_limit_still_triggers_oracle_limit_advisory(
+        self, transpiler
+    ):
+        result = transpiler.transpile(
+            "SELECT * FROM t LIMIT 5", "snowflake", "oracle"
+        )
+        assert any(
+            "Oracle uses FETCH FIRST" in n
+            for n in result.compatibility_notes
+        ), result.compatibility_notes
+
+    def test_snowflake_bare_limit_column_not_clause(self):
+        from backend.core.transpiler import (
+            _contains_construct,
+            _executable_upper,
+        )
+
+        sql = "SELECT limit FROM t"
+        masked = _executable_upper(sql)
+        assert _contains_construct(masked, sql, "snowflake", "LIMIT") is False
+        assert _contains_construct(masked, sql, "snowflake", "TOP") is False
+
+    def test_tsql_top_limit_claim_still_supported(self, transpiler):
+        notes = transpiler._get_compatibility_notes(
+            "tsql", "mysql",
+            source_sql="SELECT TOP 5 * FROM t",
+            final_sql="SELECT * FROM t LIMIT 5",
+        )
+        assert any(
+            "TOP" in n and "LIMIT" in n for n in notes
+        ), notes
