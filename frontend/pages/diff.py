@@ -9,13 +9,15 @@ Full workspace with:
 """
 from __future__ import annotations
 
+import sqlglot
 import streamlit as st
 
 from backend.core.semantic_diff import diff_sql_ast
-from frontend.app_context_v2 import DIALECTS
+from frontend.app_context_v2 import DIALECTS, get_dialect_label
 from frontend.core.design_tokens import ColorTokens
 from frontend.core.fingerprints import input_fingerprint
 from frontend.core.navigation import consume_navigation_intent
+from frontend.core.sql_inputs import parse_single_sql
 from frontend.core.state import SessionState
 from frontend.core.viewmodels import SemanticDiffViewModel
 
@@ -98,6 +100,8 @@ def _render_input_section(theme: ColorTokens) -> None:
         st.selectbox(
             "Dialect",
             DIALECTS,
+            index=DIALECTS.index("postgres") if "postgres" in DIALECTS else 0,
+            format_func=get_dialect_label,
             key="diff_src_dialect",
             label_visibility="collapsed",
         )
@@ -119,6 +123,8 @@ def _render_input_section(theme: ColorTokens) -> None:
         st.selectbox(
             "Dialect",
             DIALECTS,
+            index=DIALECTS.index("mysql") if "mysql" in DIALECTS else 0,
+            format_func=get_dialect_label,
             key="diff_tgt_dialect",
             label_visibility="collapsed",
         )
@@ -137,13 +143,22 @@ def _run_comparison(theme: ColorTokens) -> None:
     tgt_sql = st.session_state.get("diff_tgt_sql", "")
     src_dialect = st.session_state.get("diff_src_dialect", "postgres")
     tgt_dialect = st.session_state.get("diff_tgt_dialect", "mysql")
+    state.diff_last_vm = None
+    state.diff_last_fingerprint = None
+    state.clear_finding_selection()
 
     if not src_sql.strip() or not tgt_sql.strip():
         st.warning("Please enter both SQL statements.")
         return
 
-    with st.spinner("Analyzing semantic equivalence..."):
-        backend_result = diff_sql_ast(src_sql, tgt_sql, src_dialect, tgt_dialect)
+    try:
+        parse_single_sql(src_sql, src_dialect)
+        parse_single_sql(tgt_sql, tgt_dialect)
+        with st.spinner("Analyzing semantic equivalence..."):
+            backend_result = diff_sql_ast(src_sql, tgt_sql, src_dialect, tgt_dialect)
+    except (sqlglot.errors.ParseError, ValueError) as exc:
+        st.error(f"Parse error: {exc}")
+        return
 
     vm = SemanticDiffViewModel.from_backend(
         source_sql=src_sql,

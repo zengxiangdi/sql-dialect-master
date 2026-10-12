@@ -30,6 +30,7 @@ from ..nl2sql_components.mappings import (
 )
 from ..nl2sql_components.templates import DEFAULT_QUERY_TEMPLATES, QueryTemplate
 from ..nl2sql_components.tokenizer import Tokenizer
+from ..p1_sql_scanner import mask_non_executable
 from . import ir as _nl2sql_ir
 from .aggregations import extract_aggregations as _pipeline_extract_aggregations
 from .clause_extract import (
@@ -47,7 +48,6 @@ from .intent import (
 from .models import NL2SQLResult
 from .predicates import extract_conditions as _extract_conditions_enhanced_impl
 from .renderer import add_limit as _add_limit_impl
-from .renderer import join_sql_kind as _join_sql_kind_impl
 from .renderer import render_sql as _render_sql_impl
 from .resolution import (
     extract_columns as _pipeline_extract_columns,
@@ -73,6 +73,21 @@ logger = logging.getLogger(__name__)
 SAFE_TABLE_HINT = re.compile(
     r"[A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)*"
 )
+_UNSUPPORTED_DDL = re.compile(
+    r"(?<![\w$])(drop|create|alter|truncate|grant|revoke)(?![\w$])",
+    re.IGNORECASE,
+)
+_UNSUPPORTED_CN_DDL = re.compile(
+    r"(?:删除|移除|清空|清除|截断|创建|新建|建立|修改|变更|更改)"
+    r"\s*[^\s,，。;；]{0,32}?(?:数据库|数据表|索引|视图|表)"
+)
+_DATE_INTERVAL = re.compile(
+    r"(?:最近|过去|(?<![\w$])(?:last|past)(?![\w$]))\s*(-?\d+)\s*"
+    r"(天|日|周|星期|月|年|days?(?![\w$])|weeks?(?![\w$])|"
+    r"months?(?![\w$])|years?(?![\w$]))",
+    re.IGNORECASE,
+)
+MAX_NL2SQL_DATE_INTERVAL_DAYS = 36525
 
 
 class PipelineNL2SQLGenerator:
@@ -180,6 +195,15 @@ class PipelineNL2SQLGenerator:
         # Validate inputs
         if not isinstance(text, str):
             raise TypeError("text must be a string")
+        if not text.strip():
+            return self._apply_confidence_policy(NL2SQLResult(
+                success=False,
+                input_text=text,
+                dialect=(dialect or self.default_dialect).strip().lower(),
+                explanation="Natural-language input cannot be empty",
+                suggestions=["Describe the query you want to generate."],
+                evidence=GenerationEvidence(),
+            ))
         normalized_dialect = (dialect or self.default_dialect).strip().lower()
         from ..config import SUPPORTED_DIALECTS
         if normalized_dialect not in SUPPORTED_DIALECTS:
@@ -219,6 +243,64 @@ class PipelineNL2SQLGenerator:
                 suggestions=["Please shorten the natural-language query and try again."],
                 evidence=GenerationEvidence(),
             )
+        executable_intent = mask_non_executable(text)
+        ddl_match = _UNSUPPORTED_DDL.search(executable_intent)
+        cn_ddl_match = _UNSUPPORTED_CN_DDL.search(executable_intent)
+        if ddl_match or cn_ddl_match:
+            operation = ddl_match.group(1).upper() if ddl_match else cn_ddl_match.group(0)
+            return NL2SQLResult(
+                success=False,
+                input_text=text,
+                dialect=normalized_dialect,
+                explanation=f"DDL operation {operation} is not supported by NL2SQL",
+                confidence=0.0,
+                suggestions=["Use SELECT, INSERT, UPDATE, or DELETE explicitly."],
+                evidence=GenerationEvidence(),
+            )
+        max_interval_days = getattr(
+            settings, "nl2sql_max_date_interval_days", MAX_NL2SQL_DATE_INTERVAL_DAYS,
+        )
+        for interval_match in _DATE_INTERVAL.finditer(executable_intent):
+            raw_value, unit = interval_match.groups()
+            if raw_value.startswith("-"):
+                return NL2SQLResult(
+                    success=False, input_text=text, dialect=normalized_dialect,
+                    explanation="Date interval cannot be negative", confidence=0.0,
+                    suggestions=["Use a non-negative date interval."], evidence=GenerationEvidence(),
+                )
+            # Keep the lexical representation bounded too: downstream stages
+            # parse this number again. Normal leading zeros are valid, while
+            # thousands of zero digits cannot reach an unbounded int().
+            if len(raw_value) > 64:
+                return NL2SQLResult(
+                    success=False, input_text=text, dialect=normalized_dialect,
+                    explanation="Date interval representation exceeds the maximum supported length",
+                    confidence=0.0, suggestions=["Use a shorter date interval number."],
+                    evidence=GenerationEvidence(),
+                )
+            normalized_amount = raw_value.lstrip("0") or "0"
+            amount = (
+                max_interval_days + 1
+                if len(normalized_amount) > len(str(max_interval_days))
+                else int(normalized_amount)
+            )
+            unit_lower = unit.lower()
+            multiplier = 1
+            if unit_lower in {"周", "星期", "week", "weeks"}:
+                multiplier = 7
+            elif unit_lower in {"月", "month", "months"}:
+                multiplier = 31
+            elif unit_lower in {"年", "year", "years"}:
+                multiplier = 366
+            if amount * multiplier > max_interval_days:
+                return NL2SQLResult(
+                    success=False, input_text=text, dialect=normalized_dialect,
+                    explanation=(
+                        "Date interval exceeds the maximum supported range of "
+                        f"{max_interval_days} days"
+                    ), confidence=0.0,
+                    suggestions=["Use a shorter date interval."], evidence=GenerationEvidence(),
+                )
         # Validate an explicitly requested row limit before the extraction
         # stage.  This turns huge numeric literals into a controlled failed
         # generation instead of an uncaught int-conversion exception (500 at
@@ -233,20 +315,6 @@ class PipelineNL2SQLGenerator:
                 explanation=str(exc),
                 confidence=0.0,
                 suggestions=["Use a LIMIT value no greater than 1000000."],
-                evidence=GenerationEvidence(),
-            )
-        if re.search(
-            r"(?:最近|过去|last|past)\s*-\d+\s*(?:天|周|月|年|days?|weeks?|months?|years?)",
-            text,
-            re.IGNORECASE,
-        ):
-            return NL2SQLResult(
-                success=False,
-                input_text=text,
-                dialect=normalized_dialect,
-                explanation="Date interval cannot be negative",
-                confidence=0.0,
-                suggestions=["Use a non-negative date interval."],
                 evidence=GenerationEvidence(),
             )
         dialect = normalized_dialect
@@ -271,6 +339,36 @@ class PipelineNL2SQLGenerator:
             len(analysis["tables"]),
             len(analysis["columns"]),
         )
+        # Fail closed for text with no recognized intent, entity, predicate,
+        # or time expression.  This prevents arbitrary words from becoming
+        # ``SELECT * FROM table_name`` while preserving useful bare period
+        # requests such as ``last 7 days`` and ``today``.
+        recognized_time = bool(
+            re.search(
+                r"(?:今天|昨天|前天|明天|本周|本月|本年|"
+                r"(?<![\w$])(?:today|yesterday|tomorrow|last|past|recent|"
+                r"week|month|year|day)(?![\w$]))",
+                executable_intent.lower(),
+                re.IGNORECASE,
+            )
+        )
+        recognized_intent = bool(
+            analysis.get("tables")
+            or analysis.get("columns")
+            or analysis.get("operations")
+            or extract_boolean_conditions(text_lower)
+            or recognized_time
+        )
+        if not recognized_intent:
+            return NL2SQLResult(
+                success=False,
+                input_text=text,
+                dialect=dialect,
+                explanation="Unable to recognize a SQL intent or supported entity",
+                confidence=0.0,
+                suggestions=["Mention an operation and table, e.g. 'show all users'."],
+                evidence=GenerationEvidence(),
+            )
 
         boolean_conditions = extract_boolean_conditions(text_lower)
         has_explicit_null_predicate = any(
@@ -322,7 +420,7 @@ class PipelineNL2SQLGenerator:
                 ]
             else:
                 suggestions = self._generate_suggestions(text, sql, dialect)
-            return NL2SQLResult(
+            return self._apply_confidence_policy(NL2SQLResult(
                 success=sql is not None,
                 input_text=text,
                 sql=sql,
@@ -332,7 +430,7 @@ class PipelineNL2SQLGenerator:
                 evidence=evidence,
                 suggestions=suggestions,
                 parsed_elements=parsed,
-            )
+            ))
 
         template, match_groups = self._match_templates(text_lower)
         # If relational keywords detected (D2), bypass templates and use
@@ -355,6 +453,7 @@ class PipelineNL2SQLGenerator:
                 template, match_groups, analysis, dialect,
                 table_hint, column_hints, text_lower, text,
             )
+            result = self._apply_confidence_policy(result)
             if result.success:
                 logger.info(
                     "NL2SQL: Template '%s' matched with confidence %.2f",
@@ -400,7 +499,7 @@ class PipelineNL2SQLGenerator:
                     [j.get("subject") or table for j in unresolved]
                     + [j["table"] for j in unresolved]
                 )
-                return NL2SQLResult(
+                return self._apply_confidence_policy(NL2SQLResult(
                     success=False,
                     input_text=text,
                     sql=None,
@@ -416,7 +515,7 @@ class PipelineNL2SQLGenerator:
                         "Specify the relationship between tables, e.g., "
                         "'users.id = invoices.user_id'",
                     ],
-                )
+                ))
         else:
             cn_rel_table = self._cn_relation_table(text_lower)
             if self._has_relational_keyword(text_lower):
@@ -440,7 +539,7 @@ class PipelineNL2SQLGenerator:
         else:
             suggestions = self._generate_suggestions(text, sql, dialect)
 
-        return NL2SQLResult(
+        return self._apply_confidence_policy(NL2SQLResult(
             success=sql is not None,
             input_text=text,
             sql=sql,
@@ -450,7 +549,43 @@ class PipelineNL2SQLGenerator:
             evidence=evidence,
             suggestions=suggestions,
             parsed_elements=parsed,
+        ))
+
+    @staticmethod
+    def _parameter_metadata(sql: Optional[str], dialect: str) -> tuple[str | None, list[str]]:
+        """Return the placeholder style and ordered placeholders in DML SQL."""
+        if not sql:
+            return None, []
+        executable_sql = mask_non_executable(sql, dialect=dialect)
+        if not re.match(r"\s*(?:INSERT|UPDATE|DELETE)\b", executable_sql, re.IGNORECASE):
+            return None, []
+        patterns = {
+            "postgres": (r"(?<![\w$])\$\d+(?![\w$])", "numeric"),
+            "redshift": (r"(?<![\w$])\$\d+(?![\w$])", "numeric"),
+            "oracle": (r"(?<![\w$]):\d+(?![\w$])", "numeric"),
+            "tsql": (r"(?<![\w$])@p\d+(?![\w$])", "named"),
+            "mysql": (r"(?<![\w$])%s(?![\w$])", "format"),
+        }
+        pattern, style = patterns.get(dialect, (r"\?", "qmark"))
+        placeholders = re.findall(pattern, executable_sql, re.IGNORECASE)
+        return (style if placeholders else None), placeholders
+
+    def _apply_confidence_policy(self, result: NL2SQLResult) -> NL2SQLResult:
+        """Make the configured confidence threshold affect success status."""
+        from ..config import settings
+
+        if result.success and result.confidence < settings.nl2sql_confidence_threshold:
+            result.success = False
+            result.sql = None
+            result.explanation = (
+                f"Generated SQL confidence {result.confidence:.2f} is below the "
+                f"configured threshold {settings.nl2sql_confidence_threshold:.2f}. "
+                + result.explanation
+            )
+        result.parameter_style, result.parameters = self._parameter_metadata(
+            result.sql, result.dialect
         )
+        return result
 
     def _parse_text(self, text_lower: str, original: str) -> dict:
         """Parse and extract all elements from text.

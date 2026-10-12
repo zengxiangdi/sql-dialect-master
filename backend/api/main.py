@@ -14,13 +14,13 @@ see backend.core.metadata — and must not be restated here.
 import asyncio
 import logging
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.core.config import get_dialect_api_info, settings, setup_logging
@@ -33,6 +33,9 @@ from backend.core.transpiler import SQLTranspiler
 from backend.core.type_mapping import TypeMapper
 
 from backend.api.readiness import health_probe_response
+from backend.api.auth import require_api_access
+from backend.api.workers import BoundedWorkerPool, WorkerCapacityError
+from backend.api.rate_limit_store import InMemoryRateLimitStore
 
 # Configure logging for the application from the validated settings object.
 # Keep an INFO fallback for defensive compatibility with custom settings
@@ -40,15 +43,28 @@ from backend.api.readiness import health_probe_response
 _log_level = getattr(logging, settings.log_level.upper(), logging.INFO)
 logger = setup_logging(level=_log_level, log_file=settings.log_file or None)
 api_logger = logging.getLogger(__name__)
+_worker_pool = BoundedWorkerPool(settings.api_workers, settings.api_queue_size)
+
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    """Manage the service worker pool for a normal ASGI startup/shutdown."""
+    pool = BoundedWorkerPool(settings.api_workers, settings.api_queue_size)
+    application.state.worker_pool = pool
+    try:
+        yield
+    finally:
+        pool.shutdown()
+        del application.state.worker_pool
 
 
 async def _run_cpu_bound(func, *args):
     """Run parser/transpiler work off-loop with the configured timeout."""
     try:
-        return await asyncio.wait_for(
-            run_in_threadpool(func, *args),
-            timeout=settings.request_timeout,
-        )
+        pool = getattr(app.state, "worker_pool", _worker_pool)
+        return await pool.run(func, *args, timeout=settings.request_timeout)
+    except WorkerCapacityError as exc:
+        raise HTTPException(status_code=503, detail=str(exc), headers={"Retry-After": "1"}) from exc
     except asyncio.TimeoutError as exc:
         raise HTTPException(
             status_code=504,
@@ -105,6 +121,8 @@ print(response.json()["target_sql"])
 
 # Initialize FastAPI app with enhanced metadata
 app = FastAPI(
+    dependencies=[Depends(require_api_access)],
+    lifespan=lifespan,
     title=API_TITLE,
     description=API_DESCRIPTION,
     version=API_VERSION,
@@ -156,7 +174,7 @@ app.add_middleware(
     allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],  # Restrict to needed methods
-    allow_headers=["Content-Type", "Authorization", "X-Request-ID"],
+    allow_headers=["Content-Type", "Authorization", "X-API-Key", "X-Request-ID"],
 )
 
 # Add security headers
@@ -166,6 +184,7 @@ app.add_middleware(SecurityHeadersMiddleware)
 rate_limiter = RateLimiter(
     requests_per_window=settings.rate_limit_requests,
     window_seconds=settings.rate_limit_window,
+    store=None if settings.rate_limit_enabled else InMemoryRateLimitStore(),
 )
 app.add_middleware(
     RateLimitMiddleware,
@@ -192,9 +211,8 @@ async def add_process_time_header(request: Request, call_next):
     response.headers["X-API-Version"] = API_VERSION
 
     # Log request details
-    api_logger.info(
-        f"{request.method} {request.url.path} - {response.status_code} - {process_time:.4f}s"
-    )
+    api_logger.info("%s %r - %s - %.4fs", request.method, request.url.path,
+                    response.status_code, process_time)
     return response
 
 # Dialect info for enhanced responses (from centralized config)
@@ -285,6 +303,20 @@ class NL2SQLResponse(BaseModel):
     explanation: str = Field("", description="Explanation of generated SQL")
     confidence: float = Field(0.0, description="Confidence score (0.0-1.0)")
     suggestions: List[str] = Field(default_factory=list, description="Improvement suggestions")
+    parameter_style: Optional[str] = Field(
+        None,
+        description=(
+            "Placeholder style for generated DML: numeric ($1 in PostgreSQL/Redshift, "
+            ":1 in Oracle), named (@p1 in T-SQL), format (%s in MySQL), or qmark (?)"
+        ),
+    )
+    parameters: List[str] = Field(
+        default_factory=list,
+        description="Ordered placeholders that callers must bind for generated DML",
+    )
+    evidence: Optional[Dict[str, Any]] = Field(
+        None, description="Structured evidence supporting the confidence score",
+    )
 
 class ParseRequest(BaseModel):
     """SQL parse request model."""
@@ -456,10 +488,9 @@ async def parse_sql(request: ParseRequest):
     """
     dialect = normalize_dialect(request.dialect)
     parser = SQLParser(dialect)
-    parsed = await _run_cpu_bound(parser.parse, request.sql)
-    if not parsed.success:
-        raise HTTPException(status_code=422, detail=parsed.error or "SQL parsing failed")
     elements = await _run_cpu_bound(parser.extract_elements, request.sql)
+    if "error" in elements:
+        raise HTTPException(status_code=422, detail=elements["error"] or "SQL parsing failed")
     return {
         "success": True,
         "dialect": dialect,
@@ -483,10 +514,18 @@ async def list_functions(
     - `/api/functions?category=string` - List all string functions
     - `/api/functions?limit=100` - Get first 100 functions
     """
+    normalized_category = category.strip().lower() if category is not None else None
+    if category is not None:
+        if normalized_category not in func_encyclopedia.CATEGORIES:
+            raise HTTPException(
+                status_code=400,
+                detail=(f"Unknown function category: {category}. Available categories: "
+                        + ", ".join(func_encyclopedia.CATEGORIES)),
+            )
     if search:
         functions = func_encyclopedia.search(search, limit)
     elif category:
-        functions = func_encyclopedia.list_by_category(category)[:limit]
+        functions = func_encyclopedia.list_by_category(normalized_category)[:limit]
     else:
         functions = func_encyclopedia.functions[:limit]
 
@@ -640,7 +679,10 @@ async def generate_sql(request: NL2SQLRequest):
         dialect=dialect,
         explanation=result.explanation,
         confidence=result.confidence,
-        suggestions=list(result.suggestions[: settings.nl2sql_max_suggestions])
+        suggestions=list(result.suggestions[: settings.nl2sql_max_suggestions]),
+        parameter_style=result.parameter_style,
+        parameters=list(result.parameters),
+        evidence=result.evidence.to_dict() if result.evidence is not None else None,
     )
 
 @app.get("/health", tags=["system"])
@@ -707,6 +749,7 @@ async def get_stats():
 async def custom_http_exception_handler(request: Request, exc: HTTPException):
     return JSONResponse(
         status_code=exc.status_code,
+        headers=exc.headers,
         content={
             "success": False,
             "error": {

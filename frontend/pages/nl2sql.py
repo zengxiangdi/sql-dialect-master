@@ -8,10 +8,17 @@ from __future__ import annotations
 
 import streamlit as st
 
-from frontend.app_context_v2 import DIALECTS, copy_sql, generate_nl2sql, get_dialect_label
+from frontend.app_context_v2 import (
+    DIALECTS,
+    copy_sql,
+    generate_nl2sql,
+    get_dialect_label,
+)
 from frontend.core.design_tokens import ColorTokens
 from frontend.core.escaping import esc
+from frontend.core.fingerprints import input_fingerprint
 from frontend.core.state import SessionState
+from frontend.core.statuses import status_color
 from frontend.core.viewmodels import NL2SQLViewModel
 
 # ── Example queries (no emoji) ─────────────────────────────────────────
@@ -47,6 +54,15 @@ def render_nl2sql_page(theme: ColorTokens) -> None:
 
     _render_header(theme)
     _render_input_section(theme)
+    fingerprint = input_fingerprint(
+        st.session_state.get("nl_input_text", ""),
+        st.session_state.get("nl_dialect", "postgres"),
+        st.session_state.get("nl_table_hint", ""),
+    )
+    if state.nl_last_fingerprint != fingerprint:
+        state.nl_last_vm = None
+        state.nl_generation_error = None
+        state.nl_last_fingerprint = None
     _render_result_section(state, theme)
 
 
@@ -136,6 +152,7 @@ def _run_generation(theme: ColorTokens) -> None:
 
     vm = NL2SQLViewModel.from_nl2sql_result(result)
     state.nl_last_vm = vm
+    state.nl_last_fingerprint = input_fingerprint(nl_input, dialect, table_hint)
     state.nl_generation_error = None
     st.rerun()
 
@@ -180,12 +197,7 @@ def _render_generated_sql(vm: NL2SQLViewModel, theme: ColorTokens) -> None:
 
 def _render_confidence(vm: NL2SQLViewModel, theme: ColorTokens) -> None:
     """Render the overall confidence indicator."""
-    level_colors = {
-        "high": theme.success,
-        "review": theme.warning,
-        "low": theme.danger,
-    }
-    color = level_colors.get(vm.confidence_level, theme.text_muted)
+    color = status_color(vm.confidence_level, theme)
 
     st.markdown(
         '<div style="font-size:11px; font-weight:600; letter-spacing:0.06em; '

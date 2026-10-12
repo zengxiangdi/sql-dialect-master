@@ -14,10 +14,11 @@ from typing import Dict
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.concurrency import run_in_threadpool
 
 from backend.core.exceptions import ErrorCode
 
-from .rate_limit_store import RateLimitStore, create_rate_limit_store
+from .rate_limit_store import InMemoryRateLimitStore, RateLimitStore, create_rate_limit_store
 from .readiness import health_probe_response
 
 logger = logging.getLogger(__name__)
@@ -69,7 +70,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         if max_body_bytes <= 0:
             raise ValueError("max_body_bytes must be positive")
-        self.limiter = limiter or RateLimiter()
+        self.limiter = limiter or RateLimiter(store=None if enabled else InMemoryRateLimitStore())
         self.enabled = enabled
         self.max_body_bytes = max_body_bytes
 
@@ -115,7 +116,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         remaining = reset_time = None
         if self.enabled and not is_health_probe:
             client_id = self._get_client_id(request)
-            is_allowed, remaining, reset_time = self.limiter.is_allowed(client_id)
+            # Redis checks use a synchronous client; a stalled store must not
+            # block the event loop used by unrelated liveness/API requests.
+            is_allowed, remaining, reset_time = await run_in_threadpool(self.limiter.is_allowed, client_id)
             rate_limit_checked = True
             if not is_allowed:
                 logger.warning("Rate limit exceeded for client: %s", _sanitize_log_value(client_id))
@@ -186,13 +189,18 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
         """Normalize standard HTTP 4xx JSON responses while preserving domain-specific codes."""
         code_by_status = {
             400: ErrorCode.BAD_REQUEST.value,
+            401: ErrorCode.UNAUTHORIZED.value,
             404: ErrorCode.NOT_FOUND.value,
             405: ErrorCode.METHOD_NOT_ALLOWED.value,
             413: ErrorCode.PAYLOAD_TOO_LARGE.value,
             422: ErrorCode.VALIDATION_FAILED.value,
             429: ErrorCode.RATE_LIMITED.value,
+            503: ErrorCode.SERVICE_UNAVAILABLE.value,
+            504: ErrorCode.REQUEST_TIMEOUT.value,
         }
         if response.status_code not in code_by_status:
+            return response
+        if "json" not in response.headers.get("content-type", "").lower():
             return response
 
         try:
@@ -206,6 +214,16 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
             payload = json.loads(raw_body.decode("utf-8"))
         except (AttributeError, UnicodeDecodeError, json.JSONDecodeError):
             return response
+
+        if response.status_code == 503 and isinstance(payload, dict) and "checks" in payload:
+            # Readiness has a public diagnostics schema of its own. Preserve
+            # status/checks when the service is unhealthy, including after
+            # consuming the downstream streaming response to decode JSON.
+            headers = dict(response.headers)
+            headers.pop("content-length", None)
+            headers.pop("content-type", None)
+            payload.setdefault("request_id", request_id)
+            return JSONResponse(status_code=503, content=payload, headers=headers)
 
         error = payload.get("error") if isinstance(payload, dict) else None
         expected_code = code_by_status[response.status_code]

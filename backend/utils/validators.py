@@ -70,12 +70,18 @@ def validate_sql(sql: str, max_length: int = None) -> str:
     return sql
 
 
-def validate_sql_security(sql: str, block_dangerous: bool = None) -> Tuple[bool, List[str]]:
+def validate_sql_security(
+    sql: str,
+    block_dangerous: bool = None,
+    *,
+    dialect: str | None = None,
+) -> Tuple[bool, List[str]]:
     """Validate SQL for security issues.
     
     Args:
         sql: SQL to validate
         block_dangerous: Whether to block dangerous patterns
+        dialect: Optional SQL dialect for dialect-specific comments/tokens
         
     Returns:
         Tuple of (is_safe, list_of_warnings)
@@ -83,46 +89,26 @@ def validate_sql_security(sql: str, block_dangerous: bool = None) -> Tuple[bool,
     Raises:
         SecurityViolationError: If dangerous pattern detected and blocking enabled
     """
-    block = block_dangerous if block_dangerous is not None else settings.security_block_dangerous
-    warnings = []
-    
-    # Dangerous patterns that may be blocked
-    dangerous_patterns = [
-        (r";\s*(DROP|DELETE|TRUNCATE|ALTER|CREATE|INSERT|UPDATE)\s+", 
-         "Multiple statements with dangerous operations"),
-        (r"UNION\s+(ALL\s+)?SELECT\s+.*(FROM\s+information_schema|@@version|user\(\))",
-         "Potential SQL injection pattern"),
-        (r"(xp_cmdshell|sp_executesql|EXEC\s*\(|EXECUTE\s+IMMEDIATE)",
-         "Command execution attempt"),
-        (r"(INTO\s+OUTFILE|INTO\s+DUMPFILE|LOAD_FILE|UTL_FILE)",
-         "File operation detected"),
-    ]
-    
-    # Warning patterns (never blocked)
-    warning_patterns = [
-        (r"DELETE\s+FROM\s+\w+\s*(?!WHERE)", 
-         "DELETE without WHERE clause"),
-        (r"UPDATE\s+\w+\s+SET\s+.*(?!WHERE)",
-         "UPDATE without WHERE clause"),
-        (r"DROP\s+(TABLE|DATABASE|SCHEMA|INDEX|VIEW)",
-         "DROP operation - data loss risk"),
-        (r"TRUNCATE\s+TABLE",
-         "TRUNCATE operation - data loss risk"),
-    ]
-    
-    # Check dangerous patterns
-    for pattern, message in dangerous_patterns:
-        if re.search(pattern, sql, re.IGNORECASE | re.MULTILINE):
-            if block:
-                raise SecurityViolationError(message, pattern=pattern)
-            warnings.append(f"🔒 Security: {message}")
-    
-    # Check warning patterns
-    for pattern, message in warning_patterns:
-        if re.search(pattern, sql, re.IGNORECASE | re.MULTILINE):
-            warnings.append(f"⚠️ {message}")
-    
-    return len(warnings) == 0, warnings
+    # Import lazily: ``SQLTranspiler`` depends on shared validation/config
+    # modules, so importing it at module load time would create a cycle.
+    from backend.core.transpiler import SQLTranspiler
+
+    block = (
+        settings.security_block_dangerous
+        if block_dangerous is None
+        else bool(block_dangerous)
+    )
+    result = SQLTranspiler()._validate_security(
+        sql,
+        dialect=dialect,
+        block_dangerous=block,
+    )
+    warnings = list(result.get("warnings") or [])
+    if result.get("blocked"):
+        raise SecurityViolationError(
+            result.get("reason") or "SQL security validation failed"
+        )
+    return not warnings, warnings
 
 
 def validate_batch_size(size: int, max_size: int = None) -> int:

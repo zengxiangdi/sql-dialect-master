@@ -127,7 +127,9 @@ def apply_dialect_adjustments(sql: str, dialect: str) -> str:
     for pattern, replacement in replacements:
         parts = []
         cursor = 0
-        for start, end in executable_segments(sql):
+        # Pass the target dialect so MySQL ``#`` comments are excluded from
+        # regex rewrites just like ``--`` and ``/* ... */`` comments.
+        for start, end in executable_segments(sql, dialect=dialect):
             parts.append(sql[cursor:start])
             segment = sql[start:end]
             segment = pattern.sub(replacement, segment)

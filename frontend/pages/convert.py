@@ -359,9 +359,7 @@ def _add_to_history(
     vm: ConversionViewModel,
     theme: ColorTokens,
 ) -> None:
-    """Add a successful conversion to session history via SessionState."""
-    if not vm.success:
-        return
+    """Record each attempted conversion with its result or failure reason."""
     state.add_history_entry(
         sql=vm.source_sql,
         source_dialect=vm.source_dialect,
@@ -369,4 +367,5 @@ def _add_to_history(
         result_sql=vm.target_sql,
         status=vm.status,
         created_at=datetime.now(UTC).isoformat(),
+        error_message=vm.error_message,
     )

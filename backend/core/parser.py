@@ -14,6 +14,7 @@ import sqlglot
 from sqlglot import exp
 
 from .config import SUPPORTED_DIALECTS, settings
+from .sql_statements import parse_single_sql
 
 __all__ = ['SUPPORTED_DIALECTS', 'ParseResult', 'SQLParser']
 
@@ -64,44 +65,7 @@ class SQLParser:
             )
 
         try:
-            # ``parse_one`` silently keeps only the first statement.  That is
-            # unsafe for an analysis endpoint because callers can mistake a
-            # partial result for validation of the complete payload.  Parse
-            # the complete statement stream and require exactly one statement
-            # (a trailing delimiter is still accepted by sqlglot).
-            raw_statements = sqlglot.parse(sql, read=self.dialect)
-            # sqlglot represents a trailing delimiter followed by a comment
-            # as a standalone Semicolon node.  Allow that one compatibility
-            # form, but reject empty statements (`;;`) instead of silently
-            # dropping them as parse_one used to do.
-            if any(statement is None for statement in raw_statements):
-                return ParseResult(
-                    success=False,
-                    error="Multiple or empty SQL statements are not supported",
-                    dialect=self.dialect,
-                )
-            if len(raw_statements) == 2 and isinstance(raw_statements[1], exp.Semicolon):
-                raw_statements = raw_statements[:1]
-            elif any(isinstance(statement, exp.Semicolon) for statement in raw_statements):
-                return ParseResult(
-                    success=False,
-                    error="Multiple SQL statements are not supported",
-                    dialect=self.dialect,
-                )
-            statements = raw_statements
-            if not statements:
-                return ParseResult(
-                    success=False,
-                    error="Empty SQL statement",
-                    dialect=self.dialect,
-                )
-            if len(statements) > 1:
-                return ParseResult(
-                    success=False,
-                    error="Multiple SQL statements are not supported",
-                    dialect=self.dialect,
-                )
-            ast = statements[0]
+            ast = parse_single_sql(sql, self.dialect)
             result = ParseResult(
                 success=True,
                 ast=ast,
@@ -131,18 +95,7 @@ class SQLParser:
             return False, "Empty SQL statement"
 
         try:
-            raw_statements = sqlglot.parse(sql, read=self.dialect)
-            if any(statement is None for statement in raw_statements):
-                return False, "Multiple or empty SQL statements are not supported"
-            if len(raw_statements) == 2 and isinstance(raw_statements[1], exp.Semicolon):
-                raw_statements = raw_statements[:1]
-            elif any(isinstance(statement, exp.Semicolon) for statement in raw_statements):
-                return False, "Multiple SQL statements are not supported"
-            statements = raw_statements
-            if not statements:
-                return False, "Empty SQL statement"
-            if len(statements) > 1:
-                return False, "Multiple SQL statements are not supported"
+            parse_single_sql(sql, self.dialect)
             return True, None
         except Exception as e:
             return False, str(e)

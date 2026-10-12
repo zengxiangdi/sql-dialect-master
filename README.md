@@ -2,7 +2,7 @@
 
 Enterprise-grade multi-database SQL conversion engine supporting 12 database dialects.
 
-Current release: 1.1.3
+Current release: 1.1.4
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -48,16 +48,18 @@ cd sql-dialect-master
 python -m pip install -e .
 ```
 
-For development and testing, install the optional development dependencies:
+For development, testing, quality checks, and local builds, use the project's
+Python environment and install the optional tooling:
 
 ```bash
-python -m pip install -e ".[dev]"
+python -m venv .venv
+.venv/bin/python -m pip install -e ".[dev,qa]"
 ```
 
 For database-backed semantic tests:
 
 ```bash
-python -m pip install -e ".[dev,semantic]"
+.venv/bin/python -m pip install -e ".[dev,semantic]"
 ```
 
 ### Run Streamlit UI (Recommended)
@@ -82,6 +84,16 @@ uvicorn backend.api.main:app --reload
 ```
 
 API docs available at http://localhost:8000/docs
+
+Set `SDM_API_KEY` in `.env` to require credentials for `/api/*` endpoints.
+Clients may send `X-API-Key` or `Authorization: Bearer <key>`. Health probes
+use the separate `SDM_HEALTH_PROBE_TOKEN` setting. An empty API key preserves
+local access.
+
+`SDM_API_WORKERS` (default 4) and `SDM_API_QUEUE_SIZE` (default 4) bound CPU
+work. When all slots are occupied, requests receive HTTP 503 and a
+`Retry-After` header. `SDM_REQUEST_TIMEOUT` returns HTTP 504 when a request
+times out; running threads retain their capacity until they finish.
 
 ## 📖 Usage Examples
 

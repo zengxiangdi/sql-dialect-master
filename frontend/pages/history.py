@@ -9,6 +9,7 @@ from frontend.app_context_v2 import copy_sql
 from frontend.core.design_tokens import ColorTokens
 from frontend.core.escaping import esc
 from frontend.core.state import SessionState
+from frontend.core.statuses import normalize_status, status_color
 
 
 def render_history_page(theme: ColorTokens) -> None:
@@ -70,19 +71,17 @@ def _render_history_entry(
     sql_preview = esc(entry.get("sql", "")[:80])
     if len(entry.get("sql", "")) > 80:
         sql_preview += "..."
-    status = entry.get("status", "neutral")
+    status = normalize_status(entry.get("status", "neutral"))
     created_at = entry.get("created_at", "")
     identity = entry.get("identity", "")
 
     # Status badge color
+    color = status_color(status, theme)
     if status == "valid":
-        status_color = theme.success
         status_text = "✓ Valid"
     elif status == "error":
-        status_color = theme.danger
         status_text = "✗ Error"
     else:
-        status_color = theme.text_muted
         status_text = "—"
 
     # Time ago
@@ -91,11 +90,13 @@ def _render_history_entry(
     with st.expander(f"{src} → {tgt} · {time_str}", expanded=False):
         st.markdown(
             f'<div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">'
-            f'<span style="color:{status_color}; font-size:11px; font-weight:600;">{status_text}</span>'
+            f'<span style="color:{color}; font-size:11px; font-weight:600;">{status_text}</span>'
             f'</div>',
             unsafe_allow_html=True,
         )
         st.code(sql_preview, language="sql")
+        if entry.get("error"):
+            st.error(entry["error"])
 
         col_load, col_copy, col_fav, col_del = st.columns([1, 1, 1, 1])
         with col_load:

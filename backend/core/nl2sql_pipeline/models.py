@@ -28,3 +28,6 @@ class NL2SQLResult:
     evidence: GenerationEvidence | None = None
     suggestions: list = field(default_factory=list)
     parsed_elements: dict = field(default_factory=dict)
+    # DML callers need to know how generated placeholders should be bound.
+    parameter_style: str | None = None
+    parameters: list = field(default_factory=list)

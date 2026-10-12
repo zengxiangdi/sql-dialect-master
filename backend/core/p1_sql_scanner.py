@@ -18,7 +18,10 @@ def executable_segments(sql: str, dialect: str | None = None) -> Iterator[Tuple[
     dollar_tag = None
     while i < n:
         if state == "code":
-            if sql.startswith("--", i):
+            if sql.startswith("--", i) and (
+                not dialect or dialect.lower() != "mysql"
+                or i + 2 == n or sql[i + 2].isspace() or ord(sql[i + 2]) < 32
+            ):
                 if start < i:
                     yield start, i
                 state = "line_comment"
@@ -173,6 +176,28 @@ def mask_non_executable(sql: str, dialect: str | None = None) -> str:
         for i in range(start, end):
             masked[i] = " "
     return "".join(masked)
+
+
+def prepare_sql_for_parser(sql: str, dialect: str | None = None) -> str:
+    """Disambiguate MySQL subtraction for older supported sqlglot readers.
+
+    MySQL requires whitespace after `--` for a comment. Some supported
+    sqlglot versions still consume `a--b` as a comment. In executable regions
+    only, separate the minus operators so readers agree across versions.
+    """
+    if not dialect or dialect.lower() != "mysql" or "--" not in sql:
+        return sql
+    parts = []
+    cursor = 0
+    for start, end in executable_segments(sql, dialect=dialect):
+        parts.append(sql[cursor:start])
+        segment = sql[start:end]
+        while "--" in segment:
+            segment = segment.replace("--", "- -")
+        parts.append(segment)
+        cursor = end
+    parts.append(sql[cursor:])
+    return "".join(parts)
 
 
 def _non_executable_ranges(sql: str, dialect: str | None = None):

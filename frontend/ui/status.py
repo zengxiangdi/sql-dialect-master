@@ -6,6 +6,7 @@ import streamlit as st
 from frontend.app_context_v2 import copy_sql
 from frontend.core.design_tokens import ColorTokens
 from frontend.core.escaping import esc
+from frontend.core.statuses import normalize_status, status_color
 
 
 def render_conversion_status(
@@ -26,13 +27,8 @@ def render_conversion_status(
         from frontend.core.design_tokens import DARK
         theme = DARK
 
-    colors = {
-        "valid": theme.success,
-        "warning": theme.warning,
-        "error": theme.danger,
-        "info": theme.info,
-        "neutral": theme.text_muted,
-    }
+    colors = {key: status_color(key, theme) for key in ("valid", "warning", "error", "info", "neutral")}
+    status = normalize_status(status)
     dots = {"valid": "●", "warning": "●", "error": "●", "info": "●", "neutral": "●"}
     dot_color = colors.get(status, theme.text_muted)
     dot = dots.get(status, "●")
@@ -85,13 +81,14 @@ def render_result_panel(
         theme = DARK
 
     # Status badge
+    semantic_status_raw = semantic_status
+    semantic_status = normalize_status(semantic_status)
+    badge_color = status_color(semantic_status, theme)
     status_colors = {
-        "valid": (theme.success, f"background:{theme.success}15; color:{theme.success}; border-color:{theme.success}40;"),
-        "error": (theme.danger, f"background:{theme.danger}15; color:{theme.danger}; border-color:{theme.danger}40;"),
-        "warning": (theme.warning, f"background:{theme.warning}15; color:{theme.warning}; border-color:{theme.warning}40;"),
+        semantic_status: (badge_color, f"background:{badge_color}15; color:{badge_color}; border-color:{badge_color}40;")
     }
     badge_style = status_colors.get(semantic_status, (theme.text_muted, f"background:{theme.hover_bg}; color:{theme.text_muted}; border-color:{theme.border};"))[1]
-    badge_text = esc(semantic_label) if semantic_status != "pending" else "Pending"
+    badge_text = esc(semantic_label) if semantic_status_raw != "pending" else "Pending"
 
     if error_message:
         # Error state

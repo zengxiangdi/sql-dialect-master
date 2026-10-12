@@ -82,7 +82,9 @@ def _parse_and_normalize(sql: str, dialect: str) -> exp.Expression:
     if not isinstance(sql, str) or not sql.strip():
         raise ValueError("SQL must be a non-empty string")
 
-    tree = sqlglot.parse_one(sql, read=dialect)
+    from .sql_statements import parse_single_sql
+
+    tree = parse_single_sql(sql, dialect)
     for node in list(tree.find_all(exp.Paren)):
         if isinstance(node.this, (exp.And, exp.Or)):
             continue

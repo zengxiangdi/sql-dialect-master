@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from backend.core.semantic_diff import SemanticDiff, StructuredSemanticDifference
+from frontend.core.statuses import normalize_status
 
 # ── Conversion ViewModel ───────────────────────────────────────────────
 
@@ -96,16 +97,7 @@ class ConversionViewModel:
         new_semantic = semantic_status_map.get(diff.semantic_classification, "unknown")
         label = SEMANTIC_STATUS_LABELS.get(diff.semantic_classification, diff.semantic_classification)
         color_key = SEMANTIC_STATUS_COLOR.get(diff.semantic_classification, "neutral")
-        status_map: dict[str, StatusKind] = {
-            "valid": "valid",
-            "success": "valid",
-            "danger": "error",
-            "warning": "warning",
-            "error": "error",
-            "info": "info",
-            "neutral": "neutral",
-        }
-        status: StatusKind = status_map.get(color_key, "neutral")
+        status: StatusKind = normalize_status(color_key)
 
         enriched = cls(
             status=status,
@@ -378,16 +370,7 @@ class SemanticDiffViewModel:
 
         label = SEMANTIC_STATUS_LABELS.get(diff.semantic_classification, diff.semantic_classification)
         color_key = SEMANTIC_STATUS_COLOR.get(diff.semantic_classification, "neutral")
-        status_map: dict[str, StatusKind] = {
-            "valid": "valid",
-            "success": "valid",
-            "danger": "error",
-            "warning": "warning",
-            "error": "error",
-            "info": "info",
-            "neutral": "neutral",
-        }
-        status: StatusKind = status_map.get(color_key, "neutral")
+        status: StatusKind = normalize_status(color_key)
 
         findings = [
             SemanticFindingViewModel.from_backend(i, sd)

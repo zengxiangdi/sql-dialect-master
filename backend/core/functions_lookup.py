@@ -9,6 +9,7 @@ Provides comprehensive SQL function lookup with:
 - Function examples and parameter documentation
 """
 import json
+import copy
 import logging
 from pathlib import Path
 from typing import Optional, List, Dict, Any
@@ -112,11 +113,13 @@ class FunctionEncyclopedia:
         Returns:
             List of matching functions sorted by relevance
         """
-        limit = limit or settings.function_search_limit
+        # ``0`` is a valid explicit request for no results.  Treat only
+        # ``None`` as asking for the configured default.
+        limit = settings.function_search_limit if limit is None else max(0, limit)
         query = query.upper().strip()
         
         if not query:
-            return self.functions[:limit]
+            return copy.deepcopy(self.functions[:limit])
         
         results: List[tuple] = []
         
@@ -138,16 +141,17 @@ class FunctionEncyclopedia:
                     results.append((func, ratio))
         
         results.sort(key=lambda x: x[1], reverse=True)
-        return [r[0] for r in results[:limit]]
+        return copy.deepcopy([r[0] for r in results[:limit]])
     
     def get_function(self, name: str) -> Optional[FunctionInfo]:
         """Get detailed function information by exact name."""
-        return self.name_index.get(name.upper())
+        result = self.name_index.get(name.upper())
+        return copy.deepcopy(result) if result is not None else None
     
     def list_by_category(self, category: str) -> List[FunctionInfo]:
         """List all functions in a category."""
         category = category.lower()
-        return self.category_index.get(category, [])
+        return copy.deepcopy(self.category_index.get(category, []))
     
     def get_dialect_syntax(self, func_name: str, dialect: str) -> Optional[str]:
         """Get function syntax for specific dialect."""

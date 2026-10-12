@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """SQL Transpiler - Convert SQL between different database dialects."""
 import asyncio
+import copy
 import hashlib
 import json
 import logging
@@ -21,7 +22,7 @@ from .config import (
     settings,
 )
 from .exceptions import ErrorCode, ValidationError
-from .p1_sql_scanner import mask_non_executable
+from .p1_sql_scanner import mask_non_executable, prepare_sql_for_parser
 from .post_processor import PostProcessor
 from .rules import DYNAMIC_SEPARATOR_FAIL_NOTE
 
@@ -65,6 +66,17 @@ def _dml_without_where(sql: str, parsed_statements=None):
             elif isinstance(node, exp.Delete) and node.args.get("where") is None:
                 result.append("DELETE")
     return result
+
+
+def _is_single_statement_stream(statements: list) -> bool:
+    """Return true for one statement, including one trailing delimiter comment."""
+    if len(statements) == 1 and statements[0] is not None:
+        return True
+    return (
+        len(statements) == 2
+        and statements[0] is not None
+        and isinstance(statements[1], exp.Semicolon)
+    )
 
 
 @dataclass
@@ -621,13 +633,22 @@ class SQLTranspiler:
                 # Guard against stale cache entries from before the
                 # target_validation_state field existed.
                 cached.setdefault("target_validation_state", "target_valid")
-                return TranspileResult(**cached)
+                # Cache values contain lists (warnings, transformations,
+                # compatibility notes).  Never return those shared mutable
+                # lists directly: a caller appending a warning must not
+                # mutate all future responses for the same SQL.
+                return TranspileResult(**copy.deepcopy(cached))
 
         if multiple_statements is None:
             # Preserve the lightweight statement-count helper's one-argument
             # contract (callers/tests may wrap it); the security-enabled path
             # already performed dialect-aware masking above.
             multiple_statements = self._has_multiple_statements(sql)
+            # Generic SQL treats `--name` as a comment; MySQL treats it as
+            # subtraction unless whitespace follows the two dashes. Check
+            # this dialect-specific case even when generic masking skipped it.
+            if source == "mysql" and ";" in sql and "--" in sql:
+                multiple_statements = self._has_multiple_statements(sql, dialect=source)
         if multiple_statements:
             return TranspileResult(
                 success=False,
@@ -639,6 +660,7 @@ class SQLTranspiler:
             )
 
         try:
+            parser_sql = prepare_sql_for_parser(sql, source)
             ast_notes: List[str] = []
             if source == "clickhouse" and target == "postgres":
                 ast = sqlglot.parse_one(sql, read="clickhouse")
@@ -658,12 +680,12 @@ class SQLTranspiler:
                 ast_notes.extend(list_notes)
                 transpiled = ast.sql(dialect=target, pretty=pretty)
             elif source == "mysql" and target == "oracle":
-                ast = sqlglot.parse_one(sql, read="mysql")
+                ast = sqlglot.parse_one(parser_sql, read="mysql")
                 ast, now_notes = self._ast_mysql_now_to_sysdate(ast, target)
                 ast_notes.extend(now_notes)
                 transpiled = ast.sql(dialect="oracle", pretty=pretty)
             else:
-                transpiled = sqlglot.transpile(sql, read=source, write=target, pretty=pretty)[0]
+                transpiled = sqlglot.transpile(parser_sql, read=source, write=target, pretty=pretty)[0]
             final_sql, transformations = self.post_processor.process(transpiled, source, target)
             if ast_notes:
                 transformations = ast_notes + transformations
@@ -758,7 +780,7 @@ class SQLTranspiler:
             )
 
             if self._cache_enabled:
-                self._cache.set(cache_key, result.to_dict())
+                self._cache.set(cache_key, copy.deepcopy(result.to_dict()))
             return result
         except Exception as e:
             logger.error(f"Transpile failed: {source} -> {target}, error={str(e)}")
@@ -777,7 +799,8 @@ class SQLTranspiler:
         if ";" not in mask_non_executable(sql, dialect=dialect):
             return False
         try:
-            return len(sqlglot.parse(sql)) > 1
+            statements = sqlglot.parse(prepare_sql_for_parser(sql, dialect), read=dialect) if dialect else sqlglot.parse(sql)
+            return not _is_single_statement_stream(statements) and len(statements) > 1
         except Exception:
             return False
 
@@ -1228,7 +1251,24 @@ class SQLTranspiler:
             logger.warning("Generic parser fallback used for %s output: %s", dialect, target_message)
             return None, warning, "generic_only"
 
-    def _validate_security(self, sql: str, dialect: str | None = None) -> Dict[str, Any]:
+    def _validate_security(
+        self,
+        sql: str,
+        dialect: str | None = None,
+        block_dangerous: bool | None = None,
+    ) -> Dict[str, Any]:
+        """Validate SQL using the canonical scanner and AST checks.
+
+        ``block_dangerous`` is an optional per-call override used by the
+        public validation helper.  Keeping the override local avoids mutating
+        the process-wide settings object while preserving the historical
+        ``settings.security_block_dangerous`` default for transpilation.
+        """
+        block = (
+            settings.security_block_dangerous
+            if block_dangerous is None
+            else bool(block_dangerous)
+        )
         result = {"blocked": False, "reason": None, "warnings": [], "executable_sql": None}
         executable_sql = mask_non_executable(sql, dialect=dialect)
         result["executable_sql"] = executable_sql
@@ -1249,7 +1289,7 @@ class SQLTranspiler:
                 actual_operation = True
             if actual_operation:
                 message = f"Dangerous SQL operation detected: {dangerous_operation.group(1).upper()}"
-                if settings.security_block_dangerous:
+                if block:
                     result["blocked"] = True
                     result["reason"] = message
                     return result
@@ -1258,11 +1298,14 @@ class SQLTranspiler:
             result["multiple_statements"] = False
         else:
             try:
-                parsed_statements = sqlglot.parse(sql)
-                result["multiple_statements"] = len(parsed_statements) > 1
+                parsed_statements = sqlglot.parse(prepare_sql_for_parser(sql, dialect), read=dialect) if dialect else sqlglot.parse(sql)
+                result["multiple_statements"] = (
+                    len(parsed_statements) > 1
+                    and not _is_single_statement_stream(parsed_statements)
+                )
                 if result["multiple_statements"]:
                     message = "Multiple SQL statements detected"
-                    if settings.security_block_dangerous:
+                    if block:
                         result["blocked"] = True
                         result["reason"] = message
                         return result
@@ -1292,7 +1335,7 @@ class SQLTranspiler:
                         system_table = True
                     if not system_table:
                         continue
-                if settings.security_block_dangerous:
+                if block:
                     result["blocked"] = True
                     result["reason"] = message
                     return result

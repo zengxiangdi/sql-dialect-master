@@ -57,10 +57,14 @@ def render_sql_editor(
 
     st.markdown(f"{label_html}{dialect_badge}")
 
+    # Initialize only before the widget exists; reruns preserve user edits.
+    if key not in st.session_state:
+        st.session_state[key] = value if isinstance(value, str) else ""
+    elif not isinstance(st.session_state[key], str):
+        st.session_state[key] = ""
     sql = st.text_area(
         label,
         key=key,
-        value=value,
         height=height,
         placeholder=placeholder,
         label_visibility="collapsed",

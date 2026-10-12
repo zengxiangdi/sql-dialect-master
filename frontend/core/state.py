@@ -45,6 +45,7 @@ from frontend.core.navigation import (
     consume_navigation_intent,
     get_pending_intent,
 )
+from frontend.core.statuses import StatusKind, normalize_status
 
 # ── Versioning ────────────────────────────────────────────────────────
 
@@ -53,8 +54,6 @@ _CURRENT_VERSION = 1
 MAX_HISTORY_ENTRIES = 100
 
 # ── Type aliases ──────────────────────────────────────────────────────
-
-StatusKind = Literal["valid", "warning", "error", "info", "neutral"]
 
 # ── Domain models ──────────────────────────────────────────────────────
 
@@ -81,13 +80,17 @@ class HistoryEntry:
     def from_raw_dict(cls, raw: dict[str, Any]) -> "HistoryEntry":
         """Build a HistoryEntry from a legacy runtime dict."""
         return cls(
-            identity=raw.get("identity", ""),
-            sql=raw.get("sql", ""),
-            source_dialect=raw.get("src", raw.get("source_dialect", "")),
-            target_dialect=raw.get("tgt", raw.get("target_dialect", "")),
-            result_sql=raw.get("result") if "result" in raw else raw.get("result_sql"),
-            status=raw.get("status", "neutral"),
-            created_at=raw.get("created_at", ""),
+            identity=str(raw.get("identity", "")) if raw.get("identity") is not None else "",
+            sql=raw.get("sql", "") if isinstance(raw.get("sql", ""), str) else "",
+            source_dialect=raw.get("src", raw.get("source_dialect", ""))
+            if isinstance(raw.get("src", raw.get("source_dialect", "")), str) else "",
+            target_dialect=raw.get("tgt", raw.get("target_dialect", ""))
+            if isinstance(raw.get("tgt", raw.get("target_dialect", "")), str) else "",
+            result_sql=(raw.get("result") if isinstance(raw.get("result"), str)
+                        else raw.get("result_sql") if isinstance(raw.get("result_sql"), str)
+                        else None),
+            status=normalize_status(raw.get("status", "neutral")),
+            created_at=raw.get("created_at", "") if isinstance(raw.get("created_at", ""), str) else "",
         )
 
     def to_raw_dict(self) -> dict[str, Any]:
@@ -237,6 +240,7 @@ class SessionState:
     _KEY_BATCH_VM = "batch_last_vm"
     _KEY_BATCH_FINGERPRINT = "batch_last_fingerprint"
     _KEY_NL_VM = "nl_last_vm"
+    _KEY_NL_FINGERPRINT = "nl_last_fingerprint"
     _KEY_NL_ERROR = "nl_generation_error"
     _KEY_DIFF_VM = "diff_last_vm"
     _KEY_DIFF_FINGERPRINT = "diff_last_fingerprint"
@@ -297,6 +301,8 @@ class SessionState:
             raw[self._KEY_BATCH_FINGERPRINT] = None
         if self._KEY_NL_VM not in raw:
             raw[self._KEY_NL_VM] = None
+        if self._KEY_NL_FINGERPRINT not in raw:
+            raw[self._KEY_NL_FINGERPRINT] = None
         if self._KEY_NL_ERROR not in raw:
             raw[self._KEY_NL_ERROR] = None
         if self._KEY_DIFF_VM not in raw:
@@ -365,8 +371,8 @@ class SessionState:
 
         Streamlit sessions can outlive code versions and may contain ``None``,
         non-dict values, or widget-hostile identities.  Keep only dictionaries,
-        give each entry a bounded stable identity, and retain the newest entries
-        when a session grows without bound.
+        normalize display fields, give each entry a bounded stable identity,
+        and retain the newest entries when a session grows without bound.
         """
         import re
         import uuid
@@ -382,6 +388,24 @@ class SessionState:
             if not isinstance(value, dict):
                 continue
             entry = dict(value)
+            # Session data may come from an older app version or manual edits.
+            # Never pass None, numbers, or containers into string widgets.
+            for key, fallback in (("sql", ""), ("src", "postgres"), ("tgt", "mysql"),
+                                  ("created_at", ""), ("error", "")):
+                candidate = entry.get(key, fallback)
+                entry[key] = candidate if isinstance(candidate, str) else fallback
+            from backend.core.config import SUPPORTED_DIALECTS
+
+            for key, legacy_key, fallback in (
+                ("src", "source_dialect", "postgres"),
+                ("tgt", "target_dialect", "mysql"),
+            ):
+                candidate = value.get(key, value.get(legacy_key, fallback))
+                normalized = candidate.strip().lower() if isinstance(candidate, str) else fallback
+                entry[key] = normalized if normalized in SUPPORTED_DIALECTS else fallback
+            result = entry.get("result", entry.get("result_sql"))
+            entry["result"] = result if isinstance(result, str) else None
+            entry["status"] = normalize_status(entry.get("status", "neutral"))
             identity = entry.get("identity")
             if (
                 not isinstance(identity, str)
@@ -404,6 +428,7 @@ class SessionState:
         result_sql: str | None = None,
         status: StatusKind = "neutral",
         created_at: str = "",
+        error_message: str | None = None,
     ) -> str:
         """Add a history entry and return its identity string."""
         import uuid
@@ -416,6 +441,7 @@ class SessionState:
             "result": result_sql,
             "status": status,
             "created_at": created_at,
+            "error": error_message or "",
             # NOTE: is_favorite is NOT persisted here.
             # Favorite status is tracked solely in the `favorites` list.
             # Access via state.is_favorite(identity).
@@ -559,6 +585,15 @@ class SessionState:
     @nl_last_vm.setter
     def nl_last_vm(self, value: Any) -> None:
         self._raw[self._KEY_NL_VM] = value
+
+    @property
+    def nl_last_fingerprint(self) -> str | None:
+        value = self._raw.get(self._KEY_NL_FINGERPRINT)
+        return value if isinstance(value, str) else None
+
+    @nl_last_fingerprint.setter
+    def nl_last_fingerprint(self, value: str | None) -> None:
+        self._raw[self._KEY_NL_FINGERPRINT] = value
 
     @property
     def nl_generation_error(self) -> str | None:

@@ -9,6 +9,7 @@ import streamlit as st
 
 from frontend.core.design_tokens import ColorTokens
 from frontend.core.escaping import esc
+from frontend.core.statuses import status_color
 from frontend.core.viewmodels import (
     SemanticDiffViewModel,
     SemanticFindingViewModel,
@@ -55,14 +56,7 @@ def render_semantic_diff_workspace(
 
 def _render_overall_status(vm: SemanticDiffViewModel, theme: ColorTokens) -> None:
     """Render the overall semantic classification banner."""
-    severity_colors = {
-        "valid": theme.success,
-        "warning": theme.warning,
-        "error": theme.danger,
-        "info": theme.info,
-        "neutral": theme.text_muted,
-    }
-    color = severity_colors.get(vm.overall_status, theme.text_muted)
+    color = status_color(vm.overall_status, theme)
 
     # Finding summary
     summary_parts = []

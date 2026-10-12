@@ -1,15 +1,28 @@
 name: Publish to PyPI
 
 on:
-  release:
-    types: [published]
+  # A release created with GITHUB_TOKEN does not emit a second release event.
+  # Run after the release workflow completes, then verify the tag points at
+  # that workflow's exact head commit before publishing.
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing release tag to publish (for example v1.1.4)"
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 jobs:
   publish:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -18,6 +31,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || inputs.release_tag }}
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -25,10 +41,44 @@ jobs:
           python-version: '3.12'
 
       - name: Install build tooling
-        run: python -m pip install --upgrade pip build
+        run: python -m pip install --upgrade pip build twine
 
-      - name: Build distributions
-        run: python -m build
+      - name: Resolve and verify release tag
+        env:
+          WORKFLOW_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          MANUAL_TAG: ${{ inputs.release_tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch --tags --force origin
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            release_tag="$(python -c 'import tomllib; print("v" + tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+            if [ "$(git rev-parse "refs/tags/$release_tag^{commit}")" != "$WORKFLOW_HEAD_SHA" ]; then
+              echo "$release_tag does not point to Release workflow head $WORKFLOW_HEAD_SHA" >&2
+              exit 1
+            fi
+          else
+            release_tag="$MANUAL_TAG"
+            git rev-parse "refs/tags/$release_tag^{commit}" >/dev/null
+          fi
+          if [ "$(git rev-parse HEAD)" != "$(git rev-parse "refs/tags/$release_tag^{commit}")" ]; then
+            echo "Checked-out commit does not match $release_tag" >&2
+            exit 1
+          fi
+          gh release view "$release_tag" --json isDraft --jq '.isDraft' | \
+            python -c 'import json, sys; assert json.load(sys.stdin) is False, "release is still a draft"'
+          echo "RELEASE_TAG=$release_tag" >> "$GITHUB_ENV"
+          python scripts/verify_release.py --tag "$release_tag"
 
+      - name: Download verified GitHub release distributions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p dist
+          gh release download "$RELEASE_TAG" --dir dist --pattern '*.whl' --pattern '*.tar.gz'
+
+      - name: Verify distributions
+        run: |
+          python scripts/verify_release.py --tag "$RELEASE_TAG" --dist dist
+          python -m twine check dist/*
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2

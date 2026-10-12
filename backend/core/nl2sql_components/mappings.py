@@ -13,13 +13,13 @@ KEYWORDS: Dict[str, str] = {
     "select": "SELECT", "get": "SELECT", "find": "SELECT", "show": "SELECT", "list": "SELECT", "fetch": "SELECT",
     # Insert operations
     "插入": "INSERT", "添加": "INSERT", "新增": "INSERT", "创建": "INSERT",
-    "insert": "INSERT", "add": "INSERT", "create": "INSERT",
+    "insert": "INSERT", "add": "INSERT",
     # Update operations
     "更新": "UPDATE", "修改": "UPDATE", "改变": "UPDATE", "设置": "UPDATE",
     "update": "UPDATE", "modify": "UPDATE", "change": "UPDATE", "set": "UPDATE",
     # Delete operations
     "删除": "DELETE", "移除": "DELETE", "清除": "DELETE",
-    "delete": "DELETE", "remove": "DELETE", "drop": "DELETE",
+    "delete": "DELETE", "remove": "DELETE",
     # Aggregations
     "统计": "COUNT", "计数": "COUNT", "数量": "COUNT", "多少": "COUNT", "几个": "COUNT",
     "count": "COUNT", "total": "COUNT", "how many": "COUNT",

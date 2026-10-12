@@ -60,3 +60,4 @@ tmp/
 
 # Kiro IDE
 .kiro/
+.codegraph/

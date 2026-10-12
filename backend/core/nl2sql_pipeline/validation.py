@@ -8,6 +8,7 @@ import sqlglot
 import re
 
 from ..p1_sql_scanner import mask_non_executable
+from ..sql_statements import parse_single_sql
 
 
 _BIND_PARAMETER_PATTERNS = {
@@ -37,7 +38,7 @@ def _replace_bind_parameters(sql: str, dialect: str) -> str:
     pattern = _BIND_PARAMETER_PATTERNS.get((dialect or "").lower())
     if pattern is None:
         return sql
-    masked = mask_non_executable(sql)
+    masked = mask_non_executable(sql, dialect=dialect)
     replacements = []
     for match in pattern.finditer(masked):
         replacements.append((match.start(), match.end()))
@@ -64,12 +65,12 @@ def validate_sql(sql: str, dialect: str) -> float:
         )
         if sql_to_validate.strip():
             try:
-                sqlglot.parse_one(sql_to_validate, read=dialect)
+                parse_single_sql(sql_to_validate, dialect)
             except Exception:
                 normalized = _replace_bind_parameters(sql_to_validate, dialect)
                 if normalized == sql_to_validate:
                     raise
-                sqlglot.parse_one(normalized, read=dialect)
+                parse_single_sql(normalized, dialect)
             return 0.15
     except Exception:
         return -0.2

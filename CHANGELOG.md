@@ -2,6 +2,53 @@
 
 All notable changes to SQL Dialect Master are documented here.
 
+## [1.1.4] - 2026-10-13
+
+### Correctness and behavior changes
+
+- NL2SQL rejects empty, unrecognized, and unsupported DDL requests. DROP is
+  never mapped to DELETE; English operation words no longer imply column
+  names (`update` no longer introduces a `date` assignment).
+- All natural-language date windows are checked against
+  `SDM_NL2SQL_MAX_DATE_INTERVAL_DAYS` (default 36525). The configured
+  `SDM_NL2SQL_CONFIDENCE_THRESHOLD` (default 0.6) now controls whether
+  generation succeeds; below-threshold requests return `success=False` and
+  `sql=null`.
+- NL2SQL responses add `parameter_style`, ordered `parameters`, and
+  `evidence`; `parameters` contains placeholder markers, not bound values
+  (for example `['$1', '$2']`). DML output is still a template requiring
+  caller-supplied values.
+- Parser, semantic Diff, and static workspaces require one bounded statement;
+  a trailing delimiter followed by a comment is accepted consistently.
+- Cached conversion results and lookup results no longer share mutable lists
+  or dictionaries with subsequent callers.
+- Function categories are validated with HTTP 400 for unknown values;
+  explicit SDK search `limit=0` returns no results. Type comparison accepts
+  the same aliases as type mapping.
+- NL2SQL edits invalidate displayed results; Diff defaults to PostgreSQL →
+  MySQL. Invalid history fields and navigation payloads are normalized or
+  rejected. History now includes failed conversions and their error reasons.
+- Frontend statuses and colors use one vocabulary. SQL editors preserve
+  edits across reruns without competing widget defaults.
+
+### Operations and release validation
+
+- `SDM_API_KEY` is disabled by default. When configured, `/api/*` requests
+  require `X-API-Key` or `Authorization: Bearer <key>`; missing or invalid
+  credentials receive 401. Health probes retain their separate access policy.
+- Bounded CPU workers and queues (`SDM_API_WORKERS=4`,
+  `SDM_API_QUEUE_SIZE=4` by default) prevent timed-out requests from releasing
+  capacity prematurely. Busy calls receive 503 with `Retry-After: 1`; timeouts
+  receive 504 with request correlation. Timeout stops waiting, while the
+  running thread retains its slot until completion.
+- Public SQL safety validation delegates to the canonical implementation;
+  dialect-aware rewrites preserve MySQL `#` comments.
+- Release metadata, Changelog, package data, and installed Streamlit startup
+  are checked before publishing. GitHub Release waits for CI at the tagged
+  commit; PyPI consumes the exact same verified GitHub artifacts.
+- Developer tooling uses the project `.venv`; build and Twine are included
+  in the QA extra. CodeGraph indexes are ignored by Git.
+
 ## [1.1.3] - 2026-10-12
 
 ### API and security hardening

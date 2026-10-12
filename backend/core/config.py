@@ -216,6 +216,9 @@ class AppSettings(BaseSettings):
     # API settings
     api_version: str = _METADATA_API_VERSION
     api_title: str = "SQL Dialect Master API"
+    api_key: Optional[SecretStr] = None
+    api_workers: int = Field(4, gt=0)
+    api_queue_size: int = Field(4, ge=0)
     allowed_origins: str = (
         "http://localhost:8501,http://localhost:8000,"
         "http://127.0.0.1:8501,http://127.0.0.1:8000"
@@ -248,6 +251,9 @@ class AppSettings(BaseSettings):
     nl2sql_confidence_threshold: float = Field(0.6, ge=0.0, le=1.0)
     nl2sql_max_suggestions: int = Field(5, ge=0)
     nl2sql_max_input_length: int = Field(8192, gt=0)
+    # Maximum natural-language date window accepted by NL2SQL.  Keeping this
+    # bounded prevents enormous interval literals from reaching renderers.
+    nl2sql_max_date_interval_days: int = Field(36525, gt=0)
 
     # SQL Transpiler / Parser settings
     #

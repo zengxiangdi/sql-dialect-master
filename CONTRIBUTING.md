@@ -10,22 +10,23 @@ Thank you for your interest in contributing to SQL Dialect Master! We welcome co
    cd sql-dialect-master
    ```
 
-2. **Create a virtual environment (Recommended)**
+2. **Create the project virtual environment**
    ```bash
-   python -m venv venv
+   python -m venv .venv
    # Windows
-   venv\Scripts\activate
+   .venv\Scripts\activate
    # Linux/Mac
-   source venv/bin/activate
+   source .venv/bin/activate
    ```
 
 3. **Install dependencies**
    ```bash
-   # Install project documentation
-   pip install -r requirements.txt
-   
-   # Install test dependencies
-   pip install -r requirements-lock.txt && pip install -e . --no-deps
+   # Includes tests, Ruff, Bandit, dependency audit, build, and Twine.
+   .venv/bin/python -m pip install -e ".[dev,qa,semantic]"
+
+   # CI's reproducible locked runtime/test environment remains available:
+   .venv/bin/python -m pip install -r requirements-lock.txt
+   .venv/bin/python -m pip install -e . --no-deps
    ```
 
 ## 🏗️ Project Architecture
@@ -46,18 +47,18 @@ We use `pytest` for testing. Please ensure all tests pass before submitting a PR
 
 ```bash
 # Run all tests
-pytest
+.venv/bin/python -m pytest
 
 # Run specific test file
-pytest backend/tests/test_api.py
+.venv/bin/python -m pytest backend/tests/test_api.py
 
 # Check test coverage
-pytest --cov=backend
+.venv/bin/python -m pytest --cov=backend
 ```
 
 ## 📝 Coding Guidelines
 
-- **Style**: We follow PEP 8. Please run `ruff check backend/core backend/api --select E9,F --ignore F401` before committing.
+- **Style**: We follow PEP 8. Please run `.venv/bin/ruff check backend/core backend/api frontend sdm_local_v2.py --select E9,F --ignore F401` before committing.
 - **Type Hints**: Use Python type hints for function arguments and return values.
 - **Documentation**: Add docstrings to modules, classes, and functions (Google style).
 - **Modularity**: Keep components small and focused (e.g., separate UI logic into `frontend/ui`).

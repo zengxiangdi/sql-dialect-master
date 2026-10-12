@@ -8,11 +8,26 @@ from ``backend.core.nl2sql_components.mappings``).
 import re
 from typing import Dict, List, Optional
 
+from ..p1_sql_scanner import mask_non_executable
+
 
 # Generated SQL is intended to be reviewed and parameterized by a caller.
 # Refuse unbounded/absurd row counts before integer conversion (which can
 # raise ValueError for thousands of digits on modern Python versions).
 MAX_NL2SQL_LIMIT = 1_000_000
+
+
+def _pattern_match(text: str, pattern: str) -> Optional[re.Match]:
+    """Match an NL2SQL mapping as a token when it is an English identifier.
+
+    Substring matching turns ``update`` into the ``date`` column and can
+    similarly match ``order`` inside unrelated words.  Chinese phrases do
+    not have whitespace boundaries, so those retain substring semantics.
+    """
+    expression = re.escape(pattern)
+    if not re.search(r"[\u4e00-\u9fff]", pattern):
+        expression = rf"(?<![\w$]){expression}(?![\w$])"
+    return re.search(expression, text, re.IGNORECASE)
 
 
 def detect_operation(text: str, keywords: Dict[str, str]) -> str:
@@ -22,8 +37,9 @@ def detect_operation(text: str, keywords: Dict[str, str]) -> str:
     and returns the first matching operation (SELECT/INSERT/UPDATE/DELETE).
     Defaults to SELECT.
     """
+    intent_text = mask_non_executable(text)
     for keyword, op in keywords.items():
-        if keyword in text and op in ["SELECT", "INSERT", "UPDATE", "DELETE"]:
+        if _pattern_match(intent_text, keyword) and op in ["SELECT", "INSERT", "UPDATE", "DELETE"]:
             return op
     return "SELECT"
 
@@ -36,8 +52,9 @@ def extract_table(text: str, table_patterns: Dict[str, str]) -> str:
     """
     tables_found = []
     for pattern, table in table_patterns.items():
-        if pattern in text:
-            tables_found.append((text.find(pattern), table, len(pattern)))
+        match = _pattern_match(text, pattern)
+        if match:
+            tables_found.append((match.start(), table, len(pattern)))
     if tables_found:
         tables_found.sort(key=lambda item: (-item[2], item[0]))
         return tables_found[0][1]
@@ -62,7 +79,8 @@ def extract_table_subject(
     for pattern, table in table_patterns.items():
         if relational_context and table == relational_context:
             continue
-        pos = text.find(pattern)
+        match = _pattern_match(text, pattern)
+        pos = match.start() if match else -1
         if pos != -1:
             if table in [t for _, t in candidates]:
                 continue
@@ -80,7 +98,8 @@ def named_tables(text: str, table_patterns: Dict[str, str]) -> List[str]:
     for pattern, table in table_patterns.items():
         if table in seen:
             continue
-        pos = text.find(pattern)
+        match = _pattern_match(text, pattern)
+        pos = match.start() if match else -1
         if pos != -1:
             occurrences.append((pos, table))
             seen.add(table)
@@ -94,8 +113,9 @@ def extract_columns(text: str, column_patterns: Dict[str, str]) -> List[str]:
     keyword is present.
     """
     columns = []
+    text = mask_non_executable(text)
     for pattern, column in column_patterns.items():
-        if pattern in text and column not in columns:
+        if _pattern_match(text, pattern) and column not in columns:
             columns.append(column)
     return columns if columns else ["*"]
 
@@ -121,11 +141,14 @@ def extract_limit(text: str) -> Optional[int]:
             # query.
             if raw_value.startswith("-"):
                 raise ValueError("LIMIT cannot be negative")
-            if len(raw_value) > len(str(MAX_NL2SQL_LIMIT)):
+            if len(raw_value) > 64:
+                raise ValueError("LIMIT number representation exceeds the maximum supported length")
+            normalized_value = raw_value.lstrip("0") or "0"
+            if len(normalized_value) > len(str(MAX_NL2SQL_LIMIT)):
                 raise ValueError(
                     f"LIMIT exceeds maximum supported value of {MAX_NL2SQL_LIMIT}"
                 )
-            value = int(raw_value)
+            value = int(normalized_value)
             if value > MAX_NL2SQL_LIMIT:
                 raise ValueError(
                     f"LIMIT exceeds maximum supported value of {MAX_NL2SQL_LIMIT}"

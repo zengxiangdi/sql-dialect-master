@@ -57,11 +57,11 @@ class TestAddToHistoryRegression:
         assert entry["result"] == vm.target_sql
         assert entry["created_at"], "created_at must be populated (ISO-8601)"
 
-    def test_unsuccessful_conversion_is_not_added(self) -> None:
+    def test_unsuccessful_conversion_records_failure_reason(self) -> None:
         state = SessionState.get()
         state.ensure_defaults()
         # Build a guaranteed failure ViewModel: a security-blocked transpile
-        # (dangerous DDL) must simply be skipped by history.
+        # (dangerous DDL) must be available to the History Error filter.
         failed_result = SQLTranspiler().transpile(
             "DROP TABLE users; SELECT 1",
             "postgres",
@@ -73,4 +73,7 @@ class TestAddToHistoryRegression:
 
         _add_to_history(state, vm, _theme())
 
-        assert state.history_count() == 0
+        assert state.history_count() == 1
+        assert state.history[0]["status"] == "error"
+        assert state.history[0]["error"] == vm.error_message
+        assert state.history[0]["result"] is None

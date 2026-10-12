@@ -8,6 +8,7 @@ Provides comprehensive data type mapping with:
 - Type conversion suggestions
 """
 import json
+import copy
 import logging
 import re
 from pathlib import Path
@@ -447,7 +448,7 @@ class TypeMapper:
             Type mapping matrix
         """
         if source is None and target is None:
-            return self.mappings
+            return copy.deepcopy(self.mappings)
 
         result = {}
         for type_name, type_map in self.mappings.items():
@@ -496,13 +497,14 @@ class TypeMapper:
         Returns:
             Comparison dictionary
         """
-        type_info = self.mappings.get(type_name.upper())
+        canonical_type, _precision = self._parse_parameterized_type(type_name)
+        type_info = self.mappings.get(canonical_type)
         if not type_info:
             return {"error": f"Type {type_name} not found"}
         
         comparison = {
-            "type": type_name,
-            "category": self.get_type_category(type_name),
+            "type": canonical_type,
+            "category": self.get_type_category(canonical_type),
             "dialects": {},
             "notes": type_info.get("notes", "")
         }
@@ -525,7 +527,7 @@ class TypeMapper:
         Returns:
             Dictionary of type_name -> warning_message
         """
-        return self.precision_warnings
+        return copy.deepcopy(self.precision_warnings)
     
     def suggest_type(
         self,

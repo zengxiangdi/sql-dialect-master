@@ -25,6 +25,7 @@ from typing import Any, Literal
 
 ActionKind = Literal[
     "open_conversion",
+    "open_nl2sql",
     "open_diff",
     "select_finding",
     "new_conversion",
@@ -50,7 +51,38 @@ class NavigationIntent:
     # Validation
     @property
     def is_valid(self) -> bool:
-        return bool(self.target_page)
+        if not isinstance(self.target_page, str) or not self.target_page:
+            return False
+        if self.target_page not in PAGE_ACTIONS:
+            return False
+        if self.action is not None and (
+            not isinstance(self.action, str) or not is_valid_action(self.target_page, self.action)
+        ):
+            return False
+        if not isinstance(self.payload, dict):
+            return False
+        # Payloads are data handed to Streamlit widgets. Validate their shape
+        # at the boundary so malformed/stale session state cannot crash a page.
+        string_keys = {
+            "sql", "source", "target", "dialect", "target_dialect",
+            "src_dialect", "tgt_dialect", "origin",
+        }
+        if any(key in self.payload and not isinstance(self.payload[key], str) for key in string_keys):
+            return False
+        if self.action == "open_conversion" and not self.payload.get("sql", "").strip():
+            return False
+        from backend.core.config import SUPPORTED_DIALECTS
+
+        for key in ("dialect", "target_dialect", "src_dialect", "tgt_dialect"):
+            if key in self.payload and self.payload[key] not in SUPPORTED_DIALECTS:
+                return False
+        if "finding_index" in self.payload and (
+            not isinstance(self.payload["finding_index"], int)
+            or isinstance(self.payload["finding_index"], bool)
+            or self.payload["finding_index"] < 0
+        ):
+            return False
+        return True
 
     def has_payload(self, key: str) -> bool:
         return key in self.payload
@@ -108,9 +140,9 @@ PAGE_ACTIONS: dict[str, list[ActionKind]] = {
     "settings": ["open_settings"],
     "functions": ["open_functions"],
     "types": ["open_types"],
-    "templates": [],
+    "templates": ["open_templates"],
     "runtime": ["open_runtime"],
-    "nl2sql": [],
+    "nl2sql": ["open_nl2sql"],
 }
 
 
@@ -119,7 +151,7 @@ def is_valid_action(target_page: str, action: str | None) -> bool:
     if action is None:
         return True
     allowed = PAGE_ACTIONS.get(target_page, [])
-    return action in allowed or target_page == "convert"  # open_conversion goes to convert
+    return action in allowed
 
 
 # ── Session state helpers ──────────────────────────────────────────────
@@ -145,9 +177,9 @@ def consume_navigation_intent() -> NavigationIntent | None:
     """
     import streamlit as st
     intent = get_pending_intent()
+    st.session_state[_NAV_KEY] = NavigationIntent()
     if not intent:
         return None
-    st.session_state[_NAV_KEY] = NavigationIntent()
     return intent
 
 
