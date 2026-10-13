@@ -238,13 +238,13 @@ def test_complex_fixture_rfm_concat_does_not_pipe_integers_to_text(
 ):
     """Numeric NTILE scores need explicit text conversion before concatenation."""
 
-    result = transpiler.transpile(MYSQL_RFM_SQL, "mysql", target, pretty=False)
+    result = transpiler.transpile(TSQL_CONCAT_SQL, "mysql", target, pretty=False)
     if not result.success:
         assert result.error
         return
     assert result.target_sql
     assert not re.search(
-        r"(?:seg\.)?r_score\s*\|\|\s*['\"]-['\"]",
+        r"\br_score\s*\|\|\s*['\"]-['\"]",
         result.target_sql,
         re.IGNORECASE,
     )

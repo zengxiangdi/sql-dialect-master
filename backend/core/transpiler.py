@@ -1315,6 +1315,7 @@ class SQLTranspiler:
                     # can coerce it inconsistently. Keep the variadic
                     # function so each target applies its documented string
                     # conversion rules.
+                    notes.append(f"Preserved variadic CONCAT for {target} string coercion")
                     return exp.Anonymous(this="CONCAT", expressions=values)
             if target == "snowflake" and isinstance(node, exp.TimeToStr):
                 format_value = node.args.get("format")
