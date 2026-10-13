@@ -22,7 +22,12 @@ from .config import (
     settings,
 )
 from .exceptions import ErrorCode, ValidationError
-from .p1_sql_scanner import mask_non_executable, prepare_sql_for_parser
+from .function_call_scanner import replace_function_calls
+from .p1_sql_scanner import (
+    mask_non_executable,
+    prepare_sql_for_parser,
+    split_top_level_args,
+)
 from .post_processor import PostProcessor
 from .rules import DYNAMIC_SEPARATOR_FAIL_NOTE
 
@@ -662,6 +667,7 @@ class SQLTranspiler:
         try:
             parser_sql = prepare_sql_for_parser(sql, source)
             ast_notes: List[str] = []
+            semantic_blockers: List[str] = []
             if source == "clickhouse" and target == "postgres":
                 ast = sqlglot.parse_one(sql, read="clickhouse")
                 ast, group_notes = self._ast_grouparray_to_arrayagg(ast, target)
@@ -679,11 +685,24 @@ class SQLTranspiler:
                 ast, list_notes = self._ast_duckdb_list_to_array(ast, target)
                 ast_notes.extend(list_notes)
                 transpiled = ast.sql(dialect=target, pretty=pretty)
-            elif source == "mysql" and target == "oracle":
+            elif source == "mysql":
                 ast = sqlglot.parse_one(parser_sql, read="mysql")
-                ast, now_notes = self._ast_mysql_now_to_sysdate(ast, target)
-                ast_notes.extend(now_notes)
-                transpiled = ast.sql(dialect="oracle", pretty=pretty)
+                if target == "oracle":
+                    ast, now_notes = self._ast_mysql_now_to_sysdate(ast, target)
+                    ast_notes.extend(now_notes)
+                ast, normalization_notes, blockers = self._ast_mysql_target_normalizations(ast, target)
+                ast_notes.extend(normalization_notes)
+                semantic_blockers.extend(blockers)
+                if ast_notes or blockers:
+                    transpiled = ast.sql(dialect=target, pretty=pretty)
+                else:
+                    # Keep the canonical sqlglot path for ordinary MySQL
+                    # conversions. This preserves the public error taxonomy
+                    # for callers that replace/monitor sqlglot.transpile,
+                    # while custom AST rewrites avoid a second serialization.
+                    transpiled = sqlglot.transpile(
+                        parser_sql, read=source, write=target, pretty=pretty
+                    )[0]
             else:
                 transpiled = sqlglot.transpile(parser_sql, read=source, write=target, pretty=pretty)[0]
             final_sql, transformations = self.post_processor.process(transpiled, source, target)
@@ -698,6 +717,84 @@ class SQLTranspiler:
                 )
             else:
                 warnings = security_warnings + self._generate_warnings(sql, source, target)
+
+            if target == "oracle" and "JSON_OBJECT(" in final_sql.upper():
+                # sqlglot 30.x serializes its generic JSONObject node with
+                # PostgreSQL-style ``'key': value`` syntax. Oracle requires
+                # ``'key' VALUE value``; the AST normalization above first
+                # emits a flat comma-separated call so this scanner can make
+                # the dialect-specific rewrite without touching literals or
+                # comments.
+                def oracle_json_object(args: str, original: str) -> str:
+                    parts = split_top_level_args(args)
+                    if any(mask_non_executable(part).find(":") >= 0 for part in parts):
+                        # A JSONObject that survived the AST pass can still
+                        # be serialized as ``'key': value`` by sqlglot.
+                        # Split only the first top-level-looking colon; JSON
+                        # keys and values in this path are already complete
+                        # function arguments, so colons inside quoted text
+                        # remain untouched by the scanner's masking.
+                        normalized = []
+                        for part in parts:
+                            masked_part = mask_non_executable(part)
+                            colon_index = masked_part.find(":")
+                            if colon_index < 0:
+                                return original
+                            normalized.append(
+                                f"{part[:colon_index].strip()} VALUE {part[colon_index + 1:].strip()}"
+                            )
+                        return f"JSON_OBJECT({', '.join(normalized)})"
+                    if not parts or len(parts) % 2:
+                        return original
+                    pairs = [
+                        f"{parts[index]} VALUE {parts[index + 1]}"
+                        for index in range(0, len(parts), 2)
+                    ]
+                    return f"JSON_OBJECT({', '.join(pairs)})"
+
+                final_sql = replace_function_calls(
+                    final_sql, "JSON_OBJECT", oracle_json_object
+                )
+
+            if target == "trino" and "JSON_OBJECT(" in final_sql.upper():
+                def trino_json_object(args: str, original: str) -> str:
+                    parts = split_top_level_args(args)
+                    if any(mask_non_executable(part).find(":") >= 0 for part in parts):
+                        pairs = []
+                        for part in parts:
+                            masked_part = mask_non_executable(part)
+                            colon_index = masked_part.find(":")
+                            if colon_index < 0:
+                                return original
+                            pairs.append(
+                                f"KEY {part[:colon_index].strip()} VALUE {part[colon_index + 1:].strip()}"
+                            )
+                        return f"JSON_OBJECT({', '.join(pairs)})"
+                    if not parts or len(parts) % 2:
+                        return original
+                    pairs = [
+                        f"KEY {parts[index]} VALUE {parts[index + 1]}"
+                        for index in range(0, len(parts), 2)
+                    ]
+                    return f"JSON_OBJECT({', '.join(pairs)})"
+
+                final_sql = replace_function_calls(
+                    final_sql, "JSON_OBJECT", trino_json_object
+                )
+
+            if semantic_blockers:
+                return TranspileResult(
+                    success=False,
+                    source_sql=sql,
+                    source_dialect=source,
+                    target_dialect=target,
+                    error="; ".join(semantic_blockers),
+                    error_code=ErrorCode.VALIDATION_FAILED.value,
+                    compatibility_notes=compat_notes,
+                    transformations=transformations,
+                    warnings=warnings,
+                    target_validation_state="invalid",
+                )
 
             target_validation_state = "target_valid"
 
@@ -1015,6 +1112,249 @@ class SQLTranspiler:
         if found:
             return ast, ["Converted NOW to SYSDATE (AST)"]
         return ast, []
+
+    @staticmethod
+    def _ast_mysql_target_normalizations(
+        ast: exp.Expression, target: str
+    ) -> tuple[exp.Expression, list[str], list[str]]:
+        """Normalize MySQL constructs whose target parser is permissive.
+
+        sqlglot intentionally keeps several MySQL nodes generic when a
+        target generator has no exact implementation.  That is useful for
+        round-tripping, but returning those strings as ``target_valid`` is
+        unsafe: Oracle/T-SQL ``DATE_SUB`` and ClickHouse's three-argument
+        spelling are accepted by the parser while failing at execution.
+        This pass handles the reviewed, structurally unambiguous forms used
+        by the conversion engine and reports JSON aggregate targets that
+        have no faithful expression-level equivalent.
+        """
+        notes: list[str] = []
+        blockers: list[str] = []
+
+        def numeric_literal(value: exp.Expression) -> exp.Expression | None:
+            if not isinstance(value, exp.Literal):
+                return None
+            raw = value.this
+            if value.is_string and str(raw).isdigit():
+                return exp.Literal.number(str(raw))
+            if value.is_int:
+                return value.copy()
+            return None
+
+        def negated(value: exp.Expression) -> exp.Expression:
+            return exp.Neg(this=value)
+
+        def date_sub(node: exp.DateSub) -> exp.Expression:
+            amount = numeric_literal(node.expression)
+            unit = str(node.args.get("unit") or "DAY").upper()
+            if amount is None:
+                return node
+            date_expr = node.this.copy()
+            if target in {"oracle", "hive", "spark", "databricks"}:
+                if unit in {"MONTH", "YEAR"}:
+                    months = amount.copy()
+                    if unit == "YEAR":
+                        months = exp.Mul(this=months, expression=exp.Literal.number("12"))
+                    return exp.Anonymous(
+                        this="ADD_MONTHS",
+                        expressions=[date_expr, negated(months)],
+                    )
+                if target in {"hive", "spark", "databricks"} and unit == "DAY":
+                    return exp.Anonymous(
+                        this="DATE_SUB",
+                        expressions=[date_expr, amount.copy()],
+                    )
+                if target == "oracle":
+                    interval = exp.Interval(this=amount.copy(), unit=exp.Var(this=unit))
+                    return exp.Sub(this=date_expr, expression=interval)
+            if target in {"tsql", "snowflake"}:
+                return exp.Anonymous(
+                    this="DATEADD",
+                    expressions=[exp.Var(this=unit), negated(amount.copy()), date_expr],
+                )
+            if target == "clickhouse":
+                function = {
+                    "MONTH": "subtractMonths",
+                    "YEAR": "subtractYears",
+                    "DAY": "subtractDays",
+                    "WEEK": "subtractWeeks",
+                }.get(unit)
+                if function:
+                    return exp.Anonymous(this=function, expressions=[date_expr, amount.copy()])
+            if target == "trino":
+                return exp.Anonymous(
+                    this="DATE_ADD",
+                    expressions=[exp.Literal.string(unit), negated(amount.copy()), date_expr],
+                )
+            return node
+
+        def date_diff(node: exp.DateDiff) -> exp.Expression:
+            if target == "oracle":
+                return exp.Sub(
+                    this=exp.Anonymous(this="TRUNC", expressions=[node.this.copy()]),
+                    expression=exp.Anonymous(
+                        this="TRUNC", expressions=[node.expression.copy()]
+                    ),
+                )
+            if target == "clickhouse":
+                return exp.Anonymous(
+                    this="dateDiff",
+                    expressions=[
+                        exp.Literal.string("day"),
+                        node.expression.copy(),
+                        node.this.copy(),
+                    ],
+                )
+            if target == "databricks":
+                return exp.Anonymous(
+                    this="DATEDIFF",
+                    expressions=[node.this.copy(), node.expression.copy()],
+                )
+            return node
+
+        def json_pairs(node: exp.JSONObject) -> list[exp.Expression]:
+            pairs: list[exp.Expression] = []
+            for key_value in node.expressions:
+                if not isinstance(key_value, exp.JSONKeyValue):
+                    return []
+                pairs.extend([key_value.this.copy(), key_value.expression.copy()])
+            return pairs
+
+        def json_aggregate(node: exp.Anonymous) -> exp.Expression:
+            if node.this.upper() != "JSON_ARRAYAGG" or not node.expressions:
+                return node
+            value = node.expressions[0]
+            if not isinstance(value, exp.JSONObject):
+                return node
+            pairs = json_pairs(value)
+            if not pairs:
+                return node
+            if target == "postgres":
+                obj = exp.Anonymous(this="JSON_BUILD_OBJECT", expressions=pairs)
+                notes.append("Converted JSON_ARRAYAGG(JSON_OBJECT(...)) to JSON_AGG(JSON_BUILD_OBJECT(...))")
+                return exp.Anonymous(this="JSON_AGG", expressions=[obj])
+            if target == "duckdb":
+                obj = exp.Anonymous(this="JSON_OBJECT", expressions=pairs)
+                notes.append("Converted JSON_ARRAYAGG(JSON_OBJECT(...)) to JSON_GROUP_ARRAY(JSON_OBJECT(...))")
+                return exp.Anonymous(this="JSON_GROUP_ARRAY", expressions=[obj])
+            if target == "snowflake":
+                obj = exp.Anonymous(this="OBJECT_CONSTRUCT_KEEP_NULL", expressions=pairs)
+                notes.append("Converted JSON_ARRAYAGG(JSON_OBJECT(...)) to ARRAY_AGG(OBJECT_CONSTRUCT_KEEP_NULL(...))")
+                return exp.Anonymous(this="ARRAY_AGG", expressions=[obj])
+            if target in {"hive", "spark", "databricks"}:
+                obj = exp.Anonymous(this="NAMED_STRUCT", expressions=pairs)
+                collect = exp.Anonymous(this="COLLECT_LIST", expressions=[obj])
+                notes.append("Converted JSON_ARRAYAGG(JSON_OBJECT(...)) to TO_JSON(COLLECT_LIST(NAMED_STRUCT(...)))")
+                return exp.Anonymous(this="TO_JSON", expressions=[collect])
+            if target == "trino":
+                obj = exp.JSONObject(
+                    expressions=[
+                        exp.JSONKeyValue(this=pairs[i], expression=pairs[i + 1])
+                        for i in range(0, len(pairs), 2)
+                    ]
+                )
+                array = exp.Anonymous(this="ARRAY_AGG", expressions=[obj])
+                cast = exp.Cast(this=array, to=exp.DataType.build("JSON"))
+                notes.append("Converted JSON_ARRAYAGG(JSON_OBJECT(...)) to JSON_FORMAT(CAST(ARRAY_AGG(JSON_OBJECT(...)) AS JSON))")
+                return exp.Anonymous(this="JSON_FORMAT", expressions=[cast])
+            if target == "clickhouse":
+                # ClickHouse Map values must share one physical type.  A
+                # JSON object such as this report mixes integers, strings,
+                # decimals, and dates; coercing everything to String would
+                # silently change the JSON contract.  Refuse the expression
+                # level rewrite instead of returning a query that fails at
+                # execution with a map type error.
+                blockers.append(
+                    "clickhouse cannot preserve mixed-type JSON_ARRAYAGG(JSON_OBJECT(...)) values as a typed map"
+                )
+                return node
+            if target in {"tsql", "redshift"}:
+                blockers.append(
+                    f"{target} has no portable expression-level equivalent for JSON_ARRAYAGG(JSON_OBJECT(...)); use a target-specific FOR JSON/JSON aggregation rewrite"
+                )
+            return node
+
+        def transform(node: exp.Expression) -> exp.Expression:
+            if isinstance(node, exp.Group) and node.args.get("rollup") and target != "mysql":
+                # MySQL stores ``WITH ROLLUP`` as a modifier on GROUP BY.
+                # Most other engines use the portable grouping-expression
+                # form ``GROUP BY ROLLUP(col)``.  Rebuilding the group node
+                # avoids sqlglot's permissive MySQL serialization leaking
+                # into a target statement.
+                expressions = [value.copy() for value in node.expressions]
+                node.set("expressions", [exp.Rollup(expressions=expressions)])
+                node.set("rollup", None)
+                notes.append(f"Converted MySQL WITH ROLLUP to {target} ROLLUP(...) syntax")
+                return node
+            if isinstance(node, exp.DateSub):
+                replacement = date_sub(node)
+                if replacement is not node:
+                    notes.append(f"Converted MySQL DATE_SUB interval to {target} date arithmetic")
+                return replacement
+            if isinstance(node, exp.DateDiff):
+                replacement = date_diff(node)
+                if replacement is not node:
+                    notes.append(f"Converted MySQL DATEDIFF to {target} date arithmetic")
+                return replacement
+            if isinstance(node, exp.Concat):
+                values = [value.copy() for value in node.expressions]
+                if target == "tsql":
+                    notes.append("Preserved CONCAT for T-SQL to avoid numeric-plus-string coercion")
+                    return exp.Anonymous(this="CONCAT", expressions=values)
+                if target == "oracle" and len(values) > 2:
+                    result = values[0]
+                    for value in values[1:]:
+                        result = exp.DPipe(this=result, expression=value)
+                    notes.append("Converted variadic CONCAT to Oracle concatenation operator")
+                    return result
+                if target not in {"mysql", "oracle"}:
+                    # Several generators serialize CONCAT as ``||``. That
+                    # is unsafe when one operand is numeric (for example an
+                    # NTILE score) and another is text: PostgreSQL and
+                    # DuckDB reject integer || text, while other engines
+                    # can coerce it inconsistently. Keep the variadic
+                    # function so each target applies its documented string
+                    # conversion rules.
+                    return exp.Anonymous(this="CONCAT", expressions=values)
+            if target == "snowflake" and isinstance(node, exp.TimeToStr):
+                format_value = node.args.get("format")
+                if isinstance(format_value, exp.Literal) and format_value.is_string and format_value.this == "%Y-%m-%d":
+                    node.set("format", exp.Literal.string("YYYY-MM-DD"))
+                    notes.append("Normalized Snowflake date format tokens")
+            if isinstance(node, exp.JSONObject):
+                pairs = json_pairs(node)
+                if pairs and target != "mysql":
+                    # Direct JSON_OBJECT calls use the same target-specific
+                    # anonymous forms as the aggregate rewrite below.
+                    if target == "postgres":
+                        notes.append("Converted JSON_OBJECT to JSON_BUILD_OBJECT")
+                        return exp.Anonymous(this="JSON_BUILD_OBJECT", expressions=pairs)
+                    if target == "duckdb":
+                        notes.append("Normalized JSON_OBJECT for DuckDB")
+                        return exp.Anonymous(this="JSON_OBJECT", expressions=pairs)
+                    if target == "snowflake":
+                        notes.append("Converted JSON_OBJECT to OBJECT_CONSTRUCT_KEEP_NULL")
+                        return exp.Anonymous(this="OBJECT_CONSTRUCT_KEEP_NULL", expressions=pairs)
+                    if target in {"hive", "spark", "databricks"}:
+                        notes.append("Converted JSON_OBJECT to NAMED_STRUCT")
+                        return exp.Anonymous(this="NAMED_STRUCT", expressions=pairs)
+                    if target in {"oracle", "trino"}:
+                        notes.append(f"Normalized JSON_OBJECT key/value syntax for {target}")
+                        return exp.Anonymous(this="JSON_OBJECT", expressions=pairs)
+            if isinstance(node, exp.Anonymous) and node.this.upper() == "JSON_ARRAYAGG":
+                return json_aggregate(node)
+            return node
+
+        # sqlglot walks replacement parents before their children.  Run the
+        # pass twice so scalar expressions nested inside a JSON aggregate
+        # (especially Snowflake DATE_FORMAT) are normalized after the outer
+        # aggregate/object replacement has been installed.
+        ast = ast.transform(transform)
+        ast = ast.transform(transform)
+        # A nested aggregate is visited once for each replacement pass; avoid
+        # duplicating a blocker in the public error contract.
+        blockers = list(dict.fromkeys(blockers))
+        return ast, notes, blockers
 
     @staticmethod
     def _remove_predicate_from_where(
