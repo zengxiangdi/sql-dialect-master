@@ -271,7 +271,6 @@ sql-dialect-master/
 │   └── verify_readme_consistency.py # README source-of-truth checks
 ├── sdm_local_v2.py             # Streamlit Application Entry (v2)
 ├── pyproject.toml               # Project configuration
-├── requirements.txt              # Legacy/runtime dependency list
 ├── .env.example                 # Environment template
 ├── LICENSE                      # MIT License
 └── README.md

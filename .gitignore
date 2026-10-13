@@ -61,3 +61,4 @@ tmp/
 # Kiro IDE
 .kiro/
 .codegraph/
+.ua/
