@@ -178,6 +178,17 @@ def mask_non_executable(sql: str, dialect: str | None = None) -> str:
     return "".join(masked)
 
 
+def has_terminal_semicolon(sql: str, dialect: str | None = None) -> bool:
+    """Return whether executable SQL ends with a statement delimiter.
+
+    Strings and comments are masked before checking, so a semicolon inside a
+    literal/comment is not mistaken for the statement terminator. This keeps
+    formatting/conversion output faithful without weakening the single-
+    statement parser contract.
+    """
+    return mask_non_executable(sql, dialect=dialect).rstrip().endswith(";")
+
+
 def prepare_sql_for_parser(sql: str, dialect: str | None = None) -> str:
     """Disambiguate MySQL subtraction for older supported sqlglot readers.
 

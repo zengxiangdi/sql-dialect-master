@@ -24,6 +24,7 @@ from .config import (
 from .exceptions import ErrorCode, ValidationError
 from .function_call_scanner import replace_function_calls
 from .p1_sql_scanner import (
+    has_terminal_semicolon,
     mask_non_executable,
     prepare_sql_for_parser,
     split_top_level_args,
@@ -708,6 +709,8 @@ class SQLTranspiler:
             final_sql, transformations = self.post_processor.process(transpiled, source, target)
             if ast_notes:
                 transformations = ast_notes + transformations
+            if has_terminal_semicolon(sql, dialect=source) and not final_sql.rstrip().endswith(";"):
+                final_sql = final_sql.rstrip() + ";"
             compat_notes = self._get_compatibility_notes(
                 source, target, source_sql=sql, final_sql=final_sql
             )
@@ -1322,6 +1325,26 @@ class SQLTranspiler:
                 if isinstance(format_value, exp.Literal) and format_value.is_string and format_value.this == "%Y-%m-%d":
                     node.set("format", exp.Literal.string("YYYY-MM-DD"))
                     notes.append("Normalized Snowflake date format tokens")
+            if target == "postgres" and isinstance(node, exp.Round):
+                decimals = node.args.get("decimals")
+                if decimals is not None:
+                    existing_cast = node.this if isinstance(node.this, exp.Cast) else None
+                    existing_type = (
+                        existing_cast.args.get("to").this
+                        if existing_cast is not None and existing_cast.args.get("to") is not None
+                        else None
+                    )
+                    already_numeric = existing_type == exp.DataType.Type.DECIMAL
+                    if already_numeric:
+                        return node
+                    node.set(
+                        "this",
+                        exp.Cast(
+                            this=node.this.copy(),
+                            to=exp.DataType.build("NUMERIC"),
+                        ),
+                    )
+                    notes.append("Cast PostgreSQL ROUND value to NUMERIC for two-argument rounding")
             if isinstance(node, exp.JSONObject):
                 pairs = json_pairs(node)
                 if pairs and target != "mysql":
