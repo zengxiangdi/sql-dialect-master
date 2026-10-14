@@ -65,7 +65,7 @@ packageurl-python==0.17.6
 py-serializable==2.1.0
 boolean.py==5.0
 defusedxml==0.7.1
-msgpack==1.2.2
+msgpack==1.2.3
 filelock==3.32.6
 pyparsing==3.3.2
 markdown-it-py==4.2.0
