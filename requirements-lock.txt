@@ -1,4 +1,4 @@
-sqlglot==30.18.0
+sqlglot==30.22.0
 fastapi==0.141.1
 uvicorn==0.52.4
 pydantic==2.13.5
