@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import type { HistoryItem, Theme } from "./types";
+import { ALL_DIALECTS, type HistoryItem, type Theme } from "./types";
 
 interface AppContextValue {
   theme: Theme;
@@ -19,7 +19,14 @@ const AppContext = createContext<AppContextValue | null>(null);
 function readHistory(): HistoryItem[] {
   try {
     const value = JSON.parse(localStorage.getItem("sdm.history") || "[]");
-    return Array.isArray(value) ? value : [];
+    if (!Array.isArray(value)) return [];
+    return value.filter((item): item is HistoryItem => Boolean(
+      item && typeof item === "object" &&
+      typeof item.id === "string" && typeof item.source === "string" &&
+      typeof item.target === "string" && ALL_DIALECTS.includes(item.sourceDialect) &&
+      ALL_DIALECTS.includes(item.targetDialect) && typeof item.createdAt === "string" &&
+      (item.status === "success" || item.status === "warning" || item.status === "error" || item.status === "neutral"),
+    )).slice(0, 50);
   } catch {
     return [];
   }

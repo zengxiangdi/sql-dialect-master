@@ -4,7 +4,7 @@ import asyncio
 import json
 
 import pytest
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse, Response, StreamingResponse
 
 from backend.api.middleware import StructuredLoggingMiddleware
 
@@ -70,3 +70,17 @@ def test_non_json_response_is_left_unchanged():
 
     assert normalized is response
     assert normalized.body.decode() == "plain text"
+
+
+def test_malformed_streaming_json_keeps_response_body():
+    async def body():
+        yield b"not-json"
+
+    response = StreamingResponse(body(), status_code=400, media_type="application/json")
+
+    normalized = asyncio.run(
+        StructuredLoggingMiddleware._normalize_error_response(response, REQUEST_ID)
+    )
+
+    assert normalized.status_code == 400
+    assert normalized.body == b"not-json"

@@ -14,7 +14,18 @@ export class ApiError extends Error {
   }
 }
 
-const requestId = () => `web-${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`}`;
+/** Keep the request ID in the RFC 4122 format expected by the API middleware. */
+const requestId = () => {
+  const random = typeof globalThis.crypto !== "undefined" ? globalThis.crypto : undefined;
+  if (typeof random?.randomUUID === "function") return random.randomUUID();
+  const bytes = new Uint8Array(16);
+  if (typeof random?.getRandomValues === "function") random.getRandomValues(bytes);
+  else for (let index = 0; index < bytes.length; index += 1) bytes[index] = Math.floor(Math.random() * 256);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+};
 
 export const apiBase = () => (localStorage.getItem("sdm.apiBase")?.trim() || import.meta.env.VITE_API_BASE_URL?.trim() || "").replace(/\/+$/, "");
 
@@ -56,6 +67,7 @@ async function request<T>(path: string, init: RequestInit = {}, timeout = 30000)
   const timer = window.setTimeout(() => { timedOut = true; controller.abort(); }, timeout);
   const apiKey = localStorage.getItem("sdm.apiKey");
   const headers = new Headers(init.headers);
+  let removeCallerAbortListener: (() => void) | undefined;
   if (init.body !== undefined) headers.set("Content-Type", "application/json");
   headers.set("X-Request-ID", requestId());
   if (apiKey) headers.set("X-API-Key", apiKey);
@@ -65,7 +77,11 @@ async function request<T>(path: string, init: RequestInit = {}, timeout = 30000)
     const signal = init.signal;
     if (signal) {
       if (signal.aborted) controller.abort(signal.reason);
-      else signal.addEventListener("abort", () => controller.abort(signal.reason), { once: true });
+      else {
+        const onAbort = () => controller.abort(signal.reason);
+        signal.addEventListener("abort", onAbort, { once: true });
+        removeCallerAbortListener = () => signal.removeEventListener("abort", onAbort);
+      }
     }
     const response = await fetch(`${apiBase()}${path}`, { ...init, headers, signal: controller.signal });
     const payload = await response.json().catch(() => ({}));
@@ -82,20 +98,21 @@ async function request<T>(path: string, init: RequestInit = {}, timeout = 30000)
     if (error instanceof TypeError) throw new ApiError("Unable to reach the API. Check the backend URL.", 0);
     throw error;
   } finally {
+    removeCallerAbortListener?.();
     window.clearTimeout(timer);
   }
 }
 
 export const api = {
   dialects: () => request<DialectsResponse>("/api/dialects"),
-  convert: (sql: string, source_dialect: Dialect, target_dialect: Dialect, pretty = true) =>
-    request<ConvertResponse>("/api/convert", { method: "POST", body: JSON.stringify({ sql, source_dialect, target_dialect, pretty }) }),
-  nl2sql: (text: string, dialect: Dialect, table_hint?: string) =>
-    request<Nl2SqlResponse>("/api/nl2sql", { method: "POST", body: JSON.stringify({ text, dialect, table_hint: table_hint || null }) }),
-  parse: (sql: string, dialect: Dialect) =>
-    request<ParseResponse>("/api/parse", { method: "POST", body: JSON.stringify({ sql, dialect }) }),
+  convert: (sql: string, source_dialect: Dialect, target_dialect: Dialect, pretty = true, signal?: AbortSignal) =>
+    request<ConvertResponse>("/api/convert", { method: "POST", body: JSON.stringify({ sql, source_dialect, target_dialect, pretty }), signal }),
+  nl2sql: (text: string, dialect: Dialect, table_hint?: string, signal?: AbortSignal) =>
+    request<Nl2SqlResponse>("/api/nl2sql", { method: "POST", body: JSON.stringify({ text, dialect, table_hint: table_hint || null }), signal }),
+  parse: (sql: string, dialect: Dialect, signal?: AbortSignal) =>
+    request<ParseResponse>("/api/parse", { method: "POST", body: JSON.stringify({ sql, dialect }), signal }),
   functions: (search = "", category = "", limit = 100, signal?: AbortSignal) =>
     request<{ functions: FunctionItem[]; count: number; total: number }>(`/api/functions?limit=${limit}${search ? `&search=${encodeURIComponent(search)}` : ""}${category ? `&category=${encodeURIComponent(category)}` : ""}`, { signal }),
   types: async (source?: Dialect, target?: Dialect, signal?: AbortSignal) => normalizeTypeMappings(await request<{ mappings?: unknown; [key: string]: unknown }>(`/api/types${source || target ? `?${source ? `source=${source}` : ""}${source && target ? "&" : ""}${target ? `target=${target}` : ""}` : ""}`, { signal })),
-  health: () => request<{ status: string; version: string }>("/health", {}, 5000),
+  health: (signal?: AbortSignal) => request<{ status: string; version: string }>("/health", { signal }, 5000),
 };

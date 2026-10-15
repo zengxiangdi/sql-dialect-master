@@ -3,6 +3,7 @@
 
 Provides rate limiting, request-size protection, logging, and security headers.
 """
+import gzip
 import json
 import logging
 import time
@@ -108,13 +109,22 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             request.url.path in {"/health", "/", "/ready", "/health/deep"}
             and request.method in {"GET", "HEAD"}
         )
+        # Browser CORS preflight requests carry no business payload and are
+        # generated automatically before the actual API call.  Counting them
+        # against the application rate limit can make an otherwise healthy
+        # client fail before it reaches the endpoint, especially when each
+        # request uses a non-simple X-Request-ID or X-API-Key header.
+        is_cors_preflight = request.method == "OPTIONS" and bool(
+            request.headers.get("origin")
+            and request.headers.get("access-control-request-method")
+        )
 
         # Apply rate limiting before JSON/body parsing.  This prevents a
         # client from spending unbounded CPU on invalid payloads while still
         # keeping the request-size guard active when rate limiting is disabled.
         rate_limit_checked = False
         remaining = reset_time = None
-        if self.enabled and not is_health_probe:
+        if self.enabled and not is_health_probe and not is_cors_preflight:
             client_id = self._get_client_id(request)
             # Redis checks use a synchronous client; a stalled store must not
             # block the event loop used by unrelated liveness/API requests.
@@ -173,11 +183,18 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
 
     @staticmethod
     def _get_request_id(request: Request) -> str:
-        """Reuse a valid RFC 4122 request ID; otherwise issue a fresh UUID."""
+        """Reuse a valid request ID; otherwise issue a fresh UUID.
+
+        The React client prefixes UUIDs with ``web-`` to identify browser
+        traffic.  Keep accepting the prefix while still validating the UUID
+        payload so arbitrary header values cannot be copied into logs or
+        response headers.
+        """
         candidate = request.headers.get("X-Request-ID")
         if candidate:
+            uuid_candidate = candidate.removeprefix("web-")
             try:
-                parsed = uuid.UUID(candidate)
+                parsed = uuid.UUID(uuid_candidate)
                 if parsed.variant == uuid.RFC_4122:
                     return candidate
             except (ValueError, AttributeError, TypeError):
@@ -203,6 +220,13 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
         if "json" not in response.headers.get("content-type", "").lower():
             return response
 
+        # BaseHTTPMiddleware often returns a streaming response even when the
+        # endpoint produced JSON.  Buffer that stream exactly once for
+        # normalization, but replay the original bytes when the payload is
+        # malformed so an error response is never silently emptied.
+        encoded_with_gzip = "gzip" in response.headers.get("content-encoding", "").lower()
+        streamed_body = not hasattr(response, "body")
+        raw_body = b""
         try:
             if hasattr(response, "body"):
                 raw_body = response.body
@@ -211,9 +235,44 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
                 async for chunk in response.body_iterator:
                     chunks.append(chunk)
                 raw_body = b"".join(chunks)
-            payload = json.loads(raw_body.decode("utf-8"))
-        except (AttributeError, UnicodeDecodeError, json.JSONDecodeError):
+            # GZipMiddleware is inside this middleware.  Error responses over
+            # its threshold therefore arrive compressed; decode them before
+            # applying the stable JSON envelope so large and small errors have
+            # identical browser-visible contracts.
+            if encoded_with_gzip:
+                raw_body = gzip.decompress(raw_body)
+        except (AttributeError, TypeError):
             return response
+        except (OSError, EOFError):
+            # A malformed compressed stream must remain observable to the
+            # caller.  If it was buffered from a streaming response, replay
+            # the original bytes instead of returning an already-consumed
+            # iterator.
+            if not streamed_body:
+                return response
+            headers = dict(response.headers)
+            headers.pop("content-length", None)
+            return Response(
+                content=raw_body,
+                status_code=response.status_code,
+                headers=headers,
+                background=response.background,
+            )
+        try:
+            payload = json.loads(raw_body.decode("utf-8"))
+        except (AttributeError, TypeError, UnicodeDecodeError, json.JSONDecodeError, OSError):
+            if hasattr(response, "body"):
+                return response
+            headers = dict(response.headers)
+            headers.pop("content-length", None)
+            if encoded_with_gzip:
+                headers.pop("content-encoding", None)
+            return Response(
+                content=raw_body,
+                status_code=response.status_code,
+                headers=headers,
+                background=response.background,
+            )
 
         if response.status_code == 503 and isinstance(payload, dict) and "checks" in payload:
             # Readiness has a public diagnostics schema of its own. Preserve
@@ -222,6 +281,7 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
             headers = dict(response.headers)
             headers.pop("content-length", None)
             headers.pop("content-type", None)
+            headers.pop("content-encoding", None)
             payload.setdefault("request_id", request_id)
             return JSONResponse(status_code=503, content=payload, headers=headers)
 
@@ -274,6 +334,7 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
         headers = dict(response.headers)
         headers.pop("content-length", None)
         headers.pop("content-type", None)
+        headers.pop("content-encoding", None)
         return JSONResponse(status_code=response.status_code, content=normalized, headers=headers)
 
     async def dispatch(self, request: Request, call_next) -> Response:

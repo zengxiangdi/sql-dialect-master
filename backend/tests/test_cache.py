@@ -41,6 +41,19 @@ class TestCacheEntry:
         entry.hits += 1
         assert entry.hits == 1
 
+    def test_cache_owned_entry_uses_monotonic_expiry_clock(self, monkeypatch):
+        """A wall-clock correction must not extend an internal cache TTL."""
+        monotonic = iter((101.1,))
+        monkeypatch.setattr("backend.core.cache.time.monotonic", lambda: next(monotonic))
+        entry = CacheEntry(
+            value="test",
+            created_at=10_000.0,
+            ttl=1,
+            monotonic_created_at=100.0,
+        )
+
+        assert entry.is_expired() is True
+
 
 class TestTTLCache:
     def test_set_and_get(self):

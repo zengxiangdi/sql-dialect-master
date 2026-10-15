@@ -1,10 +1,11 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { AppRoutes } from "./routes";
 import { AppProvider } from "../lib/app-context";
 
 describe("React workspace shell", () => {
+  afterEach(() => { cleanup(); localStorage.clear(); });
   it("renders the Convert workspace with keyboard command affordance", () => {
     render(<MemoryRouter initialEntries={["/convert"]}><AppProvider><AppRoutes /></AppProvider></MemoryRouter>);
     expect(screen.getByRole("heading", { name: "Convert SQL with confidence" })).toBeInTheDocument();
@@ -18,9 +19,15 @@ describe("React workspace shell", () => {
       createdAt: new Date().toISOString(), status: "success",
     }]));
     render(<MemoryRouter initialEntries={["/history"]}><AppProvider><AppRoutes /></AppProvider></MemoryRouter>);
-    expect(screen.getByText("mysql")).toBeInTheDocument();
+    expect(screen.getByText(/mysql/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /clear local history/i }));
     expect(screen.getByText("No local history yet")).toBeInTheDocument();
     expect(localStorage.getItem("sdm.history")).toBe("[]");
+  });
+
+  it("ignores malformed persisted history entries", () => {
+    localStorage.setItem("sdm.history", JSON.stringify([{ source: null }, { id: "missing-status" }]));
+    render(<MemoryRouter initialEntries={["/history"]}><AppProvider><AppRoutes /></AppProvider></MemoryRouter>);
+    expect(screen.getByText("No local history yet")).toBeInTheDocument();
   });
 });

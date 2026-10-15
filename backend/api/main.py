@@ -187,7 +187,21 @@ app.add_middleware(
     allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],  # Restrict to needed methods
-    allow_headers=["Content-Type", "Authorization", "X-API-Key", "X-Request-ID"],
+    # Keep preflight explicit so browser clients can send the correlation and
+    # API-key headers used by the React request layer.  Expose operational
+    # response headers as well: without this list browsers silently hide
+    # Retry-After and request timing/correlation metadata from JavaScript even
+    # though the server emits them correctly.
+    allow_headers=["Accept", "Content-Type", "Authorization", "X-API-Key", "X-Request-ID"],
+    expose_headers=[
+        "Retry-After",
+        "X-API-Version",
+        "X-Process-Time",
+        "X-RateLimit-Limit",
+        "X-RateLimit-Remaining",
+        "X-RateLimit-Reset",
+        "X-Request-ID",
+    ],
 )
 
 # Type/function matrices and conversion reports are often much larger than

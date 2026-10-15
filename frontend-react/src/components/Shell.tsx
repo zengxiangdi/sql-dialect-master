@@ -1,6 +1,6 @@
 import { Activity, BookOpen, BrainCircuit, Boxes, ChevronLeft, Code2, FileClock, GitCompareArrows, History, Moon, Network, Search, Settings2, Sun, Table2, TerminalSquare, WandSparkles } from "lucide-react";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useApp } from "../lib/app-context";
 import { api } from "../lib/api";
 import { IconButton } from "./ui";
@@ -17,12 +17,16 @@ export function Shell() {
   const [palette, setPalette] = useState(false);
   const [apiStatus, setApiStatus] = useState<"checking" | "ready" | "offline">("checking");
   const inputRef = useRef<HTMLInputElement>(null);
-  useEffect(() => { const handler = (event: KeyboardEvent) => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); setPalette(true); } if (event.key === "Escape") setPalette(false); }; window.addEventListener("keydown", handler); return () => window.removeEventListener("keydown", handler); }, []);
+  const commandTriggerRef = useRef<HTMLButtonElement>(null);
+  const closePalette = useCallback(() => { setPalette(false); window.setTimeout(() => commandTriggerRef.current?.focus(), 0); }, []);
+  useEffect(() => { const handler = (event: KeyboardEvent) => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); setPalette(true); } if (event.key === "Escape" && palette) closePalette(); }; window.addEventListener("keydown", handler); return () => window.removeEventListener("keydown", handler); }, [closePalette, palette]);
   useEffect(() => { if (palette) inputRef.current?.focus(); }, [palette]);
   useEffect(() => {
-    let active = true;
-    api.health().then(() => { if (active) setApiStatus("ready"); }).catch(() => { if (active) setApiStatus("offline"); });
-    return () => { active = false; };
+    const controller = new AbortController();
+    api.health(controller.signal).then(() => setApiStatus("ready")).catch(() => {
+      if (!controller.signal.aborted) setApiStatus("offline");
+    });
+    return () => controller.abort();
   }, []);
   const current = location.pathname.split("/")[1] || "convert";
   return <div className="app-shell">
@@ -33,10 +37,10 @@ export function Shell() {
       <div className="sidebar-bottom"><NavLink to="/runtime" aria-label="Runtime" title="Runtime" className={`nav-item ${current === "runtime" ? "active" : ""}`}><Activity size={17} aria-hidden="true" /><span>Runtime</span></NavLink><NavLink to="/settings" aria-label="Settings" title="Settings" className={`nav-item ${current === "settings" ? "active" : ""}`}><Settings2 size={17} aria-hidden="true" /><span>Settings</span></NavLink></div>
     </aside>
     <main className="main-shell">
-      <header className="topbar"><div className="breadcrumbs"><span>SQL Dialect Master</span><span className="crumb-separator">/</span><strong>{groups.flatMap((group) => group.items).find((item) => item.to === location.pathname)?.label || (current === "settings" ? "Settings" : "Workspace")}</strong></div><div className="top-actions"><button className="command-trigger" onClick={() => setPalette(true)}><Search size={15} /><span>Jump to anything</span><kbd>⌘ K</kbd></button><IconButton label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`} onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? <Sun size={17} /> : <Moon size={17} />}</IconButton><div className={`api-health api-${apiStatus}`}><span className="online-dot" /> {apiStatus === "checking" ? "Checking API…" : apiStatus === "ready" ? "API ready" : "API offline"}</div></div></header>
+      <header className="topbar"><div className="breadcrumbs"><span>SQL Dialect Master</span><span className="crumb-separator">/</span><strong>{groups.flatMap((group) => group.items).find((item) => item.to === location.pathname)?.label || (current === "settings" ? "Settings" : "Workspace")}</strong></div><div className="top-actions"><button ref={commandTriggerRef} type="button" className="command-trigger" aria-haspopup="dialog" aria-expanded={palette} onClick={() => setPalette(true)}><Search size={15} aria-hidden="true" /><span>Jump to anything</span><kbd>⌘ K</kbd></button><IconButton label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`} onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? <Sun size={17} /> : <Moon size={17} />}</IconButton><div className={`api-health api-${apiStatus}`} role="status"><span className="online-dot" /> {apiStatus === "checking" ? "Checking API…" : apiStatus === "ready" ? "API ready" : "API offline"}</div></div></header>
       <div className="page-frame"><Outlet /></div>
     </main>
-    {palette && <CommandPalette close={() => setPalette(false)} inputRef={inputRef} />}
+    {palette && <CommandPalette close={closePalette} inputRef={inputRef} />}
   </div>;
 }
 
@@ -50,5 +54,6 @@ function CommandPalette({ close, inputRef }: { close: () => void; inputRef: Reac
     else if (event.key === "ArrowUp") { event.preventDefault(); setActiveIndex((index) => filtered.length ? (index - 1 + filtered.length) % filtered.length : 0); }
     else if (event.key === "Enter" && filtered[activeIndex]) { event.preventDefault(); navigate(filtered[activeIndex].to); close(); }
   };
-  return <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && close()}><div className="command-palette" role="dialog" aria-modal="true" aria-label="Workspace commands"><div className="palette-search"><Search size={18} aria-hidden="true" /><input ref={inputRef} aria-label="Search workspace commands" value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={onKeyDown} placeholder="Search workspace..." /><kbd>ESC</kbd></div><div className="palette-list">{filtered.map(({ label, to, icon: Icon }, index) => <Link to={to} onClick={close} className={`palette-item ${index === activeIndex ? "active" : ""}`} key={to} onMouseEnter={() => setActiveIndex(index)}><Icon size={17} aria-hidden="true" /><span>{label}</span><span className="palette-arrow">↵</span></Link>)}{!filtered.length && <p className="palette-empty">No matching command</p>}</div><div className="palette-footer"><span><kbd>↑</kbd><kbd>↓</kbd> navigate</span><span><kbd>↵</kbd> open</span><span><kbd>ESC</kbd> close</span></div></div></div>;
+  const activeOptionId = filtered.length ? `command-option-${activeIndex}` : undefined;
+  return <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && close()}><div className="command-palette" role="dialog" aria-modal="true" aria-labelledby="command-palette-title"><h2 id="command-palette-title" className="sr-only">Workspace commands</h2><div className="palette-search"><Search size={18} aria-hidden="true" /><input ref={inputRef} aria-label="Search workspace commands" aria-controls="command-list" aria-activedescendant={activeOptionId} value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={onKeyDown} placeholder="Search workspace..." /><kbd>ESC</kbd></div><div className="palette-list" id="command-list" role="listbox">{filtered.map(({ label, to, icon: Icon }, index) => <Link to={to} onClick={close} className={`palette-item ${index === activeIndex ? "active" : ""}`} id={`command-option-${index}`} role="option" aria-selected={index === activeIndex} key={to} onMouseEnter={() => setActiveIndex(index)}><Icon size={17} aria-hidden="true" /><span>{label}</span><span className="palette-arrow">↵</span></Link>)}{!filtered.length && <p className="palette-empty" role="status">No matching command</p>}</div><div className="palette-footer"><span><kbd>↑</kbd><kbd>↓</kbd> navigate</span><span><kbd>↵</kbd> open</span><span><kbd>ESC</kbd> close</span></div></div></div>;
 }

@@ -21,11 +21,20 @@ class CacheEntry:
     created_at: float
     ttl: int
     hits: int = 0
+    # Keep ``created_at`` as a wall-clock value for compatibility with
+    # callers that inspect or construct CacheEntry directly.  Cache-owned
+    # entries also record a monotonic timestamp so NTP/manual clock changes
+    # cannot extend or prematurely expire a TTL.
+    monotonic_created_at: Optional[float] = None
     
     def is_expired(self) -> bool:
         """Check if entry has expired."""
         if self.ttl <= 0:
             return False
+        if self.monotonic_created_at is not None:
+            return time.monotonic() - self.monotonic_created_at > self.ttl
+        # Legacy entries created before monotonic timestamps were added still
+        # use their wall-clock value.
         return time.time() - self.created_at > self.ttl
 
 
@@ -97,7 +106,8 @@ class TTLCache:
                 self._cache[key] = CacheEntry(
                     value=value,
                     created_at=time.time(),
-                    ttl=ttl if ttl is not None else self._ttl
+                    ttl=ttl if ttl is not None else self._ttl,
+                    monotonic_created_at=time.monotonic(),
                 )
                 self._cache.move_to_end(key)
                 logger.debug(f"Cache updated: {key[:8]}...")
@@ -112,7 +122,8 @@ class TTLCache:
             self._cache[key] = CacheEntry(
                 value=value,
                 created_at=time.time(),
-                ttl=ttl if ttl is not None else self._ttl
+                ttl=ttl if ttl is not None else self._ttl,
+                monotonic_created_at=time.monotonic(),
             )
             logger.debug(f"Cache set: {key[:8]}...")
     
@@ -159,7 +170,8 @@ class TTLCache:
             }
     
     def __len__(self) -> int:
-        return len(self._cache)
+        with self._lock:
+            return len(self._cache)
     
     def __contains__(self, key: str) -> bool:
         with self._lock:

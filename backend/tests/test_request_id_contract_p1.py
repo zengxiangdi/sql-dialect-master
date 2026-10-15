@@ -25,6 +25,16 @@ def test_valid_incoming_request_id_is_preserved():
     assert response.headers["X-Request-ID"] == request_id
 
 
+def test_web_prefixed_uuid_from_react_client_is_preserved():
+    request_id = "web-12345678-1234-4234-8234-123456789abc"
+    client = TestClient(make_app())
+
+    response = client.get("/api/test", headers={"X-Request-ID": request_id})
+
+    assert response.status_code == 200
+    assert response.headers["X-Request-ID"] == request_id
+
+
 def test_invalid_incoming_request_id_is_replaced():
     client = TestClient(make_app())
 
