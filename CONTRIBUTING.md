@@ -34,12 +34,27 @@ Thank you for your interest in contributing to SQL Dialect Master! We welcome co
 - **Backend**: Uses FastAPI and `sqlglot`.
   - `backend/core`: Contains the business logic (Transpiler, NL2SQL, Rules).
   - `backend/api`: REST API endpoints.
-- **Frontend**: Built with Streamlit.
+- **Frontend compatibility workspace**: Built with Streamlit.
   - `sdm_local_v2.py`: Entry point (Frontend v2 architecture).
   - `frontend/pages/`: One module per workspace page.
   - `frontend/ui/`: Reusable UI components (status, editor, diff, command palette).
   - `frontend/core/`: Design tokens, themes, navigation, state, view models, escaping.
   - `frontend/app_context_v2.py`: Data access and dialect labels for pages.
+- **React workspace**: `frontend-react/` is the migration target.
+  - `src/app/`: Router and application shell.
+  - `src/components/`: Accessible shared UI components.
+  - `src/features/`: Convert, NL2SQL, library, history, and analysis pages.
+  - `src/lib/api.ts`: Typed FastAPI client with timeout, auth, and request IDs.
+
+Run React checks with Node/npm from `frontend-react/`:
+
+```bash
+npm install
+npm run lint
+npm run typecheck
+npm test
+npm run build
+```
 
 ## 🧪 Running Tests
 

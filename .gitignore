@@ -20,6 +20,14 @@ wheels/
 .installed.cfg
 *.egg
 
+# Node / React frontend
+node_modules/
+frontend-react/dist/
+frontend-react/.vite/
+frontend-react/*.tsbuildinfo
+frontend-react/vite.config.js
+frontend-react/vite.config.d.ts
+
 # Virtual environments
 venv/
 ENV/
