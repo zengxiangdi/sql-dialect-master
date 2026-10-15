@@ -27,6 +27,9 @@ frontend-react/.vite/
 frontend-react/*.tsbuildinfo
 frontend-react/vite.config.js
 frontend-react/vite.config.d.ts
+!frontend-react/src/
+!frontend-react/src/lib/
+!frontend-react/src/lib/**
 
 # Virtual environments
 venv/
