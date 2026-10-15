@@ -4,7 +4,7 @@
 
 SQL Dialect Master 的主前端重构为 React + TypeScript 开发工作台，围绕 SQL 转换任务组织信息和交互。Convert 是首屏主任务，NL2SQL、Diff、Lineage、Query Analysis 构成分析工作区，Functions、Types、Templates、History 构成知识与资产库。
 
-React 应用放在 `frontend-react/`，默认开发端口为 `5174`，与现有 Streamlit 应用并行一段时间。后端 API、Python SDK 和 Streamlit 入口保持兼容，React 不依赖真实数据库即可完成转换、解析、NL2SQL、函数查询和类型查询演示。
+React 应用放在 `frontend-react/`，默认开发端口为 `5174`，现在是唯一产品前端。后端 API 和 Python SDK 保持兼容，React 不依赖真实数据库即可完成转换、解析、NL2SQL、函数查询和类型查询演示。
 
 ## 体验目标
 
@@ -54,7 +54,7 @@ frontend-react/
 
 ### 0. 基线与契约
 
-- [x] 盘点 Streamlit 页面、FastAPI API 和现有状态/导航契约。
+- [x] 盘点旧 Python UI 页面、FastAPI API 和现有状态/导航契约。
 - [x] 写入本计划、视觉 token、API 错误处理和兼容策略。
 - [x] 冻结 React 使用的 API response types，并为未提供 REST API 的 Diff/Lineage/Analysis 标记本地静态计算边界。
 
@@ -88,7 +88,7 @@ frontend-react/
 - [x] 添加 Vitest + Testing Library 基线测试，覆盖方言注册表和 Convert 壳层渲染。
 - [ ] 添加 Playwright 或等价的浏览器验收，覆盖 Convert、NL2SQL、主题、命令面板和模板回填。
 - [x] 添加 TypeScript strict、ESLint、npm build 检查和前端 CI job。
-- [x] 更新 README、CONTRIBUTING 和 React workspace README；保留 Streamlit fallback。
+- [x] 更新 README、CONTRIBUTING 和 React workspace README；React 成为唯一产品入口。
 
 ## 验收标准
 
@@ -100,8 +100,8 @@ npm --prefix frontend-react run build
 .venv/bin/python -m pytest -q
 ```
 
-功能验收要求 12 方言可选、Convert/NL2SQL/Diff/Lineage/Analysis/Functions/Types/Templates/History/Settings 全可达，错误与空状态可恢复，输入编辑不会展示旧结果，跨页 SQL/方言不丢失。视觉验收要求桌面和窄屏可用，键盘路径完整，焦点和对比度可见，首屏构建产物保持轻量。发布前必须确保 Python 回归测试和既有 Streamlit smoke 继续通过。
+功能验收要求 12 方言可选、Convert/NL2SQL/Diff/Lineage/Analysis/Functions/Types/Templates/History/Settings 全可达，错误与空状态可恢复，输入编辑不会展示旧结果，跨页 SQL/方言不丢失。视觉验收要求桌面和窄屏可用，键盘路径完整，焦点和对比度可见，首屏构建产物保持轻量。发布前必须确保 Python 回归测试和 React 构建检查通过。
 
 ## 当前实施状态
 
-当前首轮重构已完成并可独立构建。浏览器级自动化、真实静态托管和默认入口切换属于后续灰度门；在这些门完成前，Streamlit 保持兼容入口，React 通过独立静态站点部署。
+当前重构已完成并可独立构建。React 通过独立静态站点部署；旧 `frontend/` Python 模块仅保留为历史兼容测试素材，Pytest 默认忽略已退休的 Streamlit 测试目录，不属于产品运行入口，也不会打包进 Python wheel。

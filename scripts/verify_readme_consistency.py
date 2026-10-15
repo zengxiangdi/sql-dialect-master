@@ -16,6 +16,7 @@ METADATA = ROOT / "backend" / "core" / "metadata.py"
 BENCHMARK = ROOT / "backend" / "benchmarks" / "transpiler_benchmark.py"
 DESIGN_TOKENS = ROOT / "frontend" / "core" / "design_tokens.py"
 FRONTEND = ROOT / "frontend"
+REACT_FRONTEND = ROOT / "frontend-react"
 TYPE_MAPPING = ROOT / "backend" / "core" / "type_mapping.json"
 FUNCTIONS_DB = ROOT / "backend" / "core" / "functions_db.json"
 ENV_EXAMPLE = ROOT / ".env.example"
@@ -142,9 +143,13 @@ def main() -> None:
         if not (FRONTEND / v2_file).is_file():
             fail(f"README project structure references frontend/{v2_file} which does not exist")
 
-    # Verify the entry point documented in README actually exists.
-    if not (ROOT / "sdm_local_v2.py").is_file():
-        fail("README documents sdm_local_v2.py as the entry point, but the file does not exist")
+    # React is the sole product frontend. The Python frontend tree remains in
+    # the source checkout only for compatibility-level view-model tests and is
+    # intentionally excluded from the packaged runtime.
+    if not (REACT_FRONTEND / "package.json").is_file() or not (REACT_FRONTEND / "src").is_dir():
+        fail("React frontend workspace is missing")
+    if re.search(r"(?im)^.*(?:streamlit|sdm-streamlit|sdm_local_v2\.py).*$", readme):
+        fail("README still documents the retired Streamlit frontend")
 
     # ── Feature-count claims ──────────────────────────────────────────
     if TYPE_MAPPING.is_file():

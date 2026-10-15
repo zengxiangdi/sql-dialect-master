@@ -129,17 +129,8 @@ class TestB5_SplitterIndependentExpectations:
 
 
 class TestB5_FrontendNavigationIndependentExpectations:
-    def test_diff_intent_keeps_source_and_target_distinct(self):
-        from frontend.core.navigation import create_diff_navigation_intent
+    def test_react_frontend_workspace_is_present(self):
+        from pathlib import Path
 
-        intent = create_diff_navigation_intent(
-            source_sql="SELECT * FROM a",
-            target_sql="SELECT * FROM b",
-            src_dialect="postgres",
-            tgt_dialect="mysql",
-        )
-        assert intent.target_page == "diff"
-        assert intent.get_payload("source") == "SELECT * FROM a"
-        assert intent.get_payload("target") == "SELECT * FROM b"
-        assert intent.get_payload("src_dialect") == "postgres"
-        assert intent.get_payload("tgt_dialect") == "mysql"
+        root = Path(__file__).resolve().parents[2]
+        assert (root / "frontend-react" / "package.json").is_file()

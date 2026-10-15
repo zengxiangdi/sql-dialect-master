@@ -21,9 +21,12 @@ from pathlib import Path
 
 import pytest
 
-pytest.importorskip("streamlit")
+pytest.skip(
+    "The Streamlit frontend was retired; browser coverage now belongs to the React workspace.",
+    allow_module_level=True,
+)
 
-from streamlit.testing.v1 import AppTest  # noqa: E402
+from streamlit.testing.v1 import AppTest  # noqa: E402,F401
 
 
 _ROOT = Path(__file__).resolve().parents[3]

@@ -34,7 +34,7 @@ All checks use the project `.venv` and require no external database.
 | Dependency audit of requirements-lock.txt | No known vulnerabilities found |
 | README and current-release metadata checks | Passed |
 | Wheel/sdist build and Twine checks | Passed |
-| Installed wheel SDK, console entrypoint, all 11 Streamlit pages | Passed |
+| Installed wheel SDK and React production build | Passed |
 | Independent review of reported boundary failures | Resolved |
 
 The skipped tests include PostgreSQL runtime cases and explicitly unsupported

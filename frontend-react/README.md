@@ -1,8 +1,8 @@
 # SQL Dialect Master React workspace
 
-This directory contains the React + TypeScript migration target. It runs next
-to the existing Streamlit workspace while API and behavior parity are being
-validated.
+This directory contains the React + TypeScript product frontend. The Python
+package remains an API/SDK service; the legacy Python view-model modules are
+kept only for compatibility-level tests and are not a user-facing entrypoint.
 
 ```bash
 npm install

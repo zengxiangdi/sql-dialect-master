@@ -34,13 +34,7 @@ Thank you for your interest in contributing to SQL Dialect Master! We welcome co
 - **Backend**: Uses FastAPI and `sqlglot`.
   - `backend/core`: Contains the business logic (Transpiler, NL2SQL, Rules).
   - `backend/api`: REST API endpoints.
-- **Frontend compatibility workspace**: Built with Streamlit.
-  - `sdm_local_v2.py`: Entry point (Frontend v2 architecture).
-  - `frontend/pages/`: One module per workspace page.
-  - `frontend/ui/`: Reusable UI components (status, editor, diff, command palette).
-  - `frontend/core/`: Design tokens, themes, navigation, state, view models, escaping.
-  - `frontend/app_context_v2.py`: Data access and dialect labels for pages.
-- **React workspace**: `frontend-react/` is the migration target.
+- **React workspace**: `frontend-react/` is the product frontend.
   - `src/app/`: Router and application shell.
   - `src/components/`: Accessible shared UI components.
   - `src/features/`: Convert, NL2SQL, library, history, and analysis pages.
@@ -73,7 +67,7 @@ We use `pytest` for testing. Please ensure all tests pass before submitting a PR
 
 ## 📝 Coding Guidelines
 
-- **Style**: We follow PEP 8. Please run `.venv/bin/ruff check backend/core backend/api frontend sdm_local_v2.py --select E9,F --ignore F401` before committing.
+- **Style**: We follow PEP 8. Please run `.venv/bin/ruff check backend/core backend/api --select E9,F --ignore F401` before committing.
 - **Type Hints**: Use Python type hints for function arguments and return values.
 - **Documentation**: Add docstrings to modules, classes, and functions (Google style).
 - **Modularity**: Keep components small and focused (e.g., separate UI logic into `frontend/ui`).

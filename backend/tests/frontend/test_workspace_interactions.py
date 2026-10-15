@@ -1,6 +1,13 @@
 """Exercise stored results and malformed state through real Streamlit reruns."""
 from pathlib import Path
 
+import pytest
+
+pytest.skip(
+    "The Streamlit frontend was retired; browser coverage now belongs to the React workspace.",
+    allow_module_level=True,
+)
+
 from streamlit.testing.v1 import AppTest
 
 from frontend.core.navigation import NavigationIntent

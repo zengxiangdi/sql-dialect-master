@@ -29,7 +29,7 @@ jobs:
           pip install -e . --no-deps
 
       - name: Ruff correctness checks
-        run: ruff check backend/core backend/api frontend sdm_local_v2.py --select E9,F --ignore F401
+        run: ruff check backend/core backend/api --select E9,F --ignore F401
 
       - name: Bandit security scan
         run: |

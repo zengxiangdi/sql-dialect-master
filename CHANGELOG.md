@@ -43,9 +43,11 @@ All notable changes to SQL Dialect Master are documented here.
   running thread retains its slot until completion.
 - Public SQL safety validation delegates to the canonical implementation;
   dialect-aware rewrites preserve MySQL `#` comments.
-- Release metadata, Changelog, package data, and installed Streamlit startup
-  are checked before publishing. GitHub Release waits for CI at the tagged
-  commit; PyPI consumes the exact same verified GitHub artifacts.
+- Release metadata, Changelog, package data, and the installed SDK are checked
+  before publishing. React is the sole product frontend; the retired Python UI
+  is excluded from runtime dependencies and wheel contents. GitHub Release
+  waits for CI at the tagged commit; PyPI consumes the exact same verified
+  GitHub artifacts.
 - Developer tooling uses the project `.venv`; build and Twine are included
   in the QA extra. CodeGraph indexes are ignored by Git.
 

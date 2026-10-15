@@ -7,7 +7,7 @@ original SQL exists (NL2SQL), no self-comparison may be offered.
 """
 from __future__ import annotations
 
-from streamlit.testing.v1 import AppTest
+import pytest
 
 from frontend.core.navigation import create_diff_navigation_intent
 
@@ -40,10 +40,15 @@ class TestB4_1_DiffIntentHelper:
         assert intent.get_payload("target") == "SELECT * FROM b"
 
 
+@pytest.mark.skip(
+    reason="The Streamlit result panel was retired; React conversion handoff is covered by frontend-react tests."
+)
 class TestB4_1_ResultPanelIntegration:
     def test_panel_button_builds_distinct_navigation_payload(self):
         """Render the real result panel, click Semantic Diff, and inspect
         the produced navigation payload end to end."""
+
+        from streamlit.testing.v1 import AppTest
 
         def script():
             import streamlit as st

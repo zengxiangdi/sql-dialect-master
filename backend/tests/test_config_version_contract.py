@@ -110,32 +110,16 @@ class TestEnvOverrideThroughSettings:
         assert p_res.error == v_err
 
 
-class TestFrontendEntrypointVersion:
-    """The app entrypoint must not claim a release v2.0.
+class TestReactFrontendContract:
+    """The React workspace is the sole product frontend contract."""
 
-    The sidebar "Frontend vN" label is the frontend *architecture*
-    generation (intentionally separate from the product release), while
-    the footer must show the canonical product version.
-    """
+    def test_react_workspace_exists(self) -> None:
+        assert (ROOT / "frontend-react" / "package.json").is_file()
+        assert (ROOT / "frontend-react" / "src").is_dir()
 
-    @staticmethod
-    def _entrypoint_text() -> str:
-        return (ROOT / "sdm_local_v2.py").read_text(encoding="utf-8")
-
-    def test_sidebar_uses_frontend_arch_version_not_release(self) -> None:
-        text = self._entrypoint_text()
-        assert "Frontend v{_meta.FRONTEND_ARCHITECTURE_VERSION}" in text
-        assert "v2.0 · Developer Workspace" not in text
-
-    def test_footer_uses_canonical_product_version(self) -> None:
-        text = self._entrypoint_text()
-        assert "SQL Dialect Master v2.0" not in text
-        assert "SQL Dialect Master v{_meta.PROJECT_VERSION}" in text
-
-    def test_no_stale_v2_release_claim_in_entrypoint(self) -> None:
-        text = self._entrypoint_text()
-        # The literal release-style "v2.0" must be gone from display text.
-        assert "v2.0" not in text
+    def test_retired_streamlit_entrypoints_are_absent(self) -> None:
+        assert not (ROOT / "sdm_local_v2.py").exists()
+        assert not (ROOT / "backend" / "frontend_entrypoint.py").exists()
 
 
 if __name__ == "__main__":

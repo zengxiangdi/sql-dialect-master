@@ -6,7 +6,6 @@ import sqlglot
 from sqlglot import exp
 
 from backend.core.transpiler import SQLTranspiler
-from frontend.app_context_v2 import format_sql_local
 
 
 def test_transpile_preserves_terminal_semicolon_without_confusing_literals_or_comments() -> None:
@@ -24,8 +23,11 @@ def test_transpile_preserves_terminal_semicolon_without_confusing_literals_or_co
 
 
 def test_format_preserves_terminal_semicolon() -> None:
-    assert format_sql_local("SELECT 1;", "mysql").rstrip().endswith(";")
-    assert not format_sql_local("SELECT 1", "mysql").rstrip().endswith(";")
+    transpiler = SQLTranspiler()
+    formatted = transpiler.transpile("SELECT 1;", "mysql", "mysql", pretty=True, validate=False)
+    plain = transpiler.transpile("SELECT 1", "mysql", "mysql", pretty=True, validate=False)
+    assert formatted.target_sql and formatted.target_sql.rstrip().endswith(";")
+    assert plain.target_sql and not plain.target_sql.rstrip().endswith(";")
 
 
 def test_postgres_two_argument_round_casts_value_to_numeric() -> None:

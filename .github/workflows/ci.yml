@@ -40,7 +40,7 @@ jobs:
         run: pytest backend/tests/test_audit_remaining_gaps.py -q
 
       - name: Compile Python sources
-        run: python -m compileall -q backend frontend sdm_local_v2.py
+        run: python -m compileall -q backend
 
       - name: Verify release metadata contract
         run: |
@@ -97,20 +97,15 @@ jobs:
           python -m venv "$wheel_venv"
           "$wheel_venv/bin/pip" install --quiet dist/*.whl
           cd "$RUNNER_TEMP"
-          "$wheel_venv/bin/sdm-streamlit" --help >/dev/null
           "$wheel_venv/bin/python" - <<'PY'
-          import importlib.util
           from backend.core import NL2SQLGenerator, SQLTranspiler
-          from streamlit.testing.v1 import AppTest
 
           converted = SQLTranspiler().transpile("SELECT id FROM users LIMIT 2", "postgres", "mysql")
           assert converted.success, converted.error
           generated = NL2SQLGenerator().generate("查询所有用户", dialect="mysql")
           assert generated.success, generated.explanation
-          app = AppTest.from_file(importlib.util.find_spec("sdm_local_v2").origin).run(timeout=30)
-          assert not app.exception, [error.message for error in app.exception]
           PY
-          echo "sdm-streamlit console entrypoint smoke test passed"
+          echo "Installed wheel SDK smoke test passed"
 
   semantic-runtime:
     runs-on: ubuntu-latest

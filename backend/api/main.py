@@ -523,7 +523,20 @@ async def list_functions(
                         + ", ".join(func_encyclopedia.CATEGORIES)),
             )
     if search:
-        functions = func_encyclopedia.search(search, limit)
+        # Apply the category predicate before the public limit.  Searching
+        # only the first `limit` fuzzy matches could hide valid matches from
+        # the selected category (especially when the React UI requests the
+        # default limit).
+        search_limit = len(func_encyclopedia.functions) if normalized_category else limit
+        functions = func_encyclopedia.search(search, search_limit)
+        # Keep the two UI filters composable.  Previously a category was
+        # silently ignored whenever search was present, making the React
+        # library show functions outside the selected category.
+        if normalized_category:
+            functions = [
+                function for function in functions
+                if str(function.get("category", "")).lower() == normalized_category
+            ][:limit]
     elif category:
         functions = func_encyclopedia.list_by_category(normalized_category)[:limit]
     else:

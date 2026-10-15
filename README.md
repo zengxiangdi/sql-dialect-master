@@ -7,7 +7,7 @@ Current release: 1.1.4
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-green.svg)](https://fastapi.tiangolo.com/)
-[![Streamlit](https://img.shields.io/badge/Streamlit-1.38+-red.svg)](https://streamlit.io/)
+[![React](https://img.shields.io/badge/React-19-61DAFB.svg)](https://react.dev/)
 
 ## ✨ Features
 
@@ -24,7 +24,7 @@ Current release: 1.1.4
 | 🔧 **Rule Engine** | Deterministic priority ordering, compiled patterns, dialect-aware conflict detection |
 | 🛡️ **Security Validation** | Statement-level stacked-query detection with configurable blocking policy |
 | ⚡ **Performance** | Rule-aware cache versioning, bounded async batch conversion, and reproducible benchmark |
-| 🎨 **Modern UI** | React developer workspace with dark / light themes, responsive navigation, command palette, and Streamlit compatibility fallback |
+| 🎨 **Modern UI** | React developer workspace with dark / light themes, responsive navigation, and command palette |
 
 ## 💾 Supported Databases
 
@@ -62,25 +62,10 @@ For database-backed semantic tests:
 .venv/bin/python -m pip install -e ".[dev,semantic]"
 ```
 
-### Run Streamlit UI (Recommended)
-
-```bash
-streamlit run sdm_local_v2.py
-```
-
-After installing the package, the same workspace can be launched from any
-working directory with:
-
-```bash
-sdm-streamlit
-```
-
-Open http://localhost:8501 in your browser.
-
 ### Run the React UI
 
-The React workspace is the new migration target and runs independently from
-the Python package. Start the API first, then run:
+The React workspace is the product frontend and runs independently from the
+Python package. Start the API first, then run:
 
 ```bash
 cd frontend-react
@@ -91,8 +76,7 @@ npm run dev
 Open http://localhost:5174. The Vite development proxy forwards `/api`,
 `/health`, and `/ready` to `http://127.0.0.1:8000`. Set `VITE_API_BASE_URL`
 for a separately deployed API, or configure the URL and optional API key in
-the React Settings page. The existing Streamlit workspace remains available
-through `streamlit run sdm_local_v2.py` during the migration.
+the React Settings page.
 
 React implementation goals and gates are tracked in
 [`docs/react-frontend-refactor-plan.md`](docs/react-frontend-refactor-plan.md).
@@ -256,7 +240,7 @@ sql-dialect-master/
 │   │   └── validators.py        # Input validation
 │   │
 │   └── tests/                   # Test suite and regression coverage
-├── frontend/                    # Streamlit UI Components (v2 architecture)
+├── frontend/                    # Legacy Python view-model compatibility code
 │   ├── core/                    # Cross-cutting concerns
 │   │   ├── design_tokens.py     # Theme model (dark/light) + semantic status
 │   │   ├── navigation.py        # NavigationIntent contract
@@ -289,7 +273,10 @@ sql-dialect-master/
 │   └── basic_usage.py            # SDK usage examples
 ├── scripts/
 │   └── verify_readme_consistency.py # README source-of-truth checks
-├── sdm_local_v2.py             # Streamlit Application Entry (v2)
+├── frontend-react/              # React + TypeScript product frontend
+│   ├── src/
+│   ├── package.json
+│   └── vite.config.ts
 ├── pyproject.toml               # Project configuration
 ├── .env.example                 # Environment template
 ├── LICENSE                      # MIT License

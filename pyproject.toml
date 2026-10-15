@@ -6,7 +6,6 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "sqlglot>=30.18.0,<31.0.0",
-    "streamlit>=1.38.0",
     "fastapi>=0.115.0",
     "uvicorn>=0.30.0",
     "pydantic>=2.9.0",
@@ -37,24 +36,13 @@ semantic = [
 redis = [
     "redis>=5.0.0",
 ]
-
-[project.scripts]
-sdm-streamlit = "backend.frontend_entrypoint:main"
-
 [build-system]
 requires = ["setuptools>=75.0.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["backend*", "frontend*"]
+include = ["backend*"]
 exclude = ["backend.tests*", "backend.benchmarks*"]
-
-# The Streamlit application is a top-level module documented as the
-# user-facing entry point (``streamlit run sdm_local_v2.py``).  Include it in
-# source and wheel distributions so an installed package has the same entry
-# point as a source checkout.
-[tool.setuptools]
-py-modules = ["sdm_local_v2"]
 
 [tool.setuptools.package-data]
 "backend.core" = ["*.json"]
@@ -62,4 +50,4 @@ py-modules = ["sdm_local_v2"]
 [tool.pytest.ini_options]
 testpaths = ["backend/tests"]
 python_files = ["test_*.py"]
-addopts = "-v --tb=short"
+addopts = "-v --tb=short --ignore=backend/tests/frontend"

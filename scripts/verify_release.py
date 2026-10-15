@@ -8,7 +8,6 @@ installing project dependencies in a release job.
 from __future__ import annotations
 
 import argparse
-import configparser
 import email
 import re
 import tarfile
@@ -81,20 +80,26 @@ def validate_release(root: Path, tag: str, dist_dir: Path | None = None) -> str:
         if artifacts != {wheels[0], sdists[0]}:
             raise ReleaseValidationError("distribution directory contains stale or duplicate release artifacts")
 
-        required = ("sdm_local_v2.py", "backend/core/functions_db.json", "backend/core/type_mapping.json")
+        required = ("backend/core/functions_db.json", "backend/core/type_mapping.json")
         with ZipFile(wheels[0]) as wheel:
             names = set(wheel.namelist())
             metadata_paths = [path for path in names if path.endswith(".dist-info/METADATA")]
-            entrypoint_paths = [path for path in names if path.endswith(".dist-info/entry_points.txt")]
-            if len(metadata_paths) != 1 or len(entrypoint_paths) != 1:
-                raise ReleaseValidationError("wheel metadata or console entrypoints are missing")
+            if len(metadata_paths) != 1:
+                raise ReleaseValidationError("wheel metadata is missing")
             wheel_metadata = email.message_from_bytes(wheel.read(metadata_paths[0]))
             if wheel_metadata.get("Version") != version:
                 raise ReleaseValidationError("wheel METADATA version does not match release tag")
-            entrypoints = configparser.ConfigParser()
-            entrypoints.read_string(wheel.read(entrypoint_paths[0]).decode("utf-8"))
-            if entrypoints.get("console_scripts", "sdm-streamlit", fallback=None) != "backend.frontend_entrypoint:main":
-                raise ReleaseValidationError("wheel is missing the sdm-streamlit console entrypoint")
+            requirements = wheel_metadata.get_all("Requires-Dist", [])
+            if any(requirement.lower().startswith("streamlit") for requirement in requirements):
+                raise ReleaseValidationError("wheel runtime metadata still depends on Streamlit")
+            if any(path.endswith(".dist-info/entry_points.txt") for path in names):
+                raise ReleaseValidationError("wheel contains a retired frontend console entrypoint")
+            leaked_frontend = [
+                path for path in names
+                if path == "sdm_local_v2.py" or path.startswith("frontend/")
+            ]
+            if leaked_frontend:
+                raise ReleaseValidationError("wheel contains retired frontend files")
         missing = [path for path in required if path not in names]
         if missing:
             raise ReleaseValidationError(f"wheel is missing: {missing}")
@@ -107,9 +112,13 @@ def validate_release(root: Path, tag: str, dist_dir: Path | None = None) -> str:
         missing = [path for path in required if path not in names]
         if missing:
             raise ReleaseValidationError(f"sdist is missing: {missing}")
-        forbidden = [path for path in names if path.startswith(("backend/tests/", "backend/benchmarks/"))]
+        forbidden = [
+            path for path in names
+            if path.startswith(("backend/tests/", "backend/benchmarks/", "frontend/"))
+            or path in {"sdm_local_v2.py", "backend/frontend_entrypoint.py"}
+        ]
         if forbidden:
-            raise ReleaseValidationError("sdist contains development tests or benchmarks")
+            raise ReleaseValidationError("sdist contains retired frontend or development files")
 
     return version
 

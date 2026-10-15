@@ -62,7 +62,7 @@ jobs:
           python scripts/verify_release.py --tag "$RELEASE_TAG" --dist dist
           python -m twine check dist/*
 
-      - name: Smoke test installed wheel and console entrypoint
+      - name: Smoke test installed wheel SDK
         run: |
           release_venv="$RUNNER_TEMP/release-venv"
           python -m venv "$release_venv"
@@ -71,18 +71,13 @@ jobs:
           export RELEASE_VERSION="${GITHUB_REF_NAME#v}"
           "$release_venv/bin/python" -c \
             'import os; from backend.core.metadata import PROJECT_VERSION; assert PROJECT_VERSION == os.environ["RELEASE_VERSION"]'
-          "$release_venv/bin/sdm-streamlit" --help >/dev/null
           "$release_venv/bin/python" - <<'PY'
-          import importlib.util
           from backend.core import NL2SQLGenerator, SQLTranspiler
-          from streamlit.testing.v1 import AppTest
 
           converted = SQLTranspiler().transpile("SELECT id FROM users LIMIT 2", "postgres", "mysql")
           assert converted.success, converted.error
           generated = NL2SQLGenerator().generate("查询所有用户", dialect="mysql")
           assert generated.success, generated.explanation
-          app = AppTest.from_file(importlib.util.find_spec("sdm_local_v2").origin).run(timeout=30)
-          assert not app.exception, [error.message for error in app.exception]
           PY
 
       - name: Create GitHub release

@@ -73,9 +73,23 @@ export interface FunctionItem {
 }
 
 export interface TypeMapping {
+  /** Canonical type name returned by the API (the API uses `type`). */
+  type?: string;
   type_name?: string;
   canonical_type?: string;
+  source?: string;
+  target?: string;
+  notes?: string;
+  category?: string;
   [dialect: string]: unknown;
+}
+
+export interface TypeMappingsResponse {
+  success?: boolean;
+  mappings: TypeMapping[];
+  dialects?: Dialect[];
+  type_count: number;
+  precision_warnings?: unknown;
 }
 
 export interface HistoryItem {
