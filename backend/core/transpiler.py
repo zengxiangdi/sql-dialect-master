@@ -1445,9 +1445,25 @@ class SQLTranspiler:
             return self._rule_cache_snapshot_version
 
     def _cache_key(self, sql: str, source: str, target: str, pretty: bool, validate: bool = True,) -> str:
+        """Build a bounded cache key for a transpilation request.
+
+        SQL input is allowed to be fairly large (the default limit is 100k
+        characters).  Embedding the complete statement in every cache key
+        keeps an extra copy alive for each cached entry and can make the
+        configured LRU bound misleading in terms of actual memory usage.  A
+        cryptographic digest keeps keys fixed-size while preserving a stable,
+        collision-resistant identity for the in-process cache.  BLAKE2b is
+        used here because it is faster than SHA-256 for this non-signing
+        workload.  The version
+        prefix intentionally changed from ``v4`` so entries created by older
+        processes cannot be mixed with the new key format.
+        """
         rule_version = self._rule_cache_version()
         security_version = f"{settings.security_check_enabled}|{settings.security_block_dangerous}"
-        return f"v4|{rule_version}|{security_version}|{sql}|{source}|{target}|{pretty}|{validate}"
+        sql_digest = hashlib.blake2b(
+            sql.encode("utf-8"), digest_size=16
+        ).hexdigest()
+        return f"v5|{rule_version}|{security_version}|sql:{sql_digest}|{source}|{target}|{pretty}|{validate}"
 
     def _get_compatibility_notes(
         self,

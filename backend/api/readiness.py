@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import secrets
+import threading
 import time
 import uuid
 import weakref
@@ -22,9 +23,20 @@ from backend.core.config import settings
 _READINESS_CACHE_TTL_SECONDS = 5.0
 _READINESS_TIMEOUT_SECONDS = 3.0
 _READINESS_LOCKS: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = weakref.WeakKeyDictionary()
-_READINESS_LOCKS_GUARD = __import__("threading").Lock()
+_READINESS_LOCKS_GUARD = threading.Lock()
 _READINESS_CACHE = {"checks": None, "cached_at": 0.0}
 _HEALTH_PROBE_PATHS = {"/ready", "/health/deep"}
+
+# The probe cache intentionally expires quickly so readiness reflects a
+# degraded dependency within a few seconds.  Constructing the probe services,
+# however, is much more expensive than running their checks: the function/type
+# catalogs are parsed from JSON and the NL2SQL pipeline builds several indexes.
+# Keep those immutable-for-the-process services alive and only rerun the cheap
+# health operations on each refresh.  A regular threading lock is required
+# because ``_run_checks`` executes in a worker thread and multiple ASGI event
+# loops can call this module in the same process (for example during tests).
+_PROBE_SERVICES: tuple[Any, Any, Any, Any] | None = None
+_PROBE_SERVICES_LOCK = threading.Lock()
 
 
 def _probe_allowed(request: Request) -> bool:
@@ -84,17 +96,38 @@ def _get_readiness_lock() -> asyncio.Lock:
         return lock
 
 
-def _run_checks() -> dict[str, dict[str, Any]]:
-    """Run the lightweight-but-real component checks synchronously."""
+def _get_probe_services():
+    """Return lazily initialized probe services shared by all refreshes."""
+    global _PROBE_SERVICES
+    if _PROBE_SERVICES is not None:
+        return _PROBE_SERVICES
+
     from backend.core.functions_lookup import FunctionEncyclopedia
     from backend.core.nl2sql import NL2SQLGenerator
     from backend.core.transpiler import SQLTranspiler
     from backend.core.type_mapping import TypeMapper
 
-    transpiler = SQLTranspiler()
-    function_encyclopedia = FunctionEncyclopedia()
-    type_mapper = TypeMapper()
-    nl2sql_generator = NL2SQLGenerator()
+    with _PROBE_SERVICES_LOCK:
+        # Double-check after acquiring the lock so concurrent worker threads
+        # do not each reload the catalog files.
+        if _PROBE_SERVICES is None:
+            _PROBE_SERVICES = (
+                SQLTranspiler(),
+                FunctionEncyclopedia(),
+                TypeMapper(),
+                NL2SQLGenerator(),
+            )
+        return _PROBE_SERVICES
+
+
+def _run_checks() -> dict[str, dict[str, Any]]:
+    """Run the lightweight-but-real component checks synchronously."""
+    (
+        transpiler,
+        function_encyclopedia,
+        type_mapper,
+        nl2sql_generator,
+    ) = _get_probe_services()
 
     checks: dict[str, dict[str, Any]] = {}
     try:

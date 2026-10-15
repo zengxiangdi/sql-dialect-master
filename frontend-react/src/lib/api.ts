@@ -52,13 +52,21 @@ export function normalizeTypeMappings(payload: {
 
 async function request<T>(path: string, init: RequestInit = {}, timeout = 30000): Promise<T> {
   const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), timeout);
+  let timedOut = false;
+  const timer = window.setTimeout(() => { timedOut = true; controller.abort(); }, timeout);
   const apiKey = localStorage.getItem("sdm.apiKey");
   const headers = new Headers(init.headers);
   if (init.body !== undefined) headers.set("Content-Type", "application/json");
   headers.set("X-Request-ID", requestId());
   if (apiKey) headers.set("X-API-Key", apiKey);
   try {
+    // Preserve a caller's signal while still enforcing the client timeout. This
+    // lets search/filter pages cancel stale requests when inputs change.
+    const signal = init.signal;
+    if (signal) {
+      if (signal.aborted) controller.abort(signal.reason);
+      else signal.addEventListener("abort", () => controller.abort(signal.reason), { once: true });
+    }
     const response = await fetch(`${apiBase()}${path}`, { ...init, headers, signal: controller.signal });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
@@ -70,7 +78,7 @@ async function request<T>(path: string, init: RequestInit = {}, timeout = 30000)
     }
     return payload as T;
   } catch (error) {
-    if ((error instanceof DOMException && error.name === "AbortError") || (error instanceof Error && error.name === "AbortError")) throw new ApiError("Request timed out. Try again.", 504);
+    if (((error instanceof DOMException && error.name === "AbortError") || (error instanceof Error && error.name === "AbortError")) && timedOut) throw new ApiError("Request timed out. Try again.", 504);
     if (error instanceof TypeError) throw new ApiError("Unable to reach the API. Check the backend URL.", 0);
     throw error;
   } finally {
@@ -86,8 +94,8 @@ export const api = {
     request<Nl2SqlResponse>("/api/nl2sql", { method: "POST", body: JSON.stringify({ text, dialect, table_hint: table_hint || null }) }),
   parse: (sql: string, dialect: Dialect) =>
     request<ParseResponse>("/api/parse", { method: "POST", body: JSON.stringify({ sql, dialect }) }),
-  functions: (search = "", category = "", limit = 100) =>
-    request<{ functions: FunctionItem[]; count: number; total: number }>(`/api/functions?limit=${limit}${search ? `&search=${encodeURIComponent(search)}` : ""}${category ? `&category=${encodeURIComponent(category)}` : ""}`),
-  types: async (source?: Dialect, target?: Dialect) => normalizeTypeMappings(await request<{ mappings?: unknown; [key: string]: unknown }>(`/api/types${source || target ? `?${source ? `source=${source}` : ""}${source && target ? "&" : ""}${target ? `target=${target}` : ""}` : ""}`)),
+  functions: (search = "", category = "", limit = 100, signal?: AbortSignal) =>
+    request<{ functions: FunctionItem[]; count: number; total: number }>(`/api/functions?limit=${limit}${search ? `&search=${encodeURIComponent(search)}` : ""}${category ? `&category=${encodeURIComponent(category)}` : ""}`, { signal }),
+  types: async (source?: Dialect, target?: Dialect, signal?: AbortSignal) => normalizeTypeMappings(await request<{ mappings?: unknown; [key: string]: unknown }>(`/api/types${source || target ? `?${source ? `source=${source}` : ""}${source && target ? "&" : ""}${target ? `target=${target}` : ""}` : ""}`, { signal })),
   health: () => request<{ status: string; version: string }>("/health", {}, 5000),
 };

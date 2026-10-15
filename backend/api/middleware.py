@@ -277,7 +277,10 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
         return JSONResponse(status_code=response.status_code, content=normalized, headers=headers)
 
     async def dispatch(self, request: Request, call_next) -> Response:
-        start_time = time.time()
+        # Request duration is an elapsed interval, so use a monotonic clock.
+        # ``time.time()`` may move backwards/forwards during a wall-clock
+        # correction and corrupt both logs and latency metrics.
+        start_time = time.perf_counter()
         request_id = self._get_request_id(request)
         request.state.request_id = request_id
         status_code = 500
@@ -292,7 +295,7 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
             error = _sanitize_log_value(str(exc))
             raise
         finally:
-            process_time = time.time() - start_time
+            process_time = time.perf_counter() - start_time
             log_data = {"event": "request_end", "request_id": request_id, "method": _sanitize_log_value(request.method), "path": _sanitize_log_value(request.url.path), "status_code": status_code, "process_time_ms": round(process_time * 1000, 2), "error": error, "timestamp": datetime.now().isoformat()}
             (logger.warning if status_code >= 400 else logger.info)(json.dumps(log_data))
         response.headers["X-Request-ID"] = request_id

@@ -4,7 +4,7 @@ import type { Dialect, Status } from "../lib/types";
 import { DIALECT_ICONS, DIALECT_LABELS } from "../lib/types";
 
 export function Button({ variant = "secondary", loading, icon, children, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "secondary" | "ghost" | "danger"; loading?: boolean; icon?: ReactNode }) {
-  return <button className={`button button-${variant}`} disabled={props.disabled || loading} {...props}>{loading ? <Loader2 size={15} className="spin" /> : icon}{children}</button>;
+  return <button className={`button button-${variant}`} disabled={props.disabled || loading} aria-busy={loading || undefined} {...props}>{loading ? <Loader2 size={15} className="spin" aria-hidden="true" /> : icon}{children}</button>;
 }
 
 export function IconButton({ label, children, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { label: string }) {
@@ -53,7 +53,7 @@ export function EmptyState({ icon = <Sparkles size={22} />, title, text, action 
 }
 
 export function ErrorPanel({ message, onRetry }: { message: string; onRetry?: () => void }) {
-  return <div className="error-panel"><div><strong>Something needs attention</strong><p>{message}</p></div>{onRetry && <Button variant="ghost" icon={<RotateCcw size={14} />} onClick={onRetry}>Retry</Button>}<X size={16} className="error-mark" /></div>;
+  return <div className="error-panel" role="alert" aria-live="assertive"><div><strong>Something needs attention</strong><p>{message}</p></div>{onRetry && <Button variant="ghost" icon={<RotateCcw size={14} />} onClick={onRetry}>Retry</Button>}<X size={16} className="error-mark" aria-hidden="true" /></div>;
 }
 
 export function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {

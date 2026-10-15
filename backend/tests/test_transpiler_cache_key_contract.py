@@ -14,6 +14,17 @@ def test_cache_key_separates_validation_mode() -> None:
     assert validated != unvalidated
 
 
+def test_cache_key_does_not_retain_full_sql_payload() -> None:
+    """Large statements must not inflate every in-memory cache key."""
+    transpiler = SQLTranspiler()
+    sql = "SELECT " + ("'payload', " * 20_000) + "1"
+
+    key = transpiler._cache_key(sql, "postgres", "mysql", pretty=True, validate=True)
+
+    assert len(key) < 512
+    assert sql not in key
+
+
 def test_cache_key_changes_when_rule_contract_changes() -> None:
     transpiler = SQLTranspiler()
     baseline = transpiler._cache_key(

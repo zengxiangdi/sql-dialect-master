@@ -16,26 +16,27 @@ import logging
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime
+from functools import lru_cache
 from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from backend.core.config import get_dialect_api_info, settings, setup_logging
+from backend.api.auth import require_api_access
+from backend.api.rate_limit_store import InMemoryRateLimitStore
+from backend.api.readiness import health_probe_response
+from backend.api.workers import BoundedWorkerPool, WorkerCapacityError
 from backend.core import metadata as meta
+from backend.core.config import get_dialect_api_info, settings, setup_logging
 from backend.core.functions_lookup import FunctionEncyclopedia
 from backend.core.nl2sql import NL2SQLGenerator
 from backend.core.nl2sql_pipeline.orchestrator import SAFE_TABLE_HINT
 from backend.core.parser import SUPPORTED_DIALECTS, SQLParser
 from backend.core.transpiler import SQLTranspiler
 from backend.core.type_mapping import TypeMapper
-
-from backend.api.readiness import health_probe_response
-from backend.api.auth import require_api_access
-from backend.api.workers import BoundedWorkerPool, WorkerCapacityError
-from backend.api.rate_limit_store import InMemoryRateLimitStore
 
 # Configure logging for the application from the validated settings object.
 # Keep an INFO fallback for defensive compatibility with custom settings
@@ -44,6 +45,18 @@ _log_level = getattr(logging, settings.log_level.upper(), logging.INFO)
 logger = setup_logging(level=_log_level, log_file=settings.log_file or None)
 api_logger = logging.getLogger(__name__)
 _worker_pool = BoundedWorkerPool(settings.api_workers, settings.api_queue_size)
+
+
+@lru_cache(maxsize=len(SUPPORTED_DIALECTS))
+def _get_sql_parser(dialect: str) -> SQLParser:
+    """Return the immutable parser shell shared by parse requests.
+
+    ``SQLParser`` stores only the normalized dialect and stateless extraction
+    helpers.  Reusing one instance per dialect avoids constructing the same
+    object for every request while keeping request-specific AST/results local
+    to the worker that executes them.
+    """
+    return SQLParser(dialect)
 
 
 @asynccontextmanager
@@ -177,6 +190,11 @@ app.add_middleware(
     allow_headers=["Content-Type", "Authorization", "X-API-Key", "X-Request-ID"],
 )
 
+# Type/function matrices and conversion reports are often much larger than
+# the request itself.  Compress them at the ASGI boundary so browser clients
+# spend less time waiting on the network without changing response schemas.
+app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
+
 # Add security headers
 app.add_middleware(SecurityHeadersMiddleware)
 
@@ -204,9 +222,12 @@ nl2sql_generator = NL2SQLGenerator()
 # Request timing middleware with logging
 @app.middleware("http")
 async def add_process_time_header(request: Request, call_next):
-    start_time = time.time()
+    # ``perf_counter`` is monotonic and high resolution.  Wall-clock time can
+    # jump when NTP adjusts the host clock, which would otherwise produce a
+    # negative or wildly inflated duration header and log entry.
+    start_time = time.perf_counter()
     response = await call_next(request)
-    process_time = time.time() - start_time
+    process_time = time.perf_counter() - start_time
     response.headers["X-Process-Time"] = f"{process_time:.4f}s"
     response.headers["X-API-Version"] = API_VERSION
 
@@ -487,7 +508,7 @@ async def parse_sql(request: ParseRequest):
     Extracts tables, columns, functions, and other elements from SQL.
     """
     dialect = normalize_dialect(request.dialect)
-    parser = SQLParser(dialect)
+    parser = _get_sql_parser(dialect)
     elements = await _run_cpu_bound(parser.extract_elements, request.sql)
     if "error" in elements:
         raise HTTPException(status_code=422, detail=elements["error"] or "SQL parsing failed")
