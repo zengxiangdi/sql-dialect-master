@@ -222,8 +222,8 @@ class AppSettings(BaseSettings):
     allowed_origins: str = (
         "http://localhost:8501,http://localhost:8000,"
         "http://127.0.0.1:8501,http://127.0.0.1:8000,"
-        "http://localhost:5173,http://127.0.0.1:5173,"
-        "http://localhost:4173,http://127.0.0.1:4173"
+        "http://localhost:5174,http://127.0.0.1:5174,"
+        "http://localhost:4174,http://127.0.0.1:4174"
     )
     max_batch_size: int = Field(100, gt=0)
     request_timeout: int = Field(30, gt=0)

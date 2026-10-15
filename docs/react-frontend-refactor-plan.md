@@ -4,7 +4,7 @@
 
 SQL Dialect Master 的主前端重构为 React + TypeScript 开发工作台，围绕 SQL 转换任务组织信息和交互。Convert 是首屏主任务，NL2SQL、Diff、Lineage、Query Analysis 构成分析工作区，Functions、Types、Templates、History 构成知识与资产库。
 
-React 应用放在 `frontend-react/`，与现有 Streamlit 应用并行一段时间。后端 API、Python SDK 和 Streamlit 入口保持兼容，React 不依赖真实数据库即可完成转换、解析、NL2SQL、函数查询和类型查询演示。
+React 应用放在 `frontend-react/`，默认开发端口为 `5174`，与现有 Streamlit 应用并行一段时间。后端 API、Python SDK 和 Streamlit 入口保持兼容，React 不依赖真实数据库即可完成转换、解析、NL2SQL、函数查询和类型查询演示。
 
 ## 体验目标
 

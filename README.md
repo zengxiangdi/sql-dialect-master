@@ -88,7 +88,7 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:5173. The Vite development proxy forwards `/api`,
+Open http://localhost:5174. The Vite development proxy forwards `/api`,
 `/health`, and `/ready` to `http://127.0.0.1:8000`. Set `VITE_API_BASE_URL`
 for a separately deployed API, or configure the URL and optional API key in
 the React Settings page. The existing Streamlit workspace remains available
