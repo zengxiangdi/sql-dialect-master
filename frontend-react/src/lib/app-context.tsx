@@ -7,6 +7,7 @@ interface AppContextValue {
   history: HistoryItem[];
   addHistory: (item: Omit<HistoryItem, "id" | "createdAt">) => void;
   removeHistory: (id: string) => void;
+  clearHistory: () => void;
   apiBase: string;
   setApiBase: (value: string) => void;
   apiKey: string;
@@ -15,9 +16,18 @@ interface AppContextValue {
 
 const AppContext = createContext<AppContextValue | null>(null);
 
+function readHistory(): HistoryItem[] {
+  try {
+    const value = JSON.parse(localStorage.getItem("sdm.history") || "[]");
+    return Array.isArray(value) ? value : [];
+  } catch {
+    return [];
+  }
+}
+
 export function AppProvider({ children }: { children: ReactNode }) {
   const [theme, setThemeState] = useState<Theme>(() => (localStorage.getItem("sdm.theme") as Theme) || "dark");
-  const [history, setHistory] = useState<HistoryItem[]>(() => JSON.parse(localStorage.getItem("sdm.history") || "[]"));
+  const [history, setHistory] = useState<HistoryItem[]>(readHistory);
   const [apiBase, setApiBaseState] = useState(() => localStorage.getItem("sdm.apiBase") || "");
   const [apiKey, setApiKeyState] = useState(() => localStorage.getItem("sdm.apiKey") || "");
 
@@ -26,9 +36,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const setTheme = (value: Theme) => setThemeState(value);
   const setApiBase = (value: string) => { setApiBaseState(value); localStorage.setItem("sdm.apiBase", value); };
   const setApiKey = (value: string) => { setApiKeyState(value); localStorage.setItem("sdm.apiKey", value); };
-  const addHistory = (item: Omit<HistoryItem, "id" | "createdAt">) => setHistory((items) => [{ ...item, id: crypto.randomUUID(), createdAt: new Date().toISOString() }, ...items]);
+  const addHistory = (item: Omit<HistoryItem, "id" | "createdAt">) => {
+    const id = crypto.randomUUID?.() || `history-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    setHistory((items) => [{ ...item, id, createdAt: new Date().toISOString() }, ...items]);
+  };
   const removeHistory = (id: string) => setHistory((items) => items.filter((item) => item.id !== id));
-  const value = useMemo(() => ({ theme, setTheme, history, addHistory, removeHistory, apiBase, setApiBase, apiKey, setApiKey }), [theme, history, apiBase, apiKey]);
+  const clearHistory = () => setHistory([]);
+  const value = useMemo(() => ({ theme, setTheme, history, addHistory, removeHistory, clearHistory, apiBase, setApiBase, apiKey, setApiKey }), [theme, history, apiBase, apiKey]);
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
 

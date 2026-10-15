@@ -1,5 +1,5 @@
 import { ArrowLeftRight, CheckCircle2, FileCode2, Keyboard, RefreshCw, Wand2 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api, ApiError } from "../lib/api";
 import { useApp } from "../lib/app-context";
 import type { ConvertResponse, Dialect } from "../lib/types";
@@ -22,6 +22,17 @@ export function ConvertPage() {
   const canConvert = sql.trim().length > 0 && source !== target;
   const resultStatus = useMemo(() => result?.success ? (result.warnings.length ? "warning" : "success") : "error", [result]);
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && canConvert && !loading && !formatting) {
+        event.preventDefault();
+        void convert();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [canConvert, loading, formatting, sql, source, target]);
+
   const convert = async () => {
     setLoading(true); setError(null);
     try { localStorage.setItem("sdm.convert.draft", sql); const next = await api.convert(sql, source, target); setResult(next); if (next.success) addHistory({ source: sql, target: next.target_sql || "", sourceDialect: source, targetDialect: target, status: next.warnings.length ? "warning" : "success" }); else setError(new ApiError(next.error || "Conversion failed", 422, next.error_code || undefined)); }
@@ -31,7 +42,7 @@ export function ConvertPage() {
   const swap = () => { setSource(target); setTarget(source); setSql(output || sql); setResult(null); setError(null); };
   const format = async () => { if (!sql.trim()) return; setFormatting(true); setError(null); try { const formatted = await api.convert(sql, source, source, true); if (formatted.success && formatted.target_sql) { setSql(formatted.target_sql); setResult(null); localStorage.setItem("sdm.convert.draft", formatted.target_sql); } else setError(new ApiError(formatted.error || "Formatting failed", 422, formatted.error_code || undefined)); } catch (caught) { setError(caught instanceof ApiError ? caught : new ApiError("Formatting failed", 500)); } finally { setFormatting(false); } };
   return <div>
-    <PageHeader eyebrow="WORKSPACE / CONVERT" title="Convert SQL with confidence" description="A focused workspace for translating, validating, and reviewing SQL across twelve database dialects." actions={<><Button variant="ghost" icon={<Keyboard size={14} />}>⌘ Enter</Button><Button variant="secondary" icon={<RefreshCw size={14} />} onClick={() => { setSql(""); setResult(null); setError(null); }}>New query</Button></>} />
+    <PageHeader eyebrow="WORKSPACE / CONVERT" title="Convert SQL with confidence" description="A focused workspace for translating, validating, and reviewing SQL across twelve database dialects." actions={<><Button variant="ghost" icon={<Keyboard size={14} />} onClick={convert} disabled={!canConvert || loading || formatting}>⌘ Enter</Button><Button variant="secondary" icon={<RefreshCw size={14} />} onClick={() => { setSql(""); setResult(null); setError(null); localStorage.removeItem("sdm.convert.draft"); }}>New query</Button></>} />
     <div className="convert-toolbar"><div className="dialect-row"><DialectSelect label="Source dialect" value={source} onChange={(value) => { setSource(value); setResult(null); }} /><Button variant="ghost" icon={<ArrowLeftRight size={16} />} onClick={swap} aria-label="Swap source and target dialects">Swap</Button><DialectSelect label="Target dialect" value={target} onChange={(value) => { setTarget(value); setResult(null); }} /></div><div className="convert-actions"><Button variant="secondary" loading={formatting} disabled={!sql.trim()} onClick={format}>Format</Button><Button variant="primary" loading={loading} disabled={!canConvert} icon={<Wand2 size={15} />} onClick={convert}>Convert SQL</Button></div></div>
     {error && <ErrorPanel message={`${error.message}${error.code ? ` · ${error.code}` : ""}`} onRetry={convert} />}
     <div className="split-editor convert-editor"><div className="editor-panel"><div className="editor-head"><span><FileCode2 size={14} /> Source SQL</span><span className="editor-dialect">{source}</span></div><CodeEditor value={sql} onChange={(value) => { setSql(value); setResult((current) => current ? { ...current } : current); }} minHeight={430} placeholder="Paste SQL here..." ariaLabel="Source SQL editor" /><div className="editor-footer"><span>{sql.length.toLocaleString()} chars</span><button className="link-button" onClick={() => setSql(SAMPLE)}>Load example</button></div></div><div className="editor-panel"><div className="editor-head"><span><CheckCircle2 size={14} /> Target SQL</span><span className="editor-dialect">{target}</span></div>{output ? <pre className={`result-code ${stale ? "stale" : ""}`}>{output}</pre> : <EmptyState icon={<Wand2 size={20} />} title="Your converted SQL appears here" text="Choose dialects, paste a query, then run the conversion." action={<Button variant="secondary" onClick={convert} disabled={!canConvert}>Try conversion</Button>} />}<div className="editor-footer"><span>{stale ? "Result is stale — run again" : result ? `${result.target_validation_state} · ${result.transformations.length} transformations` : "Waiting for input"}</span><div className="result-actions"><CopyButton value={output} /><DownloadButton value={output} /></div></div></div></div>

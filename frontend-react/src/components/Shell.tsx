@@ -1,7 +1,8 @@
 import { Activity, BookOpen, BrainCircuit, Boxes, ChevronLeft, Code2, FileClock, GitCompareArrows, History, Moon, Network, Search, Settings2, Sun, Table2, TerminalSquare, WandSparkles } from "lucide-react";
-import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
+import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useEffect, useRef, useState } from "react";
 import { useApp } from "../lib/app-context";
+import { api } from "../lib/api";
 import { IconButton } from "./ui";
 
 const groups = [
@@ -14,9 +15,15 @@ export function Shell() {
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(false);
   const [palette, setPalette] = useState(false);
+  const [apiStatus, setApiStatus] = useState<"checking" | "ready" | "offline">("checking");
   const inputRef = useRef<HTMLInputElement>(null);
   useEffect(() => { const handler = (event: KeyboardEvent) => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); setPalette(true); } if (event.key === "Escape") setPalette(false); }; window.addEventListener("keydown", handler); return () => window.removeEventListener("keydown", handler); }, []);
   useEffect(() => { if (palette) inputRef.current?.focus(); }, [palette]);
+  useEffect(() => {
+    let active = true;
+    api.health().then(() => { if (active) setApiStatus("ready"); }).catch(() => { if (active) setApiStatus("offline"); });
+    return () => { active = false; };
+  }, []);
   const current = location.pathname.split("/")[1] || "convert";
   return <div className="app-shell">
     <aside className={`sidebar ${collapsed ? "collapsed" : ""}`}>
@@ -26,7 +33,7 @@ export function Shell() {
       <div className="sidebar-bottom"><NavLink to="/runtime" className={`nav-item ${current === "runtime" ? "active" : ""}`}><Activity size={17} /><span>Runtime</span></NavLink><NavLink to="/settings" className={`nav-item ${current === "settings" ? "active" : ""}`}><Settings2 size={17} /><span>Settings</span></NavLink></div>
     </aside>
     <main className="main-shell">
-      <header className="topbar"><div className="breadcrumbs"><span>SQL Dialect Master</span><span className="crumb-separator">/</span><strong>{groups.flatMap((group) => group.items).find((item) => item.to === location.pathname)?.label || (current === "settings" ? "Settings" : "Workspace")}</strong></div><div className="top-actions"><button className="command-trigger" onClick={() => setPalette(true)}><Search size={15} /><span>Jump to anything</span><kbd>⌘ K</kbd></button><IconButton label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`} onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? <Sun size={17} /> : <Moon size={17} />}</IconButton><div className="api-health"><span className="online-dot" /> API ready</div></div></header>
+      <header className="topbar"><div className="breadcrumbs"><span>SQL Dialect Master</span><span className="crumb-separator">/</span><strong>{groups.flatMap((group) => group.items).find((item) => item.to === location.pathname)?.label || (current === "settings" ? "Settings" : "Workspace")}</strong></div><div className="top-actions"><button className="command-trigger" onClick={() => setPalette(true)}><Search size={15} /><span>Jump to anything</span><kbd>⌘ K</kbd></button><IconButton label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`} onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? <Sun size={17} /> : <Moon size={17} />}</IconButton><div className={`api-health api-${apiStatus}`}><span className="online-dot" /> {apiStatus === "checking" ? "Checking API…" : apiStatus === "ready" ? "API ready" : "API offline"}</div></div></header>
       <div className="page-frame"><Outlet /></div>
     </main>
     {palette && <CommandPalette close={() => setPalette(false)} inputRef={inputRef} />}
@@ -34,7 +41,14 @@ export function Shell() {
 }
 
 function CommandPalette({ close, inputRef }: { close: () => void; inputRef: React.RefObject<HTMLInputElement | null> }) {
+  const navigate = useNavigate();
   const commands = [{ label: "New conversion", to: "/convert", icon: WandSparkles }, { label: "Natural language to SQL", to: "/nl2sql", icon: BrainCircuit }, { label: "Semantic diff", to: "/diff", icon: GitCompareArrows }, { label: "Function encyclopedia", to: "/functions", icon: BookOpen }, { label: "Conversion history", to: "/history", icon: FileClock }, { label: "Settings", to: "/settings", icon: Settings2 }];
-  const [query, setQuery] = useState(""); const filtered = commands.filter((item) => item.label.toLowerCase().includes(query.toLowerCase()));
-  return <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && close()}><div className="command-palette"><div className="palette-search"><Search size={18} /><input ref={inputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search workspace..." /><kbd>ESC</kbd></div><div className="palette-list">{filtered.map(({ label, to, icon: Icon }) => <Link to={to} onClick={close} className="palette-item" key={to}><Icon size={17} /><span>{label}</span><span className="palette-arrow">↵</span></Link>)}{!filtered.length && <p className="palette-empty">No matching command</p>}</div><div className="palette-footer"><span><kbd>↑</kbd><kbd>↓</kbd> navigate</span><span><kbd>↵</kbd> open</span><span><kbd>ESC</kbd> close</span></div></div></div>;
+  const [query, setQuery] = useState(""); const [activeIndex, setActiveIndex] = useState(0); const filtered = commands.filter((item) => item.label.toLowerCase().includes(query.toLowerCase()));
+  useEffect(() => setActiveIndex(0), [query]);
+  const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "ArrowDown") { event.preventDefault(); setActiveIndex((index) => filtered.length ? (index + 1) % filtered.length : 0); }
+    else if (event.key === "ArrowUp") { event.preventDefault(); setActiveIndex((index) => filtered.length ? (index - 1 + filtered.length) % filtered.length : 0); }
+    else if (event.key === "Enter" && filtered[activeIndex]) { event.preventDefault(); navigate(filtered[activeIndex].to); close(); }
+  };
+  return <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && close()}><div className="command-palette" role="dialog" aria-modal="true" aria-label="Workspace commands"><div className="palette-search"><Search size={18} /><input ref={inputRef} value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={onKeyDown} placeholder="Search workspace..." /><kbd>ESC</kbd></div><div className="palette-list">{filtered.map(({ label, to, icon: Icon }, index) => <Link to={to} onClick={close} className={`palette-item ${index === activeIndex ? "active" : ""}`} key={to} onMouseEnter={() => setActiveIndex(index)}><Icon size={17} /><span>{label}</span><span className="palette-arrow">↵</span></Link>)}{!filtered.length && <p className="palette-empty">No matching command</p>}</div><div className="palette-footer"><span><kbd>↑</kbd><kbd>↓</kbd> navigate</span><span><kbd>↵</kbd> open</span><span><kbd>ESC</kbd> close</span></div></div></div>;
 }

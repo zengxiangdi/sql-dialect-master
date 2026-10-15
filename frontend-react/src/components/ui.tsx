@@ -29,12 +29,22 @@ export function CodeEditor({ value, onChange, placeholder, className = "", readO
 
 export function CopyButton({ value }: { value: string }) {
   const [copied, setCopied] = useState(false);
-  const copy = async () => { await navigator.clipboard.writeText(value); setCopied(true); window.setTimeout(() => setCopied(false), 1500); };
+  const copy = async () => {
+    try {
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(value);
+      else {
+        const area = document.createElement("textarea");
+        area.value = value; area.setAttribute("readonly", ""); area.style.position = "fixed"; area.style.opacity = "0";
+        document.body.appendChild(area); area.select(); document.execCommand("copy"); area.remove();
+      }
+      setCopied(true); window.setTimeout(() => setCopied(false), 1500);
+    } catch { setCopied(false); }
+  };
   return <Button variant="ghost" icon={copied ? <Check size={14} /> : <Copy size={14} />} onClick={copy} disabled={!value}>{copied ? "Copied" : "Copy"}</Button>;
 }
 
 export function DownloadButton({ value, filename = "converted.sql" }: { value: string; filename?: string }) {
-  const download = () => { const url = URL.createObjectURL(new Blob([value], { type: "text/plain" })); const anchor = document.createElement("a"); anchor.href = url; anchor.download = filename; anchor.click(); URL.revokeObjectURL(url); };
+  const download = () => { const url = URL.createObjectURL(new Blob([value], { type: "text/plain;charset=utf-8" })); const anchor = document.createElement("a"); anchor.href = url; anchor.download = filename; document.body.appendChild(anchor); anchor.click(); anchor.remove(); window.setTimeout(() => URL.revokeObjectURL(url), 0); };
   return <Button variant="ghost" icon={<Download size={14} />} onClick={download} disabled={!value}>Download</Button>;
 }
 
