@@ -54,6 +54,9 @@ All notable changes to SQL Dialect Master are documented here.
 ### Changed
 
 - `BoundedWorkerPool.shutdown()` 现为幂等: 重复调用不再抛 RuntimeError, 而是一次性关闭后静默返回。依赖旧重复-shutdown 报错语义的调用方需改为单一 shutdown 点。经检索, 仓库内无调用方依赖旧报错语义。
+- 退役的 Streamlit/Python `frontend/` 前端及其专属测试已移除，React workspace 现在是唯一产品前端。
+- 新增 `POST /api/diff` 语义 SQL 比较端点，返回等价性状态、差异分类和结构化发现。
+- `/api/parse` 增加有界请求级结果缓存；readiness 探针改用单一缓存来源，避免镜像状态漂移。
 
 ## [1.1.3] - 2026-10-12
 
