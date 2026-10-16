@@ -849,13 +849,17 @@ async def get_stats():
 # Custom exception handler for better error responses
 @app.exception_handler(HTTPException)
 async def custom_http_exception_handler(request: Request, exc: HTTPException):
+    error_code_by_status = {
+        503: ErrorCode.SERVICE_UNAVAILABLE.value,
+        504: ErrorCode.REQUEST_TIMEOUT.value,
+    }
     return JSONResponse(
         status_code=exc.status_code,
         headers=exc.headers,
         content={
             "success": False,
             "error": {
-                "code": exc.status_code,
+                "code": error_code_by_status.get(exc.status_code, exc.status_code),
                 "message": exc.detail,
                 "type": "HTTPException"
             },

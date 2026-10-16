@@ -5,8 +5,10 @@ import json
 
 import pytest
 from starlette.responses import JSONResponse, Response, StreamingResponse
+from fastapi import HTTPException
 
 from backend.api.middleware import StructuredLoggingMiddleware
+from backend.api.main import custom_http_exception_handler
 
 
 REQUEST_ID = "12345678-1234-4123-8123-123456789abc"
@@ -59,6 +61,20 @@ def test_domain_error_code_is_preserved_across_4xx_normalization():
     )
 
     assert json.loads(normalized.body)["error"]["code"] == "TRANSPILE_FAILED"
+
+
+@pytest.mark.parametrize(
+    ("status_code", "expected_code"),
+    [(503, "SERVICE_UNAVAILABLE"), (504, "REQUEST_TIMEOUT")],
+)
+def test_http_exception_handler_uses_string_codes_for_5xx(status_code, expected_code):
+    response = asyncio.run(
+        custom_http_exception_handler(
+            None, HTTPException(status_code=status_code, detail="temporary failure")
+        )
+    )
+
+    assert json.loads(response.body)["error"]["code"] == expected_code
 
 
 def test_non_json_response_is_left_unchanged():
