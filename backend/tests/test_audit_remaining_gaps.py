@@ -46,8 +46,8 @@ def test_readiness_cache_is_shared_by_deep_health(monkeypatch):
             }
 
         monkeypatch.setattr(readiness, "_run_checks", fake_probe)
-        readiness._cached_checks = None
-        readiness._cached_at = 0.0
+        readiness._READINESS_CACHE["checks"] = None
+        readiness._READINESS_CACHE["cached_at"] = 0.0
         original_ttl = readiness._READINESS_CACHE_TTL_SECONDS
         readiness._READINESS_CACHE_TTL_SECONDS = 30.0
         try:
@@ -82,8 +82,8 @@ def test_real_app_health_probes_accept_authorized_probe(monkeypatch):
             "nl2sql": {"status": "ok"},
         },
     )
-    readiness._cached_checks = None
-    readiness._cached_at = 0.0
+    readiness._READINESS_CACHE["checks"] = None
+    readiness._READINESS_CACHE["cached_at"] = 0.0
     client = TestClient(app)
 
     ready = client.get("/ready", headers=PROBE_HEADERS)
@@ -113,8 +113,8 @@ def test_real_app_ready_and_deep_health_share_probe_cache(monkeypatch):
 
     monkeypatch.setenv("SDM_HEALTH_PROBE_TOKEN", "test-health-token")
     monkeypatch.setattr(readiness, "_run_checks", fake_probe)
-    readiness._cached_checks = None
-    readiness._cached_at = 0.0
+    readiness._READINESS_CACHE["checks"] = None
+    readiness._READINESS_CACHE["cached_at"] = 0.0
     original_ttl = readiness._READINESS_CACHE_TTL_SECONDS
     readiness._READINESS_CACHE_TTL_SECONDS = 30.0
     try:
@@ -124,8 +124,8 @@ def test_real_app_ready_and_deep_health_share_probe_cache(monkeypatch):
         assert calls == 1
     finally:
         readiness._READINESS_CACHE_TTL_SECONDS = original_ttl
-        readiness._cached_checks = None
-        readiness._cached_at = 0.0
+        readiness._READINESS_CACHE["checks"] = None
+        readiness._READINESS_CACHE["cached_at"] = 0.0
 
 
 def test_real_app_health_probes_return_503_on_dependency_failure(monkeypatch):
@@ -142,8 +142,8 @@ def test_real_app_health_probes_return_503_on_dependency_failure(monkeypatch):
         }
 
     monkeypatch.setattr(readiness, "_run_checks", failed_probe)
-    readiness._cached_checks = None
-    readiness._cached_at = 0.0
+    readiness._READINESS_CACHE["checks"] = None
+    readiness._READINESS_CACHE["cached_at"] = 0.0
     client = TestClient(app)
 
     response = client.get("/ready", headers=PROBE_HEADERS)
@@ -178,8 +178,8 @@ def test_health_deep_accepts_internal_probe_token(monkeypatch):
             "nl2sql": {"status": "ok"},
         },
     )
-    readiness._cached_checks = None
-    readiness._cached_at = 0.0
+    readiness._READINESS_CACHE["checks"] = None
+    readiness._READINESS_CACHE["cached_at"] = 0.0
     app = FastAPI()
     app.add_middleware(RateLimitMiddleware, enabled=True)
 

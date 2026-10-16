@@ -13,8 +13,6 @@ def test_deep_health_sanitizes_internal_error_and_returns_503(monkeypatch):
     monkeypatch.setattr("backend.core.transpiler.SQLTranspiler.transpile", explode)
     readiness._READINESS_CACHE["checks"] = None
     readiness._READINESS_CACHE["cached_at"] = 0.0
-    readiness._cached_checks = None
-    readiness._cached_at = 0.0
 
     response = TestClient(app).get(
         "/health/deep",

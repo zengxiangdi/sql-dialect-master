@@ -160,14 +160,14 @@ def _run_checks() -> dict[str, dict[str, Any]]:
 async def _get_checks() -> dict[str, dict[str, Any]]:
     """Run at most one expensive probe at a time per event loop and reuse it briefly."""
     now = time.monotonic()
-    cached_checks = globals().get("_cached_checks", _READINESS_CACHE["checks"])
-    cached_at = globals().get("_cached_at", _READINESS_CACHE["cached_at"])
+    cached_checks = _READINESS_CACHE["checks"]
+    cached_at = _READINESS_CACHE["cached_at"]
     if cached_checks is not None and now - cached_at < _READINESS_CACHE_TTL_SECONDS:
         return cached_checks
     async with _get_readiness_lock():
         now = time.monotonic()
-        cached_checks = globals().get("_cached_checks", _READINESS_CACHE["checks"])
-        cached_at = globals().get("_cached_at", _READINESS_CACHE["cached_at"])
+        cached_checks = _READINESS_CACHE["checks"]
+        cached_at = _READINESS_CACHE["cached_at"]
         if cached_checks is not None and now - cached_at < _READINESS_CACHE_TTL_SECONDS:
             return cached_checks
         try:
@@ -180,8 +180,6 @@ async def _get_checks() -> dict[str, dict[str, Any]]:
             checks = {"probe": {"status": "error", "code": "probe_failed"}}
         _READINESS_CACHE["checks"] = checks
         _READINESS_CACHE["cached_at"] = time.monotonic()
-        globals()["_cached_checks"] = checks
-        globals()["_cached_at"] = _READINESS_CACHE["cached_at"]
         return checks
 
 

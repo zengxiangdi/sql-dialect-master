@@ -41,8 +41,8 @@ def test_readiness_probe_is_cached_and_single_flight(monkeypatch):
             }
 
         monkeypatch.setattr(readiness, "_run_checks", fake_checks)
-        readiness._cached_checks = None
-        readiness._cached_at = 0.0
+        readiness._READINESS_CACHE["checks"] = None
+        readiness._READINESS_CACHE["cached_at"] = 0.0
 
         first, second = await asyncio.gather(
             readiness._get_checks(),
