@@ -1,11 +1,11 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AppRoutes } from "./routes";
 import { AppProvider } from "../lib/app-context";
 
 describe("React workspace shell", () => {
-  afterEach(() => { cleanup(); localStorage.clear(); });
+  afterEach(() => { cleanup(); localStorage.clear(); vi.unstubAllGlobals(); });
   it("renders the Convert workspace with keyboard command affordance", () => {
     render(<MemoryRouter initialEntries={["/convert"]}><AppProvider><AppRoutes /></AppProvider></MemoryRouter>);
     expect(screen.getByRole("heading", { name: "Convert SQL with confidence" })).toBeInTheDocument();
@@ -29,5 +29,21 @@ describe("React workspace shell", () => {
     localStorage.setItem("sdm.history", JSON.stringify([{ source: null }, { id: "missing-status" }]));
     render(<MemoryRouter initialEntries={["/history"]}><AppProvider><AppRoutes /></AppProvider></MemoryRouter>);
     expect(screen.getByText("No local history yet")).toBeInTheDocument();
+  });
+
+  it("rechecks API health when the document becomes visible", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      json: async () => ({ status: "alive", version: "1.1.4" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<MemoryRouter initialEntries={["/convert"]}><AppProvider><AppRoutes /></AppProvider></MemoryRouter>);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const initialCalls = fetchMock.mock.calls.length;
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+    fireEvent(document, new Event("visibilitychange"));
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(initialCalls));
   });
 });

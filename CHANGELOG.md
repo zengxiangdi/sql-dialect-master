@@ -51,6 +51,10 @@ All notable changes to SQL Dialect Master are documented here.
 - Developer tooling uses the project `.venv`; build and Twine are included
   in the QA extra. CodeGraph indexes are ignored by Git.
 
+### Changed
+
+- `BoundedWorkerPool.shutdown()` 现为幂等: 重复调用不再抛 RuntimeError, 而是一次性关闭后静默返回。依赖旧重复-shutdown 报错语义的调用方需改为单一 shutdown 点。经检索, 仓库内无调用方依赖旧报错语义。
+
 ## [1.1.3] - 2026-10-12
 
 ### API and security hardening

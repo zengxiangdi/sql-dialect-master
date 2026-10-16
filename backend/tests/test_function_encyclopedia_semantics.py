@@ -48,3 +48,16 @@ def test_unknown_function_semantics_remain_explicitly_unknown(encyclopedia):
     assert result["status"] == "unknown"
     assert result["equivalent"] is False
     assert result["function"] == "DOES_NOT_EXIST"
+
+
+def test_search_cache_scopes_category_and_isolates_mutations(encyclopedia):
+    date_results = encyclopedia.search("date", limit=2, category="date")
+    date_results[0]["name"] = "mutated"
+
+    repeated = encyclopedia.search("date", limit=2, category="date")
+    string_results = encyclopedia.search("date", limit=2, category="string")
+
+    assert repeated[0]["name"] != "mutated"
+    assert all(item["category"] == "date" for item in repeated)
+    assert all(item["category"] == "string" for item in string_results)
+    assert len(encyclopedia._search_cache) == 2

@@ -11,6 +11,9 @@ Provides comprehensive SQL function lookup with:
 import json
 import copy
 import logging
+import threading
+import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 from difflib import SequenceMatcher
@@ -58,6 +61,10 @@ class FunctionEncyclopedia:
         self.semantic_registry = semantic_registry or FunctionSemanticRegistry()
         self.functions: List[FunctionInfo] = self._load_data()
         self._build_index()
+        self._search_cache: OrderedDict[tuple[str, str | None, int], tuple[float, tuple[FunctionInfo, ...]]] = OrderedDict()
+        self._search_cache_lock = threading.RLock()
+        self._search_cache_max_size = 256
+        self._search_cache_ttl = 60.0
     
     def _load_data(self) -> List[FunctionInfo]:
         """Load function data from JSON file.
@@ -103,7 +110,7 @@ class FunctionEncyclopedia:
             if category in self.category_index:
                 self.category_index[category].append(func)
     
-    def search(self, query: str, limit: int = None) -> List[FunctionInfo]:
+    def search(self, query: str, limit: int = None, category: str = None) -> List[FunctionInfo]:
         """Search functions with fuzzy matching.
         
         Args:
@@ -117,31 +124,56 @@ class FunctionEncyclopedia:
         # ``None`` as asking for the configured default.
         limit = settings.function_search_limit if limit is None else max(0, limit)
         query = query.upper().strip()
+        normalized_category = category.lower().strip() if category else None
+        cache_key = (query, normalized_category, limit)
+        now = time.monotonic()
+        with self._search_cache_lock:
+            cached = self._search_cache.get(cache_key)
+            if cached is not None:
+                cached_at, value = cached
+                if now - cached_at < self._search_cache_ttl:
+                    self._search_cache.move_to_end(cache_key)
+                    return copy.deepcopy(list(value))
+                self._search_cache.pop(cache_key, None)
+
+        candidates = (
+            self.category_index.get(normalized_category, [])
+            if normalized_category
+            else self.functions
+        )
         
         if not query:
-            return copy.deepcopy(self.functions[:limit])
+            result = candidates[:limit]
+        else:
+            results: List[tuple] = []
         
-        results: List[tuple] = []
-        
-        for func in self.functions:
-            name = func.get("name", "").upper()
-            description = func.get("description", "").upper()
-            
-            if query == name:
-                results.append((func, 1.0))
-            elif name.startswith(query):
-                results.append((func, 0.9))
-            elif query in name:
-                results.append((func, 0.7))
-            elif query in description:
-                results.append((func, 0.5))
-            else:
-                ratio = SequenceMatcher(None, query, name).ratio()
-                if ratio > settings.function_fuzzy_threshold:
-                    results.append((func, ratio))
-        
-        results.sort(key=lambda x: x[1], reverse=True)
-        return copy.deepcopy([r[0] for r in results[:limit]])
+            for func in candidates:
+                name = func.get("name", "").upper()
+                description = func.get("description", "").upper()
+
+                if query == name:
+                    results.append((func, 1.0))
+                elif name.startswith(query):
+                    results.append((func, 0.9))
+                elif query in name:
+                    results.append((func, 0.7))
+                elif query in description:
+                    results.append((func, 0.5))
+                else:
+                    ratio = SequenceMatcher(None, query, name).ratio()
+                    if ratio > settings.function_fuzzy_threshold:
+                        results.append((func, ratio))
+
+            results.sort(key=lambda x: x[1], reverse=True)
+            result = [item[0] for item in results[:limit]]
+
+        snapshot = tuple(copy.deepcopy(result))
+        with self._search_cache_lock:
+            self._search_cache[cache_key] = (now, snapshot)
+            self._search_cache.move_to_end(cache_key)
+            while len(self._search_cache) > self._search_cache_max_size:
+                self._search_cache.popitem(last=False)
+        return copy.deepcopy(list(snapshot))
     
     def get_function(self, name: str) -> Optional[FunctionInfo]:
         """Get detailed function information by exact name."""

@@ -11,23 +11,51 @@ const groups = [
 ];
 
 export function Shell() {
-  const { theme, setTheme } = useApp();
+  const { theme, setTheme, apiBase } = useApp();
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(false);
   const [palette, setPalette] = useState(false);
   const [apiStatus, setApiStatus] = useState<"checking" | "ready" | "offline">("checking");
   const inputRef = useRef<HTMLInputElement>(null);
   const commandTriggerRef = useRef<HTMLButtonElement>(null);
+  const healthRequestRef = useRef<AbortController | null>(null);
   const closePalette = useCallback(() => { setPalette(false); window.setTimeout(() => commandTriggerRef.current?.focus(), 0); }, []);
   useEffect(() => { const handler = (event: KeyboardEvent) => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); setPalette(true); } if (event.key === "Escape" && palette) closePalette(); }; window.addEventListener("keydown", handler); return () => window.removeEventListener("keydown", handler); }, [closePalette, palette]);
   useEffect(() => { if (palette) inputRef.current?.focus(); }, [palette]);
   useEffect(() => {
-    const controller = new AbortController();
-    api.health(controller.signal).then(() => setApiStatus("ready")).catch(() => {
-      if (!controller.signal.aborted) setApiStatus("offline");
-    });
-    return () => controller.abort();
-  }, []);
+    let active = true;
+    let timer: number | undefined;
+    const checkHealth = () => {
+      if (!active) return;
+      healthRequestRef.current?.abort();
+      const controller = new AbortController();
+      healthRequestRef.current = controller;
+      setApiStatus("checking");
+      api.health(controller.signal).then(() => {
+        if (active && !controller.signal.aborted) setApiStatus("ready");
+      }).catch(() => {
+        if (active && !controller.signal.aborted) setApiStatus("offline");
+      }).finally(() => {
+        if (healthRequestRef.current === controller) healthRequestRef.current = null;
+      });
+    };
+    const scheduleHealthCheck = () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+      timer = window.setTimeout(checkHealth, 250);
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") scheduleHealthCheck();
+    };
+    scheduleHealthCheck();
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      active = false;
+      if (timer !== undefined) window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      healthRequestRef.current?.abort();
+      healthRequestRef.current = null;
+    };
+  }, [apiBase]);
   const current = location.pathname.split("/")[1] || "convert";
   return <div className="app-shell">
     <aside className={`sidebar ${collapsed ? "collapsed" : ""}`}>
