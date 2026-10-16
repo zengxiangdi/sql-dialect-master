@@ -1,4 +1,4 @@
-import type { ConvertResponse, Dialect, DialectsResponse, FunctionItem, Nl2SqlResponse, ParseResponse, TypeMapping, TypeMappingsResponse } from "./types";
+import type { ConvertResponse, Dialect, DialectsResponse, FunctionItem, Nl2SqlResponse, ParseResponse, TypeMappingsResponse } from "./types";
 
 export class ApiError extends Error {
   status: number;
@@ -28,38 +28,6 @@ const requestId = () => {
 };
 
 export const apiBase = () => (localStorage.getItem("sdm.apiBase")?.trim() || import.meta.env.VITE_API_BASE_URL?.trim() || "").replace(/\/+$/, "");
-
-/**
- * The API intentionally keeps the type matrix keyed by canonical type name
- * for Python clients.  The React table needs a stable iterable, though, and
- * older deployments may already return an array.  Normalize both contracts
- * at this boundary so a server upgrade cannot turn the Types page into a
- * runtime `.map is not a function` error.
- */
-export function normalizeTypeMappings(payload: {
-  mappings?: unknown;
-  [key: string]: unknown;
-}): TypeMappingsResponse {
-  const raw = payload.mappings;
-  let mappings: TypeMapping[];
-  if (Array.isArray(raw)) {
-    mappings = raw.filter((item): item is TypeMapping => Boolean(item && typeof item === "object"));
-  } else if (raw && typeof raw === "object") {
-    mappings = Object.entries(raw).map(([type, value]) => ({
-      ...(value && typeof value === "object" ? value : {}),
-      type: type,
-      type_name: type,
-      canonical_type: type,
-    } as TypeMapping));
-  } else {
-    mappings = [];
-  }
-  return {
-    ...payload,
-    mappings,
-    type_count: typeof payload.type_count === "number" ? payload.type_count : mappings.length,
-  } as TypeMappingsResponse;
-}
 
 async function request<T>(path: string, init: RequestInit = {}, timeout = 30000): Promise<T> {
   const controller = new AbortController();
@@ -113,6 +81,7 @@ export const api = {
     request<ParseResponse>("/api/parse", { method: "POST", body: JSON.stringify({ sql, dialect }), signal }),
   functions: (search = "", category = "", limit = 100, signal?: AbortSignal) =>
     request<{ functions: FunctionItem[]; count: number; total: number }>(`/api/functions?limit=${limit}${search ? `&search=${encodeURIComponent(search)}` : ""}${category ? `&category=${encodeURIComponent(category)}` : ""}`, { signal }),
-  types: async (source?: Dialect, target?: Dialect, signal?: AbortSignal) => normalizeTypeMappings(await request<{ mappings?: unknown; [key: string]: unknown }>(`/api/types${source || target ? `?${source ? `source=${source}` : ""}${source && target ? "&" : ""}${target ? `target=${target}` : ""}` : ""}`, { signal })),
+  types: (source?: Dialect, target?: Dialect, signal?: AbortSignal) =>
+    request<TypeMappingsResponse>(`/api/types${source || target ? `?${source ? `source=${source}` : ""}${source && target ? "&" : ""}${target ? `target=${target}` : ""}` : ""}`, { signal }),
   health: (signal?: AbortSignal) => request<{ status: string; version: string }>("/health", { signal }, 5000),
 };

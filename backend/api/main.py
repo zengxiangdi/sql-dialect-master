@@ -696,9 +696,13 @@ async def list_types(
     if target is not None:
         target = normalize_dialect(target, "target dialect")
     matrix = type_mapper.get_matrix(source, target)
+    mappings = [
+        {"type": type_name, **mapping}
+        for type_name, mapping in matrix.items()
+    ] if isinstance(matrix, dict) else list(matrix)
     return {
         "success": True,
-        "mappings": matrix,
+        "mappings": mappings,
         "dialects": type_mapper.DIALECTS,
         "type_count": len(matrix),
         "precision_warnings": type_mapper.get_precision_warnings()

@@ -73,15 +73,11 @@ export interface FunctionItem {
 }
 
 export interface TypeMapping {
-  /** Canonical type name returned by the API (the API uses `type`). */
-  type?: string;
-  type_name?: string;
-  canonical_type?: string;
+  type: string;
   source?: string;
   target?: string;
   notes?: string;
   category?: string;
-  [dialect: string]: unknown;
 }
 
 export interface TypeMappingsResponse {
