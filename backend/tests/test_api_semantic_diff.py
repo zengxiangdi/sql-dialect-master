@@ -69,3 +69,21 @@ def test_existing_parse_and_convert_routes_remain_available():
         json={"sql": "SELECT 1", "source_dialect": "postgres", "target_dialect": "mysql"},
     ).status_code == 200
 
+
+def test_parse_reuses_cached_extraction_for_identical_requests(monkeypatch):
+    sql = "SELECT cache_probe_column FROM cache_probe_table"
+    main._parse_elements_cached.cache_clear()
+    parser = main._get_sql_parser("postgres")
+    original = parser.extract_elements
+    calls = 0
+
+    def counted(statement):
+        nonlocal calls
+        calls += 1
+        return original(statement)
+
+    monkeypatch.setattr(parser, "extract_elements", counted)
+    assert client.post("/api/parse", json={"sql": sql, "dialect": "postgres"}).status_code == 200
+    assert client.post("/api/parse", json={"sql": sql, "dialect": "postgres"}).status_code == 200
+    assert calls == 1
+

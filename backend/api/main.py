@@ -108,6 +108,12 @@ def _get_sql_parser(dialect: str) -> SQLParser:
     return SQLParser(dialect)
 
 
+@lru_cache(maxsize=256)
+def _parse_elements_cached(dialect: str, sql: str) -> dict[str, Any]:
+    """Cache bounded parser extraction results for repeated API queries."""
+    return _get_sql_parser(dialect).extract_elements(sql)
+
+
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     """Manage the service worker pool for a normal ASGI startup/shutdown."""
@@ -588,8 +594,8 @@ async def parse_sql(request: ParseRequest):
     Extracts tables, columns, functions, and other elements from SQL.
     """
     dialect = normalize_dialect(request.dialect)
-    parser = _get_sql_parser(dialect)
-    elements = await _run_cpu_bound(parser.extract_elements, request.sql)
+    elements = await _run_cpu_bound(_parse_elements_cached, dialect, request.sql)
+    elements = copy.deepcopy(elements)
     if "error" in elements:
         raise HTTPException(status_code=422, detail=elements["error"] or "SQL parsing failed")
     return {
