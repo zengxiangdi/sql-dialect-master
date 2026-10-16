@@ -84,13 +84,38 @@ def test_api_capacity_rejection_is_a_correlated_503(monkeypatch):
 
 
 def test_lifespan_closes_pool_and_a_new_startup_can_serve_requests(monkeypatch):
+    from backend.api import main
     monkeypatch.setattr(settings, "api_key", None)
     for _ in range(2):
         with TestClient(app) as client:
             assert client.post("/api/parse", json={"sql": "SELECT 1"}).status_code == 200
             pool = app.state.worker_pool
         assert not hasattr(app.state, "worker_pool")
+        assert main._worker_pool is None
+        assert main._worker_pool_exit_hook is None
         async def closed_pool():
             with pytest.raises(RuntimeError, match="shutdown"):
                 await pool.run(lambda: 1, timeout=1)
         asyncio.run(closed_pool())
+
+
+def test_non_asgi_pool_has_explicit_idempotent_shutdown(monkeypatch):
+    from backend.api import main
+
+    monkeypatch.setattr(main, "_worker_pool", None)
+    monkeypatch.setattr(main, "_worker_pool_exit_hook", None)
+    if hasattr(app.state, "worker_pool"):
+        del app.state.worker_pool
+
+    pool = main._get_worker_pool()
+    main.shutdown_worker_pool()
+    main.shutdown_worker_pool()
+
+    assert main._worker_pool is None
+    assert main._worker_pool_exit_hook is None
+    with pytest.raises(RuntimeError, match="shutdown"):
+        pool._executor.submit(lambda: 1)
+
+    rebuilt = main._get_worker_pool()
+    assert rebuilt is not pool
+    main.shutdown_worker_pool()

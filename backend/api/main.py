@@ -12,11 +12,13 @@ Exact counts are derived from the canonical data files at runtime —
 see backend.core.metadata — and must not be restated here.
 """
 import asyncio
+import atexit
 import logging
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime
 from functools import lru_cache
+from threading import Lock
 from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
@@ -44,7 +46,51 @@ from backend.core.type_mapping import TypeMapper
 _log_level = getattr(logging, settings.log_level.upper(), logging.INFO)
 logger = setup_logging(level=_log_level, log_file=settings.log_file or None)
 api_logger = logging.getLogger(__name__)
-_worker_pool = BoundedWorkerPool(settings.api_workers, settings.api_queue_size)
+_worker_pool: BoundedWorkerPool | None = None
+_worker_pool_lock = Lock()
+_worker_pool_exit_hook = None
+
+
+def _get_worker_pool() -> BoundedWorkerPool:
+    """Return the process-wide pool, creating it lazily for non-ASGI callers.
+
+    ``app`` is intentionally resolved when this helper is called, after the
+    module-level FastAPI application has been initialized.  This keeps import
+    time free of executor creation while preserving the ASGI/non-ASGI split.
+    """
+    state_pool = getattr(app.state, "worker_pool", None)
+    if state_pool is not None:
+        return state_pool
+
+    global _worker_pool, _worker_pool_exit_hook
+    with _worker_pool_lock:
+        if _worker_pool is None:
+            _worker_pool = BoundedWorkerPool(settings.api_workers, settings.api_queue_size)
+            # Direct callers (benchmarks/tests/scripts) do not enter the ASGI
+            # lifespan, so give their lazily-created pool a process shutdown
+            # hook instead of leaving executor threads alive indefinitely.
+            _worker_pool_exit_hook = _worker_pool.shutdown
+            atexit.register(_worker_pool_exit_hook)
+        return _worker_pool
+
+
+def shutdown_worker_pool() -> None:
+    """Explicitly release a lazily-created non-ASGI worker pool.
+
+    Scripts and benchmarks should call this when their work is complete. The
+    atexit hook is retained only as a final safety net and is unregistered
+    before shutdown, so explicit and process-exit cleanup cannot run twice.
+    """
+    global _worker_pool, _worker_pool_exit_hook
+    with _worker_pool_lock:
+        pool = _worker_pool
+        hook = _worker_pool_exit_hook
+        _worker_pool = None
+        _worker_pool_exit_hook = None
+        if hook is not None:
+            atexit.unregister(hook)
+    if pool is not None:
+        pool.shutdown()
 
 
 @lru_cache(maxsize=len(SUPPORTED_DIALECTS))
@@ -62,22 +108,30 @@ def _get_sql_parser(dialect: str) -> SQLParser:
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     """Manage the service worker pool for a normal ASGI startup/shutdown."""
-    pool = BoundedWorkerPool(settings.api_workers, settings.api_queue_size)
+    pool = _get_worker_pool()
     application.state.worker_pool = pool
     try:
         yield
     finally:
-        pool.shutdown()
-        del application.state.worker_pool
+        if _worker_pool is pool:
+            shutdown_worker_pool()
+        else:
+            pool.shutdown()
+        if getattr(application.state, "worker_pool", None) is pool:
+            del application.state.worker_pool
 
 
 async def _run_cpu_bound(func, *args):
     """Run parser/transpiler work off-loop with the configured timeout."""
     try:
-        pool = getattr(app.state, "worker_pool", _worker_pool)
+        pool = _get_worker_pool()
         return await pool.run(func, *args, timeout=settings.request_timeout)
     except WorkerCapacityError as exc:
-        raise HTTPException(status_code=503, detail=str(exc), headers={"Retry-After": "1"}) from exc
+        raise HTTPException(
+            status_code=503,
+            detail=str(exc),
+            headers={"Retry-After": "1"},
+        ) from exc
     except asyncio.TimeoutError as exc:
         raise HTTPException(
             status_code=504,

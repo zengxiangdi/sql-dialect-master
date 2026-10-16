@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-from threading import BoundedSemaphore
+from threading import BoundedSemaphore, Lock
 
 
 class WorkerCapacityError(RuntimeError):
@@ -23,6 +23,8 @@ class BoundedWorkerPool:
             raise ValueError("workers must be positive and queue_size non-negative")
         self._slots = BoundedSemaphore(workers + queue_size)
         self._executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="sdm-api")
+        self._shutdown_lock = Lock()
+        self._shutdown = False
 
     async def run(self, function, *args, timeout: float):
         if not self._slots.acquire(blocking=False):
@@ -41,4 +43,8 @@ class BoundedWorkerPool:
 
     def shutdown(self) -> None:
         """Cancel queued work; already-running calls retain their slots."""
+        with self._shutdown_lock:
+            if self._shutdown:
+                return
+            self._shutdown = True
         self._executor.shutdown(wait=False, cancel_futures=True)
