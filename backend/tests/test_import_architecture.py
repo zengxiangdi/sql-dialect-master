@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-RUNTIME_ROOTS = (REPO_ROOT / "backend" / "api", REPO_ROOT / "backend" / "core", REPO_ROOT / "examples", REPO_ROOT / "scripts", REPO_ROOT / "frontend")
+RUNTIME_ROOTS = (REPO_ROOT / "backend" / "api", REPO_ROOT / "backend" / "core", REPO_ROOT / "examples", REPO_ROOT / "scripts")
 
 
 def _python_files():

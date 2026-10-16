@@ -7,7 +7,6 @@ before the metadata module:
 - pyproject.toml = 1.1.0
 - backend/core/config.py api_version = "1.0.1"
 - .env.example = 1.0.1
-- frontend/pages/settings.py = "SQL Dialect Master v2.0"
 - main.py / settings.py / .env.example = "36 types" / "298 functions"
   (hardcoded, out of sync with type_mapping.json / functions_db.json)
 
@@ -30,7 +29,6 @@ PYPROJECT = ROOT / "pyproject.toml"
 METADATA_PY = ROOT / "backend" / "core" / "metadata.py"
 CONFIG_PY = ROOT / "backend" / "core" / "config.py"
 MAIN_PY = ROOT / "backend" / "api" / "main.py"
-SETTINGS_PY = ROOT / "frontend" / "pages" / "settings.py"
 ENV_EXAMPLE = ROOT / ".env.example"
 
 
@@ -69,25 +67,6 @@ class TestVersionSingleSourceOfTruth:
         match = re.search(r"SDM_API_VERSION=([^\n]+)", text)
         assert match, "SDM_API_VERSION missing from .env.example"
         assert match.group(1).strip() == metadata.PROJECT_VERSION
-
-    def test_settings_page_uses_project_version_not_v2(self) -> None:
-        text = SETTINGS_PY.read_text(encoding="utf-8")
-        assert "SQL Dialect Master v2.0" not in text
-        assert "meta.PROJECT_VERSION" in text
-
-    def test_settings_page_not_showing_release_v2_claim(self) -> None:
-        """Frontend v2 architecture must never be displayed as release v2.0.
-
-        The display text in the About section must use metadata.PROJECT_VERSION
-        (1.1.0), not "v2.0" or "v2" as a product release claim. The module
-        docstring mentioning "SQL Dialect Master v2" refers to the frontend
-        architecture generation, not a release version, and is acceptable.
-        """
-        text = SETTINGS_PY.read_text(encoding="utf-8")
-        # Only scan the About-section display block (after the "About" marker).
-        about_block = text.split("##### About", 1)[-1]
-        assert "v2.0" not in about_block
-        assert "SQL Dialect Master v2" not in about_block
 
 
 class TestMetadataCountsMatchDataFiles:

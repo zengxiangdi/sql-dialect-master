@@ -240,34 +240,6 @@ sql-dialect-master/
 │   │   └── validators.py        # Input validation
 │   │
 │   └── tests/                   # Test suite and regression coverage
-├── frontend/                    # Legacy Python view-model compatibility code
-│   ├── core/                    # Cross-cutting concerns
-│   │   ├── design_tokens.py     # Theme model (dark/light) + semantic status
-│   │   ├── navigation.py        # NavigationIntent contract
-│   │   ├── state.py             # SessionState adapter
-│   │   ├── themes.py            # Theme switching (dark/light only)
-│   │   ├── styles.py            # CSS generation from design tokens
-│   │   ├── escaping.py          # HTML-safe rendering helpers
-│   │   └── viewmodels.py        # Typed view models
-│   ├── pages/                   # One module per workspace page
-│   │   ├── convert.py
-│   │   ├── nl2sql.py
-│   │   ├── diff.py
-│   │   ├── lineage.py
-│   │   ├── runtime.py
-│   │   ├── functions.py
-│   │   ├── types.py
-│   │   ├── templates.py
-│   │   ├── history.py
-│   │   ├── settings.py
-│   │   └── query_analysis.py
-│   ├── ui/                      # Reusable UI widgets
-│   │   ├── command_palette.py
-│   │   ├── diff.py
-│   │   ├── editor.py
-│   │   └── status.py
-│   ├── app_context_v2.py        # Shared application context (v2)
-│   └── templates_v2.py          # SQL templates (v2)
 ├── examples/
 │   ├── api_client.py             # API usage examples
 │   └── basic_usage.py            # SDK usage examples

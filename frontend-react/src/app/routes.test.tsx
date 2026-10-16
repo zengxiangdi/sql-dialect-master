@@ -46,4 +46,34 @@ describe("React workspace shell", () => {
     fireEvent(document, new Event("visibilitychange"));
     await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(initialCalls));
   });
+
+  it("renders equivalent and different semantic diff responses", async () => {
+    let status: "equivalent" | "different" = "equivalent";
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => ({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      json: async () => url === "/health"
+        ? { status: "alive", version: "1.1.4" }
+        : {
+          success: true,
+          status,
+          equivalent: status === "equivalent",
+          differences: status === "different" ? ["Canonical AST SQL differs"] : [],
+          difference_categories: status === "different" ? ["projection"] : [],
+          structured_differences: status === "different" ? [{ category: "projection", severity: "warning", source_fragment: "id", target_fragment: "name", explanation: "Projection changed", confidence: 0.7 }] : [],
+          confidence: status === "equivalent" ? 0.95 : 0.7,
+        },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<MemoryRouter initialEntries={["/diff"]}><AppProvider><AppRoutes /></AppProvider></MemoryRouter>);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Compare" })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Compare" }));
+    await waitFor(() => expect(screen.getByText("Statements are semantically equivalent")).toBeInTheDocument());
+    status = "different";
+    fireEvent.change(screen.getByLabelText("Target SQL editor"), { target: { value: "SELECT name FROM users" } });
+    fireEvent.click(screen.getByRole("button", { name: "Compare" }));
+    await waitFor(() => expect(screen.getByText("Semantic status: different")).toBeInTheDocument());
+    expect(screen.getByText("projection · warning")).toBeInTheDocument();
+  });
 });

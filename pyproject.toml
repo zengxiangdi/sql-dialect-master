@@ -50,4 +50,4 @@ exclude = ["backend.tests*", "backend.benchmarks*"]
 [tool.pytest.ini_options]
 testpaths = ["backend/tests"]
 python_files = ["test_*.py"]
-addopts = "-v --tb=short --ignore=backend/tests/frontend"
+addopts = "-v --tb=short"

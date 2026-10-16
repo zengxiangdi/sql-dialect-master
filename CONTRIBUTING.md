@@ -70,7 +70,7 @@ We use `pytest` for testing. Please ensure all tests pass before submitting a PR
 - **Style**: We follow PEP 8. Please run `.venv/bin/ruff check backend/core backend/api --select E9,F --ignore F401` before committing.
 - **Type Hints**: Use Python type hints for function arguments and return values.
 - **Documentation**: Add docstrings to modules, classes, and functions (Google style).
-- **Modularity**: Keep components small and focused (e.g., separate UI logic into `frontend/ui`).
+- **Modularity**: Keep components small and focused (e.g., separate UI logic into `frontend-react/src/components`).
 
 ## 🚀 Adding New Features
 

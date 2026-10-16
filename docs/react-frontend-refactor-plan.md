@@ -104,4 +104,4 @@ npm --prefix frontend-react run build
 
 ## 当前实施状态
 
-当前重构已完成并可独立构建。React 通过独立静态站点部署；旧 `frontend/` Python 模块仅保留为历史兼容测试素材，Pytest 默认忽略已退休的 Streamlit 测试目录，不属于产品运行入口，也不会打包进 Python wheel。
+当前重构已完成并可独立构建。React 通过独立静态站点部署，是唯一产品前端；Python wheel 仅包含后端运行包。

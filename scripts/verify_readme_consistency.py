@@ -14,29 +14,14 @@ PYPROJECT = ROOT / "pyproject.toml"
 CONFIG = ROOT / "backend" / "core" / "config.py"
 METADATA = ROOT / "backend" / "core" / "metadata.py"
 BENCHMARK = ROOT / "backend" / "benchmarks" / "transpiler_benchmark.py"
-DESIGN_TOKENS = ROOT / "frontend" / "core" / "design_tokens.py"
-FRONTEND = ROOT / "frontend"
 REACT_FRONTEND = ROOT / "frontend-react"
 TYPE_MAPPING = ROOT / "backend" / "core" / "type_mapping.json"
 FUNCTIONS_DB = ROOT / "backend" / "core" / "functions_db.json"
 ENV_EXAMPLE = ROOT / ".env.example"
-SETTINGS_PAGE = ROOT / "frontend" / "pages" / "settings.py"
 
 
 def fail(message: str) -> None:
     raise SystemExit(f"README consistency check failed: {message}")
-
-
-def _extract_theme_names(design_tokens_text: str) -> list[str]:
-    """Extract canonical theme names from design_tokens.py.
-
-    Reads the THEMES dict literal so the check follows the source of truth
-    without depending on the exact key ordering in the file.
-    """
-    match = re.search(r"THEMES\s*:\s*dict\[[^\]]+\]\s*=\s*\{(.*?)\}", design_tokens_text, re.DOTALL)
-    if not match:
-        fail("THEMES dict not found in frontend/core/design_tokens.py")
-    return sorted(re.findall(r'"([a-z_]+)"\s*:', match.group(1)))
 
 
 def _readme_struct_section(readme: str) -> str:
@@ -106,46 +91,7 @@ def main() -> None:
     if not BENCHMARK.is_file():
         fail("README references a benchmark that does not exist")
 
-    # ── Frontend architecture consistency ─────────────────────────────
-    design_tokens_text = DESIGN_TOKENS.read_text(encoding="utf-8") if DESIGN_TOKENS.is_file() else ""
-    theme_names = _extract_theme_names(design_tokens_text)
-    if not theme_names:
-        fail("no theme names found in frontend/core/design_tokens.py")
-
-    # The README must not claim more themes than the canonical theme model.
-    # "5 themes" / "Custom Theme Editor" were the stale v1 claims; fail if
-    # they reappear in the current-features description.
-    for stale in ("5 themes", "Custom Theme Editor", "custom theme"):
-        if re.search(re.escape(stale), readme, re.IGNORECASE):
-            fail(f"README reintroduced stale v1 theme claim: {stale!r} "
-                 f"(canonical themes: {theme_names})")
-
-    # The obsolete v1 filenames that must not appear at the frontend root:
-    # frontend/app_context.py, frontend/components.py, frontend/themes.py,
-    # frontend/templates.py. The v2 architecture has replaced all of these.
-    obsolete_paths = [
-        "frontend/tabs/",
-        "frontend/app_context.py",
-        "frontend/components.py",
-        "frontend/themes.py",
-        "frontend/templates.py",
-    ]
-    struct_block = _readme_struct_section(readme)
-    for obsolete in obsolete_paths:
-        if obsolete in struct_block:
-            fail(f"README project structure documents obsolete v1 path: {obsolete!r}")
-
-    # Verify v2 frontend paths the README claims actually exist on disk.
-    for v2_path in ("core", "pages", "ui"):
-        if not (FRONTEND / v2_path).is_dir():
-            fail(f"README project structure references frontend/{v2_path}/ which does not exist")
-    for v2_file in ("app_context_v2.py", "templates_v2.py"):
-        if not (FRONTEND / v2_file).is_file():
-            fail(f"README project structure references frontend/{v2_file} which does not exist")
-
-    # React is the sole product frontend. The Python frontend tree remains in
-    # the source checkout only for compatibility-level view-model tests and is
-    # intentionally excluded from the packaged runtime.
+    # React is the sole product frontend.
     if not (REACT_FRONTEND / "package.json").is_file() or not (REACT_FRONTEND / "src").is_dir():
         fail("React frontend workspace is missing")
     if re.search(r"(?im)^.*(?:streamlit|sdm-streamlit|sdm_local_v2\.py).*$", readme):
@@ -210,26 +156,11 @@ def main() -> None:
                 f"does not match project version={version!r}"
             )
 
-    # The frontend settings page must not display the product version as
-    # "v2.0" (frontend architecture v2 != product release v2.0).
-    if SETTINGS_PAGE.is_file():
-        settings_text = SETTINGS_PAGE.read_text(encoding="utf-8")
-        if "SQL Dialect Master v2.0" in settings_text:
-            fail(
-                "frontend/pages/settings.py still claims 'SQL Dialect Master v2.0' — "
-                "must use metadata.PROJECT_VERSION"
-            )
-        if "meta.PROJECT_VERSION" not in settings_text:
-            fail(
-                "frontend/pages/settings.py does not reference meta.PROJECT_VERSION — "
-                "must use the canonical version constant"
-            )
-
     print(
         "README consistency check passed: "
         f"version={version}, requires-python={requires_python}, "
         f"dialects={len(actual_dialects)}, benchmark={BENCHMARK.relative_to(ROOT)}, "
-        f"themes={theme_names}"
+        f"react_frontend={REACT_FRONTEND.relative_to(ROOT)}"
     )
 
 

@@ -1,4 +1,4 @@
-import type { ConvertResponse, Dialect, DialectsResponse, FunctionItem, Nl2SqlResponse, ParseResponse, TypeMappingsResponse } from "./types";
+import type { ConvertResponse, Dialect, DialectsResponse, DiffResponse, FunctionItem, Nl2SqlResponse, ParseResponse, TypeMappingsResponse } from "./types";
 
 export class ApiError extends Error {
   status: number;
@@ -79,6 +79,8 @@ export const api = {
     request<Nl2SqlResponse>("/api/nl2sql", { method: "POST", body: JSON.stringify({ text, dialect, table_hint: table_hint || null }), signal }),
   parse: (sql: string, dialect: Dialect, signal?: AbortSignal) =>
     request<ParseResponse>("/api/parse", { method: "POST", body: JSON.stringify({ sql, dialect }), signal }),
+  diff: (source_sql: string, target_sql: string, source_dialect: Dialect, target_dialect: Dialect, signal?: AbortSignal) =>
+    request<DiffResponse>("/api/diff", { method: "POST", body: JSON.stringify({ source_sql, target_sql, source_dialect, target_dialect }), signal }),
   functions: (search = "", category = "", limit = 100, signal?: AbortSignal) =>
     request<{ functions: FunctionItem[]; count: number; total: number }>(`/api/functions?limit=${limit}${search ? `&search=${encodeURIComponent(search)}` : ""}${category ? `&category=${encodeURIComponent(category)}` : ""}`, { signal }),
   types: (source?: Dialect, target?: Dialect, signal?: AbortSignal) =>

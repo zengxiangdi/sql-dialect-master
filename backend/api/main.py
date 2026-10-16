@@ -13,9 +13,11 @@ see backend.core.metadata — and must not be restated here.
 """
 import asyncio
 import atexit
+import copy
 import logging
 import time
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from datetime import datetime
 from functools import lru_cache
 from threading import Lock
@@ -37,6 +39,7 @@ from backend.core.functions_lookup import FunctionEncyclopedia
 from backend.core.nl2sql import NL2SQLGenerator
 from backend.core.nl2sql_pipeline.orchestrator import SAFE_TABLE_HINT
 from backend.core.parser import SUPPORTED_DIALECTS, SQLParser
+from backend.core.semantic_diff import diff_sql_ast
 from backend.core.transpiler import SQLTranspiler
 from backend.core.type_mapping import TypeMapper
 
@@ -412,6 +415,15 @@ class ParseRequest(BaseModel):
     sql: str = Field(..., description="SQL statement to parse")
     dialect: str = Field("hive", description="SQL dialect")
 
+
+class DiffRequest(BaseModel):
+    """Semantic SQL comparison request."""
+
+    source_sql: str = Field(..., description="Source SQL statement")
+    target_sql: str = Field(..., description="Target SQL statement")
+    source_dialect: str = Field(..., description="Source SQL dialect")
+    target_dialect: str = Field(..., description="Target SQL dialect")
+
 class TypeMapRequest(BaseModel):
     """Type mapping request model."""
     type_name: str = Field(..., description="Source data type name")
@@ -586,6 +598,25 @@ async def parse_sql(request: ParseRequest):
         "elements": elements,
         "timestamp": datetime.now().isoformat()
     }
+
+
+@app.post("/api/diff", tags=["conversion"])
+async def compare_semantic_diff(request: DiffRequest):
+    """Compare source and target SQL without executing either statement."""
+    source_dialect = normalize_dialect(request.source_dialect, "source dialect")
+    target_dialect = normalize_dialect(request.target_dialect, "target dialect")
+    result = await _run_cpu_bound(
+        diff_sql_ast,
+        request.source_sql,
+        request.target_sql,
+        source_dialect,
+        target_dialect,
+    )
+    payload = asdict(result)
+    payload["success"] = True
+    if result.parse_error:
+        payload["error"] = result.parse_error
+    return payload
 
 @app.get("/api/functions", tags=["functions"])
 async def list_functions(

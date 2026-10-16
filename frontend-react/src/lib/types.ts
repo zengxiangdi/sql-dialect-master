@@ -64,6 +64,32 @@ export interface ParseResponse {
   };
 }
 
+export interface SemanticDifference {
+  category: string;
+  severity: string;
+  source_fragment: string;
+  target_fragment: string;
+  explanation: string;
+  confidence: number;
+  evidence?: string | null;
+}
+
+export interface DiffResponse {
+  success: boolean;
+  equivalent: boolean;
+  status: "equivalent" | "different" | "unknown" | "parse_error";
+  source_normalized?: string | null;
+  target_normalized?: string | null;
+  differences: string[];
+  difference_categories: string[];
+  structured_differences: SemanticDifference[];
+  semantic_classification?: string;
+  confidence: number;
+  evidence?: string | null;
+  parse_error?: string | null;
+  error?: string;
+}
+
 export interface FunctionItem {
   name: string;
   category: string;
