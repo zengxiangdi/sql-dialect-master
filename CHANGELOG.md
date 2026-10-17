@@ -2,6 +2,45 @@
 
 All notable changes to SQL Dialect Master are documented here.
 
+## [1.1.5] - 2026-10-17
+
+### New
+
+- Added `POST /api/diff` semantic-equivalence checks for source and target SQL
+  with both dialects; parse failures return `status="parse_error"` instead of
+  a 4xx response. The React semantic diff page now uses the real classifications.
+- React NL2SQL now accepts the existing `column_hints` field as comma-separated
+  column hints.
+- React function library categories load dynamically from
+  `/api/functions/categories` with a built-in fallback.
+
+### Changed
+
+- 5xx capacity and timeout responses now expose string error codes
+  (`SERVICE_UNAVAILABLE` / `REQUEST_TIMEOUT`) consistently with 4xx responses.
+- `/api/types` always returns an array; the React type model no longer supports
+  the old dictionary/array dual shape.
+- Removed the retired Streamlit frontend; React is the sole product frontend.
+
+### Fixed
+
+- JSON rule rewrites no longer truncate nested arguments in `JSON_EXTRACT` and
+  `PARSE_JSON`.
+- Fail-closed `STRING_AGG` dynamic-separator conversions no longer retain
+  contradictory success compatibility notes.
+- `CONCAT` is no longer misclassified as context-sensitive; equivalent CONCAT
+  queries remain `equivalent`.
+
+### Performance
+
+- Rule application now prefilters and caches applicable rules by dialect pair.
+- MySQL `--` parser preprocessing now uses one linear scan instead of repeated
+  O(n²) replacement.
+- `/api/parse` uses an in-process LRU cache, and function search uses LRU/TTL
+  caching.
+- Worker-pool shutdown is idempotent, with explicit shutdown support outside
+  ASGI, and readiness probes share one cache source.
+
 ## [1.1.4] - 2026-10-13
 
 ### Correctness and behavior changes

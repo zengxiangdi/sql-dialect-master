@@ -60,7 +60,7 @@ export function Shell() {
   return <div className="app-shell">
     <aside className={`sidebar ${collapsed ? "collapsed" : ""}`}>
       <div className="brand"><Link to="/convert" className="brand-mark"><span>↔</span><span className="brand-copy">SQL Dialect <b>Master</b><small>Developer workspace</small></span></Link><IconButton label="Collapse navigation" onClick={() => setCollapsed(!collapsed)}><ChevronLeft size={17} className={collapsed ? "rotate-180" : ""} /></IconButton></div>
-      <div className="workspace-chip"><span className="online-dot" /><span>Local workspace</span><small>v1.1.4</small></div>
+      <div className="workspace-chip"><span className="online-dot" /><span>Local workspace</span><small>v1.1.5</small></div>
       <nav className="nav-groups">{groups.map((group) => <div className="nav-group" key={group.label}><span className="nav-label">{group.label}</span>{group.items.map(({ to, label, icon: Icon }) => <NavLink key={to} to={to} aria-label={label} title={label} className={({ isActive }) => `nav-item ${isActive ? "active" : ""}`}><Icon size={17} aria-hidden="true" /><span>{label}</span></NavLink>)}</div>)}</nav>
       <div className="sidebar-bottom"><NavLink to="/runtime" aria-label="Runtime" title="Runtime" className={`nav-item ${current === "runtime" ? "active" : ""}`}><Activity size={17} aria-hidden="true" /><span>Runtime</span></NavLink><NavLink to="/settings" aria-label="Settings" title="Settings" className={`nav-item ${current === "settings" ? "active" : ""}`}><Settings2 size={17} aria-hidden="true" /><span>Settings</span></NavLink></div>
     </aside>
