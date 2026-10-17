@@ -52,3 +52,17 @@ def test_prepare_sql_for_parser_single_scan_matches_repeated_replace():
     assert prepare_sql_for_parser(sql, "mysql") == expected
 
 
+def test_concat_is_not_classified_as_context_sensitive():
+    result = diff_sql_ast(
+        "SELECT CONCAT(first_name, last_name) FROM users",
+        "SELECT CONCAT(first_name, last_name) FROM users",
+        source_dialect="mysql",
+        target_dialect="postgres",
+    )
+
+    # The dialect-aware normalizer may still expose a real CONCAT NULL
+    # handling difference; removing CONCAT from the context-sensitive set
+    # means that difference is classified as deterministic rather than
+    # downgraded to unknown.
+    assert result.status == "different"
+    assert "context_sensitive" not in result.difference_categories

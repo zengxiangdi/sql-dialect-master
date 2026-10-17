@@ -54,3 +54,29 @@ def test_semantic_diff_marks_context_sensitive_functions_unknown():
     assert result.status == "unknown"
     assert "context_sensitive" in result.difference_categories
     assert any("context-sensitive" in item.lower() for item in result.differences)
+
+
+def test_semantic_diff_treats_concat_as_deterministic_when_sql_matches():
+    result = diff_sql_ast(
+        "SELECT CONCAT(a, b) FROM x",
+        "SELECT CONCAT(a, b) FROM x",
+        source_dialect="postgres",
+        target_dialect="postgres",
+    )
+
+    assert result.status == "equivalent"
+    assert result.equivalent is True
+    assert "context_sensitive" not in result.difference_categories
+
+
+def test_semantic_diff_keeps_now_context_sensitive_when_sql_matches():
+    result = diff_sql_ast(
+        "SELECT NOW() FROM x",
+        "SELECT NOW() FROM x",
+        source_dialect="postgres",
+        target_dialect="postgres",
+    )
+
+    assert result.status == "unknown"
+    assert result.equivalent is False
+    assert "context_sensitive" in result.difference_categories

@@ -23,7 +23,6 @@ _CONTEXT_SENSITIVE_FUNCTIONS = {
     "RAND",
     "RANDOM",
     "UUID",
-    "CONCAT",
 }
 
 _CATEGORY_NODE_NAMES = {
