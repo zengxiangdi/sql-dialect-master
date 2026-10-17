@@ -12,11 +12,15 @@ class TestRuleSafetyClassification:
             assert rule.safety is not None
             assert rule.safety in (RuleSafety.STRUCTURED, RuleSafety.BOUNDED_REGEX, RuleSafety.LEGACY_REGEX)
 
-    def test_structured_rules_have_function_name_and_replacement(self):
+    def test_structured_rules_have_function_name_and_rewriter(self):
         for rule in TRANSFORM_RULES:
             if rule.safety == RuleSafety.STRUCTURED:
                 assert rule.function_name is not None
-                assert rule.structured_replacement is not None
+                assert (
+                    rule.structured_replacement is not None
+                    or rule.structured_replacer is not None
+                    or rule.full_sql_rewriter is not None
+                )
 
     def test_structured_rules_use_scanner(self):
         """Structured rules should be safe for nested function arguments."""

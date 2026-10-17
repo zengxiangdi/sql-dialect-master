@@ -1,4 +1,4 @@
-"""P5: dedicated regression tests for LEGACY_REGEX rules retained as lexical fallbacks.
+"""Regression tests for lexical fallbacks and scanner-backed JSON rewrites.
 
 After the P5 audit, the one genuinely high-risk semantic rule that is the
 *solo* mechanism (``clickhouse_array_join_to_postgres``) was migrated to an
@@ -8,8 +8,9 @@ engine (see :mod:`backend.tests.test_array_join_ast`).
 The remaining ``LEGACY_REGEX`` rules below are retained as simple lexical
 rewrites because the authoritative target output is already produced by
 ``sqlglot``'s native transpile path for every dialect pair they cover.
-They fire on the post-transpile string, but they no longer change the
-end-to-end result.  This file locks that contract:
+The JSON rules that previously used unsafe argument regexes now use the same
+scanner-backed path as the other structural rules.  This file locks both
+contracts:
 
 * each rule's pure-regex ``apply()`` still produces the expected lexical
   rewrite (so a future regex bug is caught even though the pipeline no
@@ -71,42 +72,38 @@ class TestLexicalApplyContract:
         assert out == "SELECT a FROM t LIMIT 5 OFFSET 10"
 
     def test_json_extract_mysql_to_postgres(self):
-        # The JSON-path argument '$.name' contains a single-quoted string
-        # literal that the executable-segment scanner treats as a
-        # non-executable region.  Because rule.apply() runs the regex
-        # segment-by-segment, a pattern that spans the literal boundary
-        # (JSON_EXTRACT(...) wrapping a quoted path) cannot match on
-        # segment boundaries — so the rule is fail-closed on this input.
-        # sqlglot's native path handles it (JSON_EXTRACT_PATH); this test
-        # locks that the rule does not fire AND does not corrupt the text.
-        assert _is_legacy("mysql_json_extract_to_postgres")
+        # Scanner-backed replacement consumes the complete call, including
+        # the quoted path argument, without crossing lexical boundaries.
+        assert not _is_legacy("mysql_json_extract_to_postgres")
         out, applied = _rule("mysql_json_extract_to_postgres").apply(
             "SELECT JSON_EXTRACT(payload, '$.name') FROM t"
         )
-        assert not applied, "rule must not fire when the pattern spans a literal boundary"
-        assert out == "SELECT JSON_EXTRACT(payload, '$.name') FROM t", (
-            f"rule must not corrupt text it did not apply to: {out!r}"
-        )
+        assert applied
+        assert out == "SELECT payload->>'name' FROM t"
 
     def test_json_extract_rule_matches_within_single_segment(self):
-        # If the JSON path lives entirely inside one executable segment
-        # (no FROM clause trailing it on the same segment boundary),
-        # the regex can fire — verify the rewrite is correct when it does.
-        assert _is_legacy("mysql_json_extract_to_postgres")
+        assert not _is_legacy("mysql_json_extract_to_postgres")
         out, applied = _rule("mysql_json_extract_to_postgres").apply(
-            "SELECT JSON_EXTRACT(payload, '$.name')"
+            "SELECT JSON_EXTRACT(COALESCE(payload, fallback), '$.a.b.c')"
         )
-        # This is a degenerate segment (no trailing keyword to split the
-        # segment) but the executable segment still ends at end-of-string,
-        # so the full pattern is visible and the rule should apply.
-        if applied:
-            assert "->>" in out, f"expected ->> rewrite, got {out!r}"
+        assert applied
+        assert out == "SELECT COALESCE(payload, fallback)->'a'->'b'->>'c'"
 
     def test_parse_json_snowflake_to_postgres(self):
-        assert _is_legacy("snowflake_parse_json_to_postgres")
-        out, applied = _rule("snowflake_parse_json_to_postgres").apply("SELECT PARSE_JSON(col) FROM t")
+        assert not _is_legacy("snowflake_parse_json_to_postgres")
+        out, applied = _rule("snowflake_parse_json_to_postgres").apply(
+            "SELECT PARSE_JSON(COALESCE(a, b)) FROM t"
+        )
         assert applied
-        assert "col::JSONB" in out
+        assert out == "SELECT COALESCE(a, b)::JSONB FROM t"
+
+    def test_substr_nested_arguments_only_change_function_name(self):
+        rule = _rule("oracle_substr_to_mysql")
+        out, applied = rule.apply(
+            "SELECT SUBSTR(COALESCE(value, fallback), 1, COALESCE(2, 3)) FROM t"
+        )
+        assert applied
+        assert out == "SELECT SUBSTRING(COALESCE(value, fallback), 1, COALESCE(2, 3)) FROM t"
 
     def test_array_length_postgres_to_hive(self):
         assert _is_legacy("postgres_array_length_to_hive")

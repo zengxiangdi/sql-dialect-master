@@ -207,6 +207,33 @@ def _replace_group_concat_to_string_agg(args: str, original: str) -> str:
     return result + ")"
 
 
+def _replace_json_extract_to_postgres(
+    args: str, original: str, source_dialect: str = ""
+) -> str:
+    """Convert a simple MySQL JSON path to a PostgreSQL operator chain.
+
+    The legacy regex for this rule could only see one path component and
+    could not safely consume nested expressions.  The function-call scanner
+    gives us complete top-level arguments, so nested expressions stay intact
+    while paths such as ``$.a.b.c`` become ``->'a'->'b'->>'c'``.
+    """
+    values = split_top_level_args(args)
+    if len(values) != 2:
+        return original
+    expression, path = (value.strip() for value in values)
+    if not expression or len(path) < 4 or path[0] != "'" or path[-1] != "'":
+        return original
+    path_text = path[1:-1]
+    match = re.fullmatch(r"\$\.(\w+(?:\.\w+)*)", path_text)
+    if not match:
+        return original
+    segments = match.group(1).split(".")
+    return expression + "".join(
+        f"->'{segment}'" if index < len(segments) - 1 else f"->>'{segment}'"
+        for index, segment in enumerate(segments)
+    )
+
+
 def _top_level_keyword(text: str, keyword: str) -> int:
     """Return the position of a keyword at top-level parentheses depth, or -1."""
     masked = mask_non_executable(text)
@@ -392,7 +419,11 @@ class TransformRule:
     @property
     def safety(self) -> RuleSafety:
         """Return the safety classification for this rule."""
-        if self.function_name and self.structured_replacement:
+        if self.function_name and (
+            self.structured_replacement
+            or self.structured_replacer
+            or self.full_sql_rewriter
+        ):
             return RuleSafety.STRUCTURED
         # Bounded regex rules use word boundaries and explicit patterns
         if self.pattern and (self.pattern.startswith(r"\b") or
@@ -744,7 +775,9 @@ TRANSFORM_RULES: List[TransformRule] = [
         replacement=r"\1->>'\2'",
         note="Converted JSON_EXTRACT to ->> operator",
         category=RuleCategory.JSON,
-        priority=60
+        priority=60,
+        function_name="JSON_EXTRACT",
+        structured_replacer=_replace_json_extract_to_postgres,
     ),
     TransformRule(
         name="snowflake_parse_json_to_postgres",
@@ -754,7 +787,9 @@ TRANSFORM_RULES: List[TransformRule] = [
         replacement=r"\1::JSONB",
         note="Converted PARSE_JSON to ::JSONB cast",
         category=RuleCategory.JSON,
-        priority=60
+        priority=60,
+        function_name="PARSE_JSON",
+        structured_replacement="{0}::JSONB",
     ),
 
     # =========================================================================
