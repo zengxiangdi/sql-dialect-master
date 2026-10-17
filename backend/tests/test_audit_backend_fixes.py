@@ -31,3 +31,14 @@ def test_fail_closed_note_filter_removes_both_success_notes_only(monkeypatch):
     assert rule_success not in result.compatibility_notes
 
 
+def test_rule_engine_cached_dialect_subset_matches_uncached_result():
+    engine = RuleEngine()
+    sql = "SELECT IFNULL(COALESCE(a, b), c), JSON_EXTRACT(payload, '$.a.b') FROM t"
+
+    cached_result = engine.apply_rules(sql, "mysql", "postgres")
+    engine._applicable_rules_cache.clear()
+    uncached_result = engine.apply_rules(sql, "mysql", "postgres")
+
+    assert cached_result == uncached_result
+
+

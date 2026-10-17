@@ -852,6 +852,10 @@ class RuleEngine:
             rules: List of transformation rules. Uses default rules if None.
         """
         self.rules = list(TRANSFORM_RULES if rules is None else rules)
+        # Dialect applicability is static for a rule-engine instance.  Keep a
+        # small pair-keyed cache so the hot conversion path does not rescan
+        # every rule on every statement.  Mutating operations invalidate it.
+        self._applicable_rules_cache: dict[tuple[str, str], List[TransformRule]] = {}
         self._sort_rules()
         self._compile_patterns()
 
@@ -884,24 +888,23 @@ class RuleEngine:
         source_lower = source.lower()
         fail_closed_dynamic_separator = False
 
-        for rule in self.rules:
-            if rule.matches_dialects(source, target):
-                new_result, applied = rule.apply(result, source_lower)
-                if applied:
-                    cleaned, sentinel_was_present = strip_dynamic_separator_sentinel(new_result)
-                    if sentinel_was_present:
-                        fail_closed_dynamic_separator = True
-                        # B2-1d: do NOT report the rule's success note
-                        # when the rewrite actually failed closed; the
-                        # success note would contradict the fail-closed
-                        # result.  The DYNAMIC_SEPARATOR_FAIL_NOTE
-                        # (appended below) is the only note for this
-                        # rule in that case.
-                    else:
-                        result = cleaned
-                        notes.append(rule.note)
-                    if sentinel_was_present:
-                        result = cleaned
+        for rule in self.get_applicable_rules(source_lower, target):
+            new_result, applied = rule.apply(result, source_lower)
+            if applied:
+                cleaned, sentinel_was_present = strip_dynamic_separator_sentinel(new_result)
+                if sentinel_was_present:
+                    fail_closed_dynamic_separator = True
+                    # B2-1d: do NOT report the rule's success note
+                    # when the rewrite actually failed closed; the
+                    # success note would contradict the fail-closed
+                    # result.  The DYNAMIC_SEPARATOR_FAIL_NOTE
+                    # (appended below) is the only note for this
+                    # rule in that case.
+                else:
+                    result = cleaned
+                    notes.append(rule.note)
+                if sentinel_was_present:
+                    result = cleaned
 
         if fail_closed_dynamic_separator:
             notes.append(DYNAMIC_SEPARATOR_FAIL_NOTE)
@@ -918,7 +921,14 @@ class RuleEngine:
         Returns:
             List of applicable rules
         """
-        return [r for r in self.rules if r.matches_dialects(source, target)]
+        key = (source.strip().lower(), target.strip().lower())
+        cached = self._applicable_rules_cache.get(key)
+        if cached is None:
+            cached = [r for r in self.rules if r.matches_dialects(*key)]
+            self._applicable_rules_cache[key] = cached
+        # Preserve the historical fresh-list behavior for callers that may
+        # mutate the returned collection without changing engine state.
+        return list(cached)
 
     def add_rule(self, rule: TransformRule) -> None:
         """Add a new rule.
@@ -938,6 +948,7 @@ class RuleEngine:
             raise ValueError(f"Invalid pattern in rule {rule.name}: {exc}") from exc
         self.rules.append(rule)
         self._sort_rules()
+        self._applicable_rules_cache.clear()
 
     def disable_rule(self, name: str) -> bool:
         """Disable a rule by name.
