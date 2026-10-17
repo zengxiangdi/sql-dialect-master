@@ -312,11 +312,15 @@ class TestB2_1D_TransformationNotesOnFailClosed:
         assert "B2-1b" in (r.error or ""), r.error
         contradictory = [
             n for n in (r.compatibility_notes or [])
-            if "STRING_AGG" in n and "GROUP_CONCAT" in n
+            if n in {
+                "STRING_AGG → GROUP_CONCAT transformation",
+                "Converted STRING_AGG to GROUP_CONCAT",
+            }
         ]
         assert not contradictory, (
             f"transpile failure carries contradictory notes: {contradictory}"
         )
+        assert DYNAMIC_SEPARATOR_FAIL_NOTE in r.compatibility_notes
 
 
 class TestB2_1C_OriginalTextPreservedOnFailClosed:
