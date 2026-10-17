@@ -39,4 +39,41 @@ describe("API client request lifecycle", () => {
 
     await expect(request).rejects.toMatchObject({ name: "AbortError" });
   });
+
+  it("sends optional NL2SQL column hints as an array", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      json: async () => ({ success: true, input_text: "count orders", sql: "SELECT COUNT(*) FROM orders", dialect: "postgres", explanation: "", confidence: 1, suggestions: [] }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.nl2sql("count orders", "postgres", "orders", ["orders.id", "orders.created_at"]);
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({
+      text: "count orders",
+      dialect: "postgres",
+      table_hint: "orders",
+      column_hints: ["orders.id", "orders.created_at"],
+    });
+  });
+
+  it("keeps the previous NL2SQL signal argument and empty-hints contract", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      json: async () => ({ success: true }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    await api.nl2sql("list orders", "postgres", "orders", controller.signal);
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+    expect(JSON.parse(String(init.body))).toMatchObject({ column_hints: null });
+  });
 });

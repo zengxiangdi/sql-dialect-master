@@ -1,4 +1,4 @@
-import type { ConvertResponse, Dialect, DialectsResponse, DiffResponse, FunctionItem, Nl2SqlResponse, ParseResponse, TypeMappingsResponse } from "./types";
+import type { ConvertResponse, Dialect, DialectsResponse, DiffResponse, FunctionCategory, FunctionItem, Nl2SqlResponse, ParseResponse, TypeMappingsResponse } from "./types";
 
 export class ApiError extends Error {
   status: number;
@@ -75,14 +75,23 @@ export const api = {
   dialects: () => request<DialectsResponse>("/api/dialects"),
   convert: (sql: string, source_dialect: Dialect, target_dialect: Dialect, pretty = true, signal?: AbortSignal) =>
     request<ConvertResponse>("/api/convert", { method: "POST", body: JSON.stringify({ sql, source_dialect, target_dialect, pretty }), signal }),
-  nl2sql: (text: string, dialect: Dialect, table_hint?: string, signal?: AbortSignal) =>
-    request<Nl2SqlResponse>("/api/nl2sql", { method: "POST", body: JSON.stringify({ text, dialect, table_hint: table_hint || null }), signal }),
+  nl2sql: (text: string, dialect: Dialect, table_hint?: string, column_hintsOrSignal?: string[] | AbortSignal, signal?: AbortSignal) => {
+    // Keep the previous fourth-argument AbortSignal form working for callers
+    // that do not provide column hints yet.
+    const column_hints = Array.isArray(column_hintsOrSignal) ? column_hintsOrSignal : undefined;
+    const requestSignal = Array.isArray(column_hintsOrSignal)
+      ? signal
+      : column_hintsOrSignal ?? signal;
+    return request<Nl2SqlResponse>("/api/nl2sql", { method: "POST", body: JSON.stringify({ text, dialect, table_hint: table_hint || null, column_hints: column_hints?.length ? column_hints : null }), signal: requestSignal });
+  },
   parse: (sql: string, dialect: Dialect, signal?: AbortSignal) =>
     request<ParseResponse>("/api/parse", { method: "POST", body: JSON.stringify({ sql, dialect }), signal }),
   diff: (source_sql: string, target_sql: string, source_dialect: Dialect, target_dialect: Dialect, signal?: AbortSignal) =>
     request<DiffResponse>("/api/diff", { method: "POST", body: JSON.stringify({ source_sql, target_sql, source_dialect, target_dialect }), signal }),
   functions: (search = "", category = "", limit = 100, signal?: AbortSignal) =>
     request<{ functions: FunctionItem[]; count: number; total: number }>(`/api/functions?limit=${limit}${search ? `&search=${encodeURIComponent(search)}` : ""}${category ? `&category=${encodeURIComponent(category)}` : ""}`, { signal }),
+  functionCategories: (signal?: AbortSignal) =>
+    request<{ categories: FunctionCategory[]; count: number }>("/api/functions/categories", { signal }),
   types: (source?: Dialect, target?: Dialect, signal?: AbortSignal) =>
     request<TypeMappingsResponse>(`/api/types${source || target ? `?${source ? `source=${source}` : ""}${source && target ? "&" : ""}${target ? `target=${target}` : ""}` : ""}`, { signal }),
   health: (signal?: AbortSignal) => request<{ status: string; version: string }>("/health", { signal }, 5000),

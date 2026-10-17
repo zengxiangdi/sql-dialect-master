@@ -98,6 +98,13 @@ export interface FunctionItem {
   dialects?: Record<string, string>;
 }
 
+export interface FunctionCategory {
+  name: string;
+  count: number;
+  description?: string;
+  icon?: string;
+}
+
 export interface TypeMapping {
   type: string;
   source?: string;

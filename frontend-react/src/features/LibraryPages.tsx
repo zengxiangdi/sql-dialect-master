@@ -5,13 +5,29 @@ import { DIALECT_LABELS, type Dialect, type FunctionItem, type TypeMapping } fro
 import { Badge, Card, DialectSelect, EmptyState, ErrorPanel } from "../components/ui";
 import { PageHeader } from "../components/PageHeader";
 
+const FALLBACK_FUNCTION_CATEGORIES = ["string", "date", "math", "aggregate", "window", "conditional", "conversion", "json", "array", "system", "geo"];
+
 export function FunctionsPage() {
   const [items, setItems] = useState<FunctionItem[]>([]);
+  const [categories, setCategories] = useState<string[]>(FALLBACK_FUNCTION_CATEGORIES);
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("");
   const [error, setError] = useState<ApiError | null>(null);
   const [loading, setLoading] = useState(true);
   const [reloadToken, setReloadToken] = useState(0);
+  useEffect(() => {
+    let active = true;
+    const controller = new AbortController();
+    api.functionCategories(controller.signal).then((data) => {
+      if (!active) return;
+      const next = data.categories.map((item) => item.name).filter(Boolean);
+      if (next.length) setCategories(next);
+    }).catch(() => {
+      // Keep the known list when the optional metadata endpoint is unavailable.
+      if (active) setCategories(FALLBACK_FUNCTION_CATEGORIES);
+    });
+    return () => { active = false; controller.abort(); };
+  }, [reloadToken]);
   useEffect(() => {
     let active = true;
     const controller = new AbortController();
@@ -21,7 +37,7 @@ export function FunctionsPage() {
     }, 180);
     return () => { active = false; controller.abort(); window.clearTimeout(timer); };
   }, [search, category, reloadToken]);
-  return <div><PageHeader eyebrow="LIBRARY / FUNCTIONS" title="Function encyclopedia" description="Search syntax, semantics, and dialect coverage from one compact reference." /><Card><div className="filter-row"><label className="search-field"><Search size={15} aria-hidden="true" /><span className="sr-only">Search functions</span><input aria-label="Search functions" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search functions..." /></label><label className="select-inline"><Filter size={14} aria-hidden="true" /><span className="sr-only">Filter functions by category</span><select aria-label="Filter functions by category" value={category} onChange={(e) => setCategory(e.target.value)}><option value="">All categories</option>{["string", "date", "math", "aggregate", "window", "conditional", "conversion", "json", "array", "system", "geo"].map((item) => <option key={item} value={item}>{item}</option>)}</select></label></div>{error ? <ErrorPanel message={error.message} onRetry={() => setReloadToken((value) => value + 1)} /> : loading ? <div className="loading-line" role="status">Loading functions…</div> : <div className="function-grid">{items.map((item) => <article className="function-card" key={item.name}><div className="function-title"><span className="function-symbol">ƒ</span><div><h3>{item.name}</h3><span className="muted">{item.category}</span></div></div><p>{item.description || "Cross-dialect SQL function"}</p><div className="dialect-pills">{Object.keys(item.dialects || {}).slice(0, 5).map((dialect) => <span key={dialect}>{DIALECT_LABELS[dialect as Dialect] || dialect}</span>)}</div></article>)}{!items.length && <EmptyState icon={<BookOpen size={20} />} title="No functions found" text="Try a broader search or clear the category filter." />}</div>}</Card></div>;
+  return <div><PageHeader eyebrow="LIBRARY / FUNCTIONS" title="Function encyclopedia" description="Search syntax, semantics, and dialect coverage from one compact reference." /><Card><div className="filter-row"><label className="search-field"><Search size={15} aria-hidden="true" /><span className="sr-only">Search functions</span><input aria-label="Search functions" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search functions..." /></label><label className="select-inline"><Filter size={14} aria-hidden="true" /><span className="sr-only">Filter functions by category</span><select aria-label="Filter functions by category" value={category} onChange={(e) => setCategory(e.target.value)}><option value="">All categories</option>{categories.map((item) => <option key={item} value={item}>{item}</option>)}</select></label></div>{error ? <ErrorPanel message={error.message} onRetry={() => setReloadToken((value) => value + 1)} /> : loading ? <div className="loading-line" role="status">Loading functions…</div> : <div className="function-grid">{items.map((item) => <article className="function-card" key={item.name}><div className="function-title"><span className="function-symbol">ƒ</span><div><h3>{item.name}</h3><span className="muted">{item.category}</span></div></div><p>{item.description || "Cross-dialect SQL function"}</p><div className="dialect-pills">{Object.keys(item.dialects || {}).slice(0, 5).map((dialect) => <span key={dialect}>{DIALECT_LABELS[dialect as Dialect] || dialect}</span>)}</div></article>)}{!items.length && <EmptyState icon={<BookOpen size={20} />} title="No functions found" text="Try a broader search or clear the category filter." />}</div>}</Card></div>;
 }
 
 export function TypesPage() {
