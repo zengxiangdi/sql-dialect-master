@@ -203,8 +203,25 @@ def prepare_sql_for_parser(sql: str, dialect: str | None = None) -> str:
     for start, end in executable_segments(sql, dialect=dialect):
         parts.append(sql[cursor:start])
         segment = sql[start:end]
-        while "--" in segment:
-            segment = segment.replace("--", "- -")
+        # A repeated ``str.replace`` scans and reallocates the complete
+        # segment once for every pass.  Scan each contiguous dash run once
+        # instead; repeated replacement ultimately inserts one space between
+        # every dash in a run, so this preserves the old output byte-for-byte.
+        if "--" in segment:
+            rewritten: list[str] = []
+            index = 0
+            while index < len(segment):
+                if segment[index] == "-":
+                    run_end = index + 1
+                    while run_end < len(segment) and segment[run_end] == "-":
+                        run_end += 1
+                    run_length = run_end - index
+                    rewritten.append("-" if run_length == 1 else "- " * (run_length - 1) + "-")
+                    index = run_end
+                else:
+                    rewritten.append(segment[index])
+                    index += 1
+            segment = "".join(rewritten)
         parts.append(segment)
         cursor = end
     parts.append(sql[cursor:])

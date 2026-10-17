@@ -42,3 +42,13 @@ def test_rule_engine_cached_dialect_subset_matches_uncached_result():
     assert cached_result == uncached_result
 
 
+def test_prepare_sql_for_parser_single_scan_matches_repeated_replace():
+    sql = "SELECT a---b, c------d -- comment -- untouched\nFROM t"
+    expected_segment = sql.split(" -- comment", 1)[0]
+    while "--" in expected_segment:
+        expected_segment = expected_segment.replace("--", "- -")
+    expected = expected_segment + " -- comment -- untouched\nFROM t"
+
+    assert prepare_sql_for_parser(sql, "mysql") == expected
+
+
