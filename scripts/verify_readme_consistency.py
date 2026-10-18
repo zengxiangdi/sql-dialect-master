@@ -15,6 +15,8 @@ CONFIG = ROOT / "backend" / "core" / "config.py"
 METADATA = ROOT / "backend" / "core" / "metadata.py"
 BENCHMARK = ROOT / "backend" / "benchmarks" / "transpiler_benchmark.py"
 REACT_FRONTEND = ROOT / "frontend-react"
+FRONTEND_PACKAGE = REACT_FRONTEND / "package.json"
+FRONTEND_LOCK = REACT_FRONTEND / "package-lock.json"
 TYPE_MAPPING = ROOT / "backend" / "core" / "type_mapping.json"
 FUNCTIONS_DB = ROOT / "backend" / "core" / "functions_db.json"
 ENV_EXAMPLE = ROOT / ".env.example"
@@ -40,6 +42,30 @@ def main() -> None:
 
     version = pyproject["project"]["version"]
     requires_python = pyproject["project"]["requires-python"]
+
+    if not FRONTEND_PACKAGE.is_file():
+        fail("frontend-react/package.json is missing")
+    if not FRONTEND_LOCK.is_file():
+        fail("frontend-react/package-lock.json is missing")
+    try:
+        frontend_package_version = json.loads(
+            FRONTEND_PACKAGE.read_text(encoding="utf-8")
+        )["version"]
+        frontend_lock = json.loads(FRONTEND_LOCK.read_text(encoding="utf-8"))
+        frontend_lock_version = frontend_lock["version"]
+        frontend_lock_root_version = frontend_lock["packages"][""]["version"]
+    except (KeyError, TypeError, json.JSONDecodeError) as exc:
+        fail(f"frontend version metadata is invalid: {exc}")
+
+    frontend_versions = {
+        "frontend-react/package.json version": frontend_package_version,
+        "frontend-react/package-lock.json version": frontend_lock_version,
+        "frontend-react/package-lock.json packages[''] version": frontend_lock_root_version,
+        "pyproject.toml project.version": version,
+    }
+    for name, actual in frontend_versions.items():
+        if actual != version:
+            fail(f"{name}={actual!r} does not match pyproject.toml project.version={version!r}")
 
     version_match = re.search(
         r"(?m)^version\s*=\s*[\"']([^\"']+)[\"']\s*$", pyproject_text
