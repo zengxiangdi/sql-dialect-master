@@ -95,7 +95,8 @@ describe("workspace handoff and dialect selection", () => {
     render(<MemoryRouter initialEntries={["/history"]}><LocationProbe /><AppProvider><AppRoutes /></AppProvider></MemoryRouter>);
     const button = await waitFor(() => screen.getByRole("button", { name: "Use in Convert" }));
     fireEvent.click(button);
-    expect(readConvertHandoff()).toEqual({ sql: "SELECT 10", sourceDialect: "postgres", targetDialect: "mysql" });
+    await waitFor(() => expect(screen.getByLabelText("Source SQL editor")).toHaveValue("SELECT 10"));
+    expect(screen.getByTestId("location")).toHaveTextContent("/convert?source=postgres&target=mysql");
   });
 
   it("initializes Convert from a handoff payload", () => {
@@ -104,6 +105,22 @@ describe("workspace handoff and dialect selection", () => {
     expect(screen.getByLabelText("Source dialect")).toHaveValue("oracle");
     expect(screen.getByLabelText("Target dialect")).toHaveValue("duckdb");
     expect((screen.getByLabelText("Source SQL editor") as HTMLTextAreaElement).value).toBe("SELECT handoff");
+  });
+
+  it("consumes a Convert handoff exactly once", () => {
+    localStorage.setItem("sdm.handoff.convert", JSON.stringify({ sql: "SELECT handoff", sourceDialect: "oracle", targetDialect: "duckdb" }));
+    localStorage.setItem("sdm.convert.draft", "SELECT draft");
+    const first = render(<MemoryRouter initialEntries={["/convert"]}><AppProvider><ConvertPage /></AppProvider></MemoryRouter>);
+    expect((screen.getByLabelText("Source SQL editor") as HTMLTextAreaElement).value).toBe("SELECT handoff");
+    expect(screen.getByLabelText("Source dialect")).toHaveValue("oracle");
+    expect(screen.getByLabelText("Target dialect")).toHaveValue("duckdb");
+    expect(readConvertHandoff()).toBeNull();
+    first.unmount();
+
+    render(<MemoryRouter initialEntries={["/convert"]}><AppProvider><ConvertPage /></AppProvider></MemoryRouter>);
+    expect((screen.getByLabelText("Source SQL editor") as HTMLTextAreaElement).value).toBe("SELECT draft");
+    expect(screen.getByLabelText("Source dialect")).toHaveValue("mysql");
+    expect(screen.getByLabelText("Target dialect")).toHaveValue("postgres");
   });
 
   it("opens Diff from a successful Convert result", async () => {

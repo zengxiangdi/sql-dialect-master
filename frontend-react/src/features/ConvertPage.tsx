@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, ApiError } from "../lib/api";
 import { useApp } from "../lib/app-context";
-import { dialectParam, readConvertHandoff, writeDiffHandoff } from "../lib/handoff";
+import { clearHandoff, dialectParam, readConvertHandoff, writeDiffHandoff } from "../lib/handoff";
 import { readDraft, removeDraft, saveDraft } from "../lib/storage";
 import type { ConvertResponse, Dialect } from "../lib/types";
 import { Button, Card, CodeEditor, CopyButton, DialectSelect, DownloadButton, EmptyState, ErrorPanel } from "../components/ui";
@@ -29,6 +29,10 @@ export function ConvertPage() {
   const output = result?.target_sql || "";
   const canConvert = sql.trim().length > 0 && source !== target;
   const resultStatus = useMemo(() => result?.success ? (result.warnings.length ? "warning" : "success") : "error", [result]);
+
+  useEffect(() => {
+    if (convertHandoff) clearHandoff("convert");
+  }, [convertHandoff]);
 
   useEffect(() => {
     const next = new URLSearchParams(searchParams);
