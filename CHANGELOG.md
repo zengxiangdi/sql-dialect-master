@@ -2,6 +2,46 @@
 
 All notable changes to SQL Dialect Master are documented here.
 
+## [1.1.7] - 2026-10-19
+
+### New
+
+- React workspace handoff: History entries can be reopened in Convert or
+  Diff, NL2SQL output can be sent to Diff, and successful conversions can
+  open Diff directly.
+- Semantic Diff, Query Analysis, and Lineage now expose dialect selectors;
+  selected dialects are mirrored in URL query parameters and restored on
+  refresh.
+- Added `docs/deployment.md` with reverse-proxy, trusted-proxy, auth/CORS,
+  rate-limiting, health-probe, cache/security-header, and operational
+  guidance.
+
+### Changed
+
+- Added `SDM_TRUSTED_PROXIES` (empty by default). `X-Forwarded-For` is only
+  trusted when the direct peer is inside the configured networks; invalid
+  or catch-all networks fail startup.
+- Rate limiting and structured logs now share one resolved client identity.
+- The in-memory rate-limit store uses a monotonic clock; Redis keeps
+  server-side TTL semantics.
+- Added response cache policy: SQL-bearing POST responses and health probes
+  are `no-store`; public catalog GETs use `private, max-age=60`; stats and
+  root use `private, max-age=15`.
+- `X-XSS-Protection` is now `0`; CSP and HSTS remain the responsibility of
+  the static frontend, reverse proxy, or TLS terminator.
+
+### Performance / Observability
+
+- The transpiler benchmark now reports per-statement latency for sync and
+  async runs, and the CI benchmark summary prints those values.
+
+### Notes
+
+- No public API, SDK signature, error code, response field, or cache-key
+  semantics changed.
+- Docker/containerization and strict cross-platform lockfile regeneration
+  remain deferred.
+
 ## [1.1.6] - 2026-10-18
 
 ### Performance
