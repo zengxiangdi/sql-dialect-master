@@ -376,3 +376,37 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         return response
+
+
+class CacheControlMiddleware(BaseHTTPMiddleware):
+    """Apply explicit browser/proxy caching policy to API responses."""
+
+    @staticmethod
+    def _policy(request: Request) -> str | None:
+        if request.method == "OPTIONS":
+            return None
+        path = request.url.path
+        if path in {"/docs", "/redoc", "/openapi.json"}:
+            return None
+        if request.method == "POST" and path.startswith("/api/"):
+            return "no-store"
+        if request.method in {"GET", "HEAD"}:
+            if path in {"/health", "/ready", "/health/deep"}:
+                return "no-store"
+            if path == "/api/dialects":
+                return "private, max-age=60"
+            if path == "/api/functions" or path.startswith("/api/functions/"):
+                return "private, max-age=60"
+            if path == "/api/types" or path.startswith("/api/types/"):
+                return "private, max-age=60"
+            if path in {"/", "/api/stats"}:
+                return "private, max-age=15"
+        return None
+
+    async def dispatch(self, request: Request, call_next) -> Response:
+        response = await call_next(request)
+        if not response.headers.get("Cache-Control"):
+            policy = self._policy(request)
+            if policy:
+                response.headers["Cache-Control"] = policy
+        return response
