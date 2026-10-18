@@ -63,7 +63,7 @@ describe("React workspace shell", () => {
       sourceDialect: "mysql", targetDialect: "postgres", createdAt: new Date().toISOString(), status: "success", truncated: true,
     }]));
     render(<MemoryRouter initialEntries={["/history"]}><AppProvider><AppRoutes /></AppProvider></MemoryRouter>);
-    expect(screen.getByText("Preview truncated; copy disabled")).toBeInTheDocument();
+    expect(screen.getByText("Preview truncated; actions disabled")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copy" })).toBeDisabled();
   });
 
