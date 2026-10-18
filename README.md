@@ -337,3 +337,5 @@ uses XFF for authorization.
 SQL-bearing POST responses and health probes use `Cache-Control: no-store`;
 public catalog responses use short `private` caching. Full deployment details
 will be documented in `docs/deployment.md`.
+
+See [`docs/deployment.md`](docs/deployment.md) for production deployment guidance.
