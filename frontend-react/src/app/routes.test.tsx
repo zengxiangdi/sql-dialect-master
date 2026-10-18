@@ -11,7 +11,7 @@ describe("React workspace shell", () => {
     expect(screen.getByRole("heading", { name: "Convert SQL with confidence" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /jump to anything/i })).toBeInTheDocument();
     expect(screen.getByLabelText("Source SQL editor")).toBeInTheDocument();
-    expect(screen.getByText("v1.1.5")).toBeInTheDocument();
+    expect(screen.getByText("v1.1.6")).toBeInTheDocument();
   });
 
   it("clears history in memory as well as local storage", () => {

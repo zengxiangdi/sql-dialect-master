@@ -2,6 +2,47 @@
 
 All notable changes to SQL Dialect Master are documented here.
 
+## [1.1.6] - 2026-10-18
+
+### Performance
+
+- Compatibility-note evidence now reuses a per-call AST context instead of
+  reparsing the same SQL for each construct check. A representative
+  mysql → postgres conversion drops from 7 to 2 `sqlglot.parse_one` calls,
+  and the compatibility-notes stage share falls from 48.80% to 17.31%
+  (no cache, security disabled, validation enabled).
+- MySQL conversions skip the AST normalization pass when no candidate
+  construct is present; target-mysql conversions skip it entirely.
+- The GROUP_CONCAT dynamic-separator guard performs a lexical prefilter
+  before parsing.
+- Security validation caches raw and prepared parse results within one
+  call while preserving every fail-closed default.
+
+### Fixed
+
+- Frontend localStorage reads, writes, and JSON parsing are guarded against
+  quota and parse failures.
+- Conversion history is bounded by serialized size; truncated entries are
+  marked and cannot be copied as incomplete SQL.
+- Active drafts preserve the full value up to the backend's 100,000-character
+  limit instead of being silently truncated at 20,000 characters.
+- The displayed frontend version is injected at build time from
+  `frontend-react/package.json`, and README consistency checks now validate
+  package.json and package-lock versions.
+
+### Changed
+
+- `requirements-lock.txt` is regenerated from the runtime, dev, and qa extras;
+  unused Streamlit-era transitive dependencies are removed while the
+  build/upload toolchain is pinned.
+- Type and function catalog docstrings reference the canonical JSON data files
+  instead of hardcoded counts.
+
+### Notes
+
+- No public API, SDK signature, error code, response field, or cache-key
+  semantics changed.
+
 ## [1.1.5] - 2026-10-17
 
 ### New
