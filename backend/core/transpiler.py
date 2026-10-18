@@ -214,6 +214,32 @@ def _executable_upper(sql: str, dialect: str | None = None) -> str:
     return mask_non_executable(sql, dialect=dialect).upper()
 
 
+@dataclass
+class _ConstructEvidence:
+    """Lazily parse one SQL view for one compatibility-notes call.
+
+    The AST is deliberately private to the evidence context.  The main
+    transpilation AST is never shared with this object, so evidence checks
+    cannot observe or mutate the AST used to generate the target SQL.
+    """
+
+    sql: str
+    dialect: str
+    masked_upper: str
+    _parsed: bool = field(default=False, init=False, repr=False)
+    _tree: Optional[exp.Expression] = field(default=None, init=False, repr=False)
+
+    def parse_one(self) -> Optional[exp.Expression]:
+        """Return the evidence AST, parsing at most once and failing closed."""
+        if not self._parsed:
+            self._parsed = True
+            try:
+                self._tree = sqlglot.parse_one(self.sql, read=self.dialect)
+            except Exception:
+                self._tree = None
+        return self._tree
+
+
 # Constructs whose evidence requires a FUNCTION-CALL form: the name
 # immediately followed by ``(``, with an identifier boundary before it.
 # A column named ``STRING_AGG_backup`` therefore never counts as a
@@ -291,7 +317,12 @@ _IDENT_END = r"(?![\w$])"
 _IDENT_OR_DOT_START = r"(?<![\w$.])"
 
 
-def _contains_type_construct(sql: str, dialect: str, construct: str) -> bool:
+def _contains_type_construct(
+    sql: str,
+    dialect: str,
+    construct: str,
+    evidence: Optional[_ConstructEvidence] = None,
+) -> bool:
     """AST evidence that ``sql`` (in ``dialect``) contains the TYPE construct.
 
     ARRAY/MAP/JSON/VARRAY claims describe type conversions, so a
@@ -304,9 +335,29 @@ def _contains_type_construct(sql: str, dialect: str, construct: str) -> bool:
     * VARRAY — a USERDEFINED DataType with ``kind == "VARRAY"``.
     Parse failures yield no evidence (fail closed).
     """
-    try:
-        tree = sqlglot.parse_one(sql, read=dialect)
-    except Exception:
+    masked_upper = evidence.masked_upper if evidence is not None else _executable_upper(sql, dialect)
+    token_present = re.search(
+        _IDENT_START + re.escape(construct) + _IDENT_END, masked_upper
+    ) is not None
+    # PostgreSQL array types use ``INTEGER[]`` rather than the ARRAY keyword.
+    # The shared masker treats square brackets as quoted-identifier syntax, so
+    # retain a narrow raw-text candidate as a prefilter; the AST check below
+    # still decides whether the brackets are an actual type declaration.
+    if construct == "ARRAY" and not token_present:
+        bracket_safe_sql = sql.translate(str.maketrans({"[": "{", "]": "}"}))
+        bracket_safe_upper = mask_non_executable(
+            bracket_safe_sql, dialect=dialect
+        ).upper()
+        token_present = re.search(
+            r"\b[A-Z_][A-Z0-9_$]*\s*(?:\{\s*\d*\s*\})+",
+            bracket_safe_upper,
+        ) is not None
+    if not token_present:
+        return False
+    if evidence is None:
+        evidence = _ConstructEvidence(sql, dialect, masked_upper)
+    tree = evidence.parse_one()
+    if tree is None:
         return False
     for node in tree.walk():
         if not isinstance(node, exp.DataType):
@@ -320,7 +371,11 @@ def _contains_type_construct(sql: str, dialect: str, construct: str) -> bool:
 
 
 def _contains_clause_construct(
-    sql: str, dialect: str, construct: str, masked_upper: str = ""
+    sql: str,
+    dialect: str,
+    construct: str,
+    masked_upper: str = "",
+    evidence: Optional[_ConstructEvidence] = None,
 ) -> bool:
     """AST evidence that ``sql`` (in ``dialect``) contains the clause keyword.
 
@@ -348,9 +403,17 @@ def _contains_clause_construct(
       (DDL column constraint).
     Parse failures yield no evidence (fail closed).
     """
-    try:
-        tree = sqlglot.parse_one(sql, read=dialect)
-    except Exception:
+    executable_upper = (
+        evidence.masked_upper
+        if evidence is not None
+        else masked_upper or _executable_upper(sql, dialect)
+    )
+    if re.search(_IDENT_START + re.escape(construct) + _IDENT_END, executable_upper) is None:
+        return False
+    if evidence is None:
+        evidence = _ConstructEvidence(sql, dialect, executable_upper)
+    tree = evidence.parse_one()
+    if tree is None:
         return False
     if construct in ("LIMIT", "TOP"):
         limit_nodes = list(tree.find_all(exp.Limit))
@@ -404,7 +467,11 @@ def _contains_clause_construct(
 
 
 def _contains_construct(
-    masked_upper: str, sql: str, dialect: str, construct: str
+    masked_upper: str,
+    sql: str,
+    dialect: str,
+    construct: str,
+    evidence: Optional[_ConstructEvidence] = None,
 ) -> bool:
     """Boundary-aware construct detection on executable-masked text.
 
@@ -441,9 +508,9 @@ def _contains_construct(
         return re.search(pattern, masked_upper) is not None
     name = words[0].rstrip("()")
     if name in _TYPE_CONSTRUCTS:
-        return _contains_type_construct(sql, dialect, name)
+        return _contains_type_construct(sql, dialect, name, evidence)
     if name in _CLAUSE_AST_CONSTRUCTS:
-        return _contains_clause_construct(sql, dialect, name, masked_upper)
+        return _contains_clause_construct(sql, dialect, name, masked_upper, evidence)
     if name == "APPLY":
         return re.search(_APPLY_PATTERN, masked_upper) is not None
     if name in _FUNCTION_FORM_CONSTRUCTS or construct.endswith("()"):
@@ -687,20 +754,65 @@ class SQLTranspiler:
                 ast_notes.extend(list_notes)
                 transpiled = ast.sql(dialect=target, pretty=pretty)
             elif source == "mysql":
-                ast = sqlglot.parse_one(parser_sql, read="mysql")
-                if target == "oracle":
-                    ast, now_notes = self._ast_mysql_now_to_sysdate(ast, target)
-                    ast_notes.extend(now_notes)
-                ast, normalization_notes, blockers = self._ast_mysql_target_normalizations(ast, target)
-                ast_notes.extend(normalization_notes)
-                semantic_blockers.extend(blockers)
-                if ast_notes or blockers:
-                    transpiled = ast.sql(dialect=target, pretty=pretty)
+                if target == "mysql":
+                    needs_mysql_ast = False
                 else:
-                    # Keep the canonical sqlglot path for ordinary MySQL
-                    # conversions. This preserves the public error taxonomy
-                    # for callers that replace/monitor sqlglot.transpile,
-                    # while custom AST rewrites avoid a second serialization.
+                    # Reuse the security mask when available.  If security
+                    # checks are disabled, create exactly one executable view
+                    # for this branch so comments and literals cannot trigger
+                    # an AST-only normalization pass.
+                    mysql_executable = (
+                        executable_sql
+                        if executable_sql is not None
+                        else mask_non_executable(sql, dialect=source)
+                    )
+                    # Reuse the same executable view for warning generation
+                    # later in this call when security checks were disabled.
+                    executable_sql = mysql_executable
+                    mysql_upper = mysql_executable.upper()
+                    candidate_tokens = {
+                        "DATE_SUB",
+                        "DATEDIFF",
+                        "CONCAT",
+                        "JSON_OBJECT",
+                        "JSON_ARRAYAGG",
+                        "ROLLUP",
+                    }
+                    if target == "snowflake":
+                        candidate_tokens.add("DATE_FORMAT")
+                    if target == "postgres":
+                        candidate_tokens.add("ROUND")
+                    if target == "oracle":
+                        candidate_tokens.add("NOW")
+                    needs_mysql_ast = any(
+                        re.search(
+                            _IDENT_START + re.escape(token) + _IDENT_END,
+                            mysql_upper,
+                        )
+                        for token in candidate_tokens
+                    )
+
+                if needs_mysql_ast:
+                    ast = sqlglot.parse_one(parser_sql, read="mysql")
+                    if target == "oracle":
+                        ast, now_notes = self._ast_mysql_now_to_sysdate(ast, target)
+                        ast_notes.extend(now_notes)
+                    ast, normalization_notes, blockers = self._ast_mysql_target_normalizations(
+                        ast, target
+                    )
+                    ast_notes.extend(normalization_notes)
+                    semantic_blockers.extend(blockers)
+                    if ast_notes or blockers:
+                        transpiled = ast.sql(dialect=target, pretty=pretty)
+                    else:
+                        # Keep the canonical sqlglot path for candidate
+                        # expressions that do not need a custom rewrite. This
+                        # preserves the public error taxonomy for callers that
+                        # replace/monitor sqlglot.transpile.
+                        transpiled = sqlglot.transpile(
+                            parser_sql, read=source, write=target, pretty=pretty
+                        )[0]
+                else:
                     transpiled = sqlglot.transpile(
                         parser_sql, read=source, write=target, pretty=pretty
                     )[0]
@@ -1500,8 +1612,18 @@ class SQLTranspiler:
         if not source_sql and not final_sql:
             return notes
 
-        source_upper = _executable_upper(source_sql, source)
-        final_upper = _executable_upper(final_sql, target)
+        source_evidence = _ConstructEvidence(
+            source_sql, source, _executable_upper(source_sql, source)
+        )
+        final_evidence = (
+            source_evidence
+            if (final_sql, target) == (source_sql, source)
+            else _ConstructEvidence(
+                final_sql, target, _executable_upper(final_sql, target)
+            )
+        )
+        source_upper = source_evidence.masked_upper
+        final_upper = final_evidence.masked_upper
 
         # Class B (static table): notes that claim a conversion happened.
         # Marker identifies the note; the claim survives only with source
@@ -1514,7 +1636,9 @@ class SQLTranspiler:
             for marker, source_constructs, target_constructs in _CONVERSION_NOTE_EVIDENCE:
                 if marker.upper() in upper_note:
                     if not any(
-                        _contains_construct(source_upper, source_sql, source, c)
+                        _contains_construct(
+                            source_upper, source_sql, source, c, source_evidence
+                        )
                         for c in source_constructs
                     ):
                         dropped = True
@@ -1522,7 +1646,9 @@ class SQLTranspiler:
                     # An empty target tuple marks a source-construct
                     # advisory: no final-SQL evidence required.
                     if target_constructs and not any(
-                        _contains_construct(final_upper, final_sql, target, c)
+                        _contains_construct(
+                            final_upper, final_sql, target, c, final_evidence
+                        )
                         for c in target_constructs
                     ):
                         dropped = True
@@ -1534,21 +1660,42 @@ class SQLTranspiler:
 
         # Class A: source-construct advisories (generic, not claims of a
         # completed conversion).
-        if _contains_construct(source_upper, source_sql, source, "LIMIT") and target == "oracle":
+        if (
+            _contains_construct(source_upper, source_sql, source, "LIMIT", source_evidence)
+            and target == "oracle"
+        ):
             notes.append("Oracle uses FETCH FIRST n ROWS ONLY (12c+) or ROWNUM for LIMIT")
-        if _contains_construct(source_upper, source_sql, source, "AUTO_INCREMENT") and target != "mysql":
+        if (
+            _contains_construct(
+                source_upper, source_sql, source, "AUTO_INCREMENT", source_evidence
+            )
+            and target != "mysql"
+        ):
             notes.append("AUTO_INCREMENT syntax varies by database")
-        if _contains_construct(source_upper, source_sql, source, "MERGE"):
+        if _contains_construct(source_upper, source_sql, source, "MERGE", source_evidence):
             notes.append("MERGE syntax varies significantly between databases")
-        if _contains_construct(source_upper, source_sql, source, "PIVOT") or _contains_construct(source_upper, source_sql, source, "UNPIVOT"):
+        if _contains_construct(source_upper, source_sql, source, "PIVOT", source_evidence) or _contains_construct(
+            source_upper, source_sql, source, "UNPIVOT", source_evidence
+        ):
             notes.append("PIVOT/UNPIVOT syntax varies by database")
 
         # Class B (dynamic): conversion claims, verified by the final SQL.
-        if _contains_construct(source_upper, source_sql, source, "LATERAL VIEW") and target not in ["hive", "spark", "databricks"]:
-            if _contains_construct(final_upper, final_sql, target, "UNNEST") or _contains_construct(final_upper, final_sql, target, "JSON_TABLE"):
+        if _contains_construct(
+            source_upper, source_sql, source, "LATERAL VIEW", source_evidence
+        ) and target not in ["hive", "spark", "databricks"]:
+            if _contains_construct(
+                final_upper, final_sql, target, "UNNEST", final_evidence
+            ) or _contains_construct(
+                final_upper, final_sql, target, "JSON_TABLE", final_evidence
+            ):
                 notes.append("LATERAL VIEW is Hive/Spark specific, converted to UNNEST/JSON_TABLE")
-        if _contains_construct(source_upper, source_sql, source, "CONNECT BY") and target != "oracle":
-            if _contains_construct(final_upper, final_sql, target, "WITH RECURSIVE"):
+        if (
+            _contains_construct(source_upper, source_sql, source, "CONNECT BY", source_evidence)
+            and target != "oracle"
+        ):
+            if _contains_construct(
+                final_upper, final_sql, target, "WITH RECURSIVE", final_evidence
+            ):
                 notes.append("CONNECT BY is Oracle specific, converted to WITH RECURSIVE")
         return notes
 
@@ -1594,6 +1741,9 @@ class SQLTranspiler:
         evidence the output is executable MySQL.  Used only when
         ``target == "mysql"`` as a fail-closed guard.
         """
+        masked_upper = mask_non_executable(sql, dialect="mysql").upper()
+        if re.search(_IDENT_START + r"GROUP_CONCAT" + _IDENT_END, masked_upper) is None:
+            return False
         try:
             tree = sqlglot.parse_one(sql, read="mysql")
         except Exception:
@@ -1660,21 +1810,42 @@ class SQLTranspiler:
         result = {"blocked": False, "reason": None, "warnings": [], "executable_sql": None}
         executable_sql = mask_non_executable(sql, dialect=dialect)
         result["executable_sql"] = executable_sql
+
+        # Keep raw and prepared parse results local to this validation call.
+        # The read dialect is part of the cache key because the DML check has
+        # historically used sqlglot's generic parser while dangerous/system
+        # checks use the request dialect.
+        parsed_cache: Dict[Tuple[str, Optional[str]], Optional[list]] = {}
+
+        def parse_cached(statement: str, read: str | None) -> Optional[list]:
+            key = (statement, read)
+            if key not in parsed_cache:
+                try:
+                    parsed_cache[key] = (
+                        sqlglot.parse(statement, read=read)
+                        if read
+                        else sqlglot.parse(statement)
+                    )
+                except Exception:
+                    parsed_cache[key] = None
+            return parsed_cache[key]
+
         dangerous_operation = _DANGEROUS_OPERATION_PATTERN.search(executable_sql)
         if dangerous_operation:
             # A keyword can also be a perfectly legal column/alias (for
             # example ``SELECT create FROM audit``).  Parse only when the
             # cheap lexical candidate is present and block only an actual DDL
             # root node.  If parsing fails, retain fail-closed behavior.
-            try:
-                parsed = sqlglot.parse(sql, read=dialect) if dialect else sqlglot.parse(sql)
-                actual_operation = any(
+            parsed = parse_cached(sql, dialect)
+            actual_operation = (
+                True
+                if parsed is None
+                else any(
                     isinstance(statement, _DANGEROUS_OPERATION_TYPES)
                     for statement in parsed
                     if statement is not None
                 )
-            except Exception:
-                actual_operation = True
+            )
             if actual_operation:
                 message = f"Dangerous SQL operation detected: {dangerous_operation.group(1).upper()}"
                 if block:
@@ -1685,8 +1856,9 @@ class SQLTranspiler:
         if ";" not in sql or ";" not in executable_sql:
             result["multiple_statements"] = False
         else:
-            try:
-                parsed_statements = sqlglot.parse(prepare_sql_for_parser(sql, dialect), read=dialect) if dialect else sqlglot.parse(sql)
+            prepared_sql = prepare_sql_for_parser(sql, dialect)
+            parsed_statements = parse_cached(prepared_sql, dialect)
+            if parsed_statements is not None:
                 result["multiple_statements"] = (
                     len(parsed_statements) > 1
                     and not _is_single_statement_stream(parsed_statements)
@@ -1698,17 +1870,19 @@ class SQLTranspiler:
                         result["reason"] = message
                         return result
                     result["warnings"].append(f"🔒 Security: {message}")
-            except Exception as exc:
-                logger.debug("SQL statement parsing failed during security validation: %s", exc)
+            else:
+                logger.debug("SQL statement parsing failed during security validation")
         for pattern, message in DANGEROUS_SQL_PATTERNS:
             if pattern.search(executable_sql):
                 if message == "System table access detected":
                     # Catalog words in a selected column or alias are not a
                     # catalog access.  Inspect parsed table references and
                     # preserve fail-closed behavior only on parse failure.
-                    try:
-                        parsed = sqlglot.parse(sql, read=dialect) if dialect else sqlglot.parse(sql)
-                        system_table = any(
+                    parsed = parse_cached(sql, dialect)
+                    system_table = (
+                        True
+                        if parsed is None
+                        else any(
                             isinstance(table, exp.Table)
                             and (
                                 table.name.lower() in _SYSTEM_CATALOG_NAMES
@@ -1719,8 +1893,7 @@ class SQLTranspiler:
                             if statement is not None
                             for table in statement.find_all(exp.Table)
                         )
-                    except Exception:
-                        system_table = True
+                    )
                     if not system_table:
                         continue
                 if block:
@@ -1732,11 +1905,9 @@ class SQLTranspiler:
         needs_dml_ast = bool(re.search(r"\b(?:UPDATE|DELETE)\b", masked_upper))
         dml_parsed = None
         if needs_dml_ast and result.get("multiple_statements") is False:
-            try:
-                dml_parsed = sqlglot.parse(sql)
-            except Exception as exc:
-                logger.debug("DML security AST parse unavailable: %s", exc)
-                dml_parsed = None
+            dml_parsed = parse_cached(sql, None)
+            if dml_parsed is None:
+                logger.debug("DML security AST parse unavailable")
         if dml_parsed is not None:
             dml_without_where = set(_dml_without_where(sql, dml_parsed))
             for op in sorted(dml_without_where):
