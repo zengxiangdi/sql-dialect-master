@@ -44,7 +44,7 @@ class InMemoryRateLimitStore:
 
     def check(self, key: str, limit: int, window_seconds: int) -> tuple[bool, int, int]:
         with self._lock:
-            now = time.time()
+            now = time.monotonic()
             self._prune_expired(now)
             count, window_start = self._entries.get(key, (0, now))
             if now - window_start >= window_seconds:
@@ -58,7 +58,7 @@ class InMemoryRateLimitStore:
 
     def stats(self) -> dict:
         with self._lock:
-            self._prune_expired(time.time())
+            self._prune_expired(time.monotonic())
             return {"backend": "memory", "active_clients": len(self._entries)}
 
 

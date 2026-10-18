@@ -36,7 +36,7 @@ def _sanitize_log_value(value: str, max_length: int = 500) -> str:
 class RateLimitEntry:
     """Legacy compatibility entry."""
     requests: int = 0
-    window_start: float = field(default_factory=time.time)
+    window_start: float = field(default_factory=time.monotonic)
 
 
 class RateLimiter:
