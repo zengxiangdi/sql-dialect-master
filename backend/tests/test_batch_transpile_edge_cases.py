@@ -70,7 +70,6 @@ class TestBatchSemicolonEdgeCases:
 
     def test_actual_stacked_statements_rejected(self, transpiler):
         """Real stacked statements should still be rejected."""
-        statements = ["SELECT 1; SELECT 2"]
         result = transpiler.transpile("SELECT 1; SELECT 2", "hive", "postgres")
         assert not result.success
         assert "Multiple SQL statements" in result.error
@@ -85,7 +84,6 @@ class TestBatchSemicolonEdgeCases:
 
     def test_terminal_semicolon_accepted(self, transpiler):
         """A single statement with trailing semicolon is accepted."""
-        statements = ["SELECT 1;"]
         result = transpiler.transpile("SELECT 1;", "hive", "postgres")
         assert result.success
         assert result.target_sql

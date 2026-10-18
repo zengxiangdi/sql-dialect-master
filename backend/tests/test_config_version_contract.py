@@ -79,11 +79,9 @@ class TestEnvOverrideThroughSettings:
         from backend.core.parser import SQLParser
 
         p = SQLParser(dialect="postgres")
-        sql = "SELECT 1" + " " * 10
         # Default max is 100000; craft a just-over-limit input via a small
         # settings patch would be required — instead assert behavior under
         # the live settings value.
-        limit = len("SELECT 1")
         # Build an SQL that respects the parser but is longer than settings.
         big_sql = "SELECT " + ", ".join(f"c{i}" for i in range(20000))
         result = p.parse(big_sql)

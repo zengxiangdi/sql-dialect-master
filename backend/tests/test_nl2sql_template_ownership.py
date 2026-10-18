@@ -65,18 +65,16 @@ class TestTopNSemantics:
         tree = sqlglot.parse_one(result.sql, read="postgres")
         assert tree is not None
 
-    def test_chinese_bottom_keyword_orders_ascending(self):
+    def test_chinese_bottom_keyword_falls_through_success(self):
         result = NL2SQLGenerator().generate("查询最少10个用户", "postgres")
         assert result.success
         assert "ASC" in result.sql
 
-    def test_chinese_bottom_keyword_orders_ascending(self):
+    def test_chinese_bottom_keyword_falls_through_without_order(self):
         result = NL2SQLGenerator().generate("查询最少10个用户", "postgres")
-        # This input doesn't match the top_n template, so it falls through to
-        # semantic builder which may not include ORDER BY. Test is about
-        # ownership, not completeness of Chinese parsing.
+        # This input does not match the top_n template, so it falls through
+        # to the semantic builder while still producing a successful result.
         assert result.success
-
 
 class TestDMLOrouting:
     """C3: INSERT/UPDATE/DELETE requests bypass template matching."""
