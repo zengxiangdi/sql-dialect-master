@@ -12,7 +12,7 @@ def test_rate_limiter_rejects_non_positive_configuration() -> None:
 
 def test_rate_limiter_prunes_expired_clients(monkeypatch) -> None:
     current_time = 1000.0
-    monkeypatch.setattr("backend.api.middleware.time.time", lambda: current_time)
+    monkeypatch.setattr("backend.api.rate_limit_store.time.monotonic", lambda: current_time)
 
     limiter = RateLimiter(requests_per_window=10, window_seconds=60)
     limiter.is_allowed("stale-client")

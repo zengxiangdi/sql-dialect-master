@@ -13,15 +13,26 @@ from backend.api.rate_limit_store import (
 def test_memory_store_enforces_limit_and_cleans_up():
     store = InMemoryRateLimitStore()
     clock = iter([100.0, 100.0, 161.0, 161.0])
-    original_time = sys.modules["backend.api.rate_limit_store"].time.time
-    sys.modules["backend.api.rate_limit_store"].time.time = lambda: next(clock)
+    original_time = sys.modules["backend.api.rate_limit_store"].time.monotonic
+    sys.modules["backend.api.rate_limit_store"].time.monotonic = lambda: next(clock)
     try:
         assert store.check("old", 1, 60)[0] is True
         assert store.stats()["active_clients"] == 1
         assert store.check("new", 1, 60)[0] is True
         assert store.stats()["active_clients"] == 1
     finally:
-        sys.modules["backend.api.rate_limit_store"].time.time = original_time
+        sys.modules["backend.api.rate_limit_store"].time.monotonic = original_time
+
+
+def test_memory_store_does_not_read_wall_clock(monkeypatch):
+    store = InMemoryRateLimitStore()
+    monkeypatch.setattr(
+        sys.modules["backend.api.rate_limit_store"].time,
+        "time",
+        lambda: (_ for _ in ()).throw(AssertionError("wall clock must not be read")),
+    )
+    assert store.check("client", 2, 60)[2] == 60
+    assert store.stats()["active_clients"] == 1
 
 
 def test_store_selection():
