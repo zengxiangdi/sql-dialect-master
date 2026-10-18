@@ -58,6 +58,27 @@ def build_statements(iterations: int) -> List[str]:
     return [DEFAULT_STATEMENTS[index % len(DEFAULT_STATEMENTS)] for index in range(iterations)]
 
 
+def per_statement_seconds(total_seconds: float, statement_count: int) -> float:
+    """Return total wall time normalized by the number of statements."""
+    if statement_count <= 0:
+        raise ValueError("statement_count must be positive")
+    return total_seconds / statement_count
+
+
+def summarize_timings(timings: List[float], statement_count: int) -> Dict[str, object]:
+    """Summarize repeated timings while retaining total-time measurements."""
+    mean_seconds = mean(timings)
+    per_statement = per_statement_seconds(mean_seconds, statement_count)
+    return {
+        "timings_seconds": timings,
+        "mean_seconds": mean_seconds,
+        "median_seconds": median(timings),
+        "statement_count": statement_count,
+        "per_statement_seconds": per_statement,
+        "per_statement_ms": per_statement * 1000.0,
+    }
+
+
 def measure_sync(
     transpiler: SQLTranspiler,
     statements: List[str],
@@ -322,13 +343,9 @@ def main() -> None:
         "input_validation": measure_input_validation(args.repeats),
         "async": {
             "max_concurrent": args.concurrency,
-            "timings_seconds": async_timings,
-            "mean_seconds": async_mean,
+            **summarize_timings(async_timings, len(statements)),
         },
-        "sync": {
-            "timings_seconds": sync_timings,
-            "mean_seconds": sync_mean,
-        },
+        "sync": summarize_timings(sync_timings, len(statements)),
         "async_speedup": speedup,
         "profiling": {
             "stage_timing_model": "inclusive",

@@ -80,6 +80,25 @@ jobs:
           )
           print(f"- Sync mean: `{sync:.4f}s`")
           print(f"- Async mean: `{async_mean:.4f}s`")
+          def per_statement_ms(section):
+              value = section.get("per_statement_ms")
+              if value is not None:
+                  return value
+              seconds = section.get("per_statement_seconds")
+              return seconds * 1000.0 if seconds is not None else None
+
+          sync_per_statement = per_statement_ms(payload["sync"])
+          async_per_statement = per_statement_ms(payload["async"])
+          print(
+              f"- Sync per statement: `{sync_per_statement:.4f} ms`"
+              if sync_per_statement is not None
+              else "- Sync per statement: `n/a`"
+          )
+          print(
+              f"- Async per statement: `{async_per_statement:.4f} ms`"
+              if async_per_statement is not None
+              else "- Async per statement: `n/a`"
+          )
           print(f"- Async speedup: `{speedup:.2f}x`")
           print()
           print("### Profiling hotspots")
