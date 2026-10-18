@@ -235,6 +235,7 @@ app = FastAPI(
 
 # Import middleware
 from backend.api.middleware import (
+    CacheControlMiddleware,
     RateLimiter,
     RateLimitMiddleware,
     SecurityHeadersMiddleware,
@@ -294,6 +295,7 @@ app.add_middleware(
     StructuredLoggingMiddleware,
     trusted_proxies=TRUSTED_PROXY_NETWORKS,
 )
+app.add_middleware(CacheControlMiddleware)
 
 # Initialize services
 transpiler = SQLTranspiler()

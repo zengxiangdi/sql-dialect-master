@@ -333,3 +333,7 @@ only when the direct peer is a trusted proxy, after which the rightmost
 non-trusted address in the XFF chain is used. Deployments behind a proxy must
 also configure `SDM_HEALTH_PROBE_TOKEN` for readiness probes; readiness never
 uses XFF for authorization.
+
+SQL-bearing POST responses and health probes use `Cache-Control: no-store`;
+public catalog responses use short `private` caching. Full deployment details
+will be documented in `docs/deployment.md`.
