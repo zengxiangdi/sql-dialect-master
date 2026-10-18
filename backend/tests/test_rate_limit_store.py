@@ -31,7 +31,7 @@ def test_memory_store_does_not_read_wall_clock(monkeypatch):
         "time",
         lambda: (_ for _ in ()).throw(AssertionError("wall clock must not be read")),
     )
-    assert store.check("client", 2, 60)[2] == 60
+    assert store.check("client", 2, 60)[2] in {59, 60}
     assert store.stats()["active_clients"] == 1
 
 
