@@ -204,8 +204,6 @@ class TestTargetValidationStates:
         'invalid' — never presenting a broken conversion as successful."""
         import sqlglot
 
-        real_parse_one = sqlglot.parse_one
-
         def fake_parse_one(sql, read=None, **kwargs):
             # Both target and generic parser calls fail.
             # The transpile() step (sqlglot.transpile) is not patched,

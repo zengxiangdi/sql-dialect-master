@@ -71,8 +71,6 @@ class TestReciprocalJoinKeySymmetry:
     def test_reciprocal_keys_map_same_columns(
         self, table_a: str, table_b: str
     ) -> None:
-        from backend.core.nl2sql_components.relations import guess_join_key
-
         forward = guess_join_key(table_a, table_b)
         backward = guess_join_key(table_b, table_a)
         assert forward is not None, f"no forward key for {table_a} -> {table_b}"
@@ -84,8 +82,6 @@ class TestReciprocalJoinKeySymmetry:
         )
 
     def test_unknown_relationship_returns_none(self) -> None:
-        from backend.core.nl2sql_components.relations import guess_join_key
-
         assert guess_join_key("invoices", "shipments") is None
         assert guess_join_key("users", "invoices") is None
 
