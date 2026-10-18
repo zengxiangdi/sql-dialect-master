@@ -2,6 +2,7 @@ import { ArrowLeftRight, CheckCircle2, FileCode2, Keyboard, RefreshCw, Wand2 } f
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "../lib/api";
 import { useApp } from "../lib/app-context";
+import { readDraft, removeDraft, saveDraft } from "../lib/storage";
 import type { ConvertResponse, Dialect } from "../lib/types";
 import { Button, Card, CodeEditor, CopyButton, DialectSelect, DownloadButton, EmptyState, ErrorPanel } from "../components/ui";
 import { PageHeader } from "../components/PageHeader";
@@ -12,7 +13,7 @@ export function ConvertPage() {
   const { addHistory } = useApp();
   const [source, setSource] = useState<Dialect>("mysql");
   const [target, setTarget] = useState<Dialect>("postgres");
-  const [sql, setSql] = useState(() => localStorage.getItem("sdm.convert.draft") || SAMPLE);
+  const [sql, setSql] = useState(() => readDraft() || SAMPLE);
   const [result, setResult] = useState<ConvertResponse | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
   const [loading, setLoading] = useState(false);
@@ -37,7 +38,7 @@ export function ConvertPage() {
     pendingRequest.current = controller;
     setLoading(true); setError(null);
     try {
-      localStorage.setItem("sdm.convert.draft", sql);
+      saveDraft(sql);
       const next = await api.convert(sql, source, target, true, controller.signal);
       if (controller.signal.aborted) return;
       setResult(next);
@@ -66,7 +67,7 @@ export function ConvertPage() {
       const formatted = await api.convert(sql, source, source, true, controller.signal);
       if (controller.signal.aborted) return;
       if (formatted.success && formatted.target_sql) {
-        setSql(formatted.target_sql); setResult(null); localStorage.setItem("sdm.convert.draft", formatted.target_sql);
+        setSql(formatted.target_sql); setResult(null); saveDraft(formatted.target_sql);
       } else setError(new ApiError(formatted.error || "Formatting failed", 422, formatted.error_code || undefined));
     } catch (caught) {
       if (controller.signal.aborted) return;
@@ -93,7 +94,7 @@ export function ConvertPage() {
   }, [canConvert, loading, formatting, convert]);
   const swap = () => { cancelPendingRequest(); setLoading(false); setFormatting(false); setSource(target); setTarget(source); setSql(output || sql); setResult(null); setError(null); };
   return <div>
-    <PageHeader eyebrow="WORKSPACE / CONVERT" title="Convert SQL with confidence" description="A focused workspace for translating, validating, and reviewing SQL across twelve database dialects." actions={<><Button variant="ghost" icon={<Keyboard size={14} />} onClick={convert} disabled={!canConvert || loading || formatting}>⌘ Enter</Button><Button variant="secondary" icon={<RefreshCw size={14} />} onClick={() => { cancelPendingRequest(); setLoading(false); setFormatting(false); setSql(""); setResult(null); setError(null); localStorage.removeItem("sdm.convert.draft"); }}>New query</Button></>} />
+    <PageHeader eyebrow="WORKSPACE / CONVERT" title="Convert SQL with confidence" description="A focused workspace for translating, validating, and reviewing SQL across twelve database dialects." actions={<><Button variant="ghost" icon={<Keyboard size={14} />} onClick={convert} disabled={!canConvert || loading || formatting}>⌘ Enter</Button><Button variant="secondary" icon={<RefreshCw size={14} />} onClick={() => { cancelPendingRequest(); setLoading(false); setFormatting(false); setSql(""); setResult(null); setError(null); removeDraft(); }}>New query</Button></>} />
     <div className="convert-toolbar"><div className="dialect-row"><DialectSelect label="Source dialect" value={source} onChange={(value) => { cancelPendingRequest(); setLoading(false); setFormatting(false); setSource(value); setResult(null); setError(null); }} /><Button variant="ghost" icon={<ArrowLeftRight size={16} />} onClick={swap} aria-label="Swap source and target dialects">Swap</Button><DialectSelect label="Target dialect" value={target} onChange={(value) => { cancelPendingRequest(); setLoading(false); setFormatting(false); setTarget(value); setResult(null); setError(null); }} /></div><div className="convert-actions"><Button variant="secondary" loading={formatting} disabled={!sql.trim() || loading} onClick={format}>Format</Button><Button variant="primary" loading={loading} disabled={!canConvert || formatting} icon={<Wand2 size={15} />} onClick={convert}>Convert SQL</Button></div></div>
     {error && <ErrorPanel message={`${error.message}${error.code ? ` · ${error.code}` : ""}`} onRetry={() => void (lastAction === "format" ? format() : convert())} />}
     <div className="split-editor convert-editor"><div className="editor-panel"><div className="editor-head"><span><FileCode2 size={14} /> Source SQL</span><span className="editor-dialect">{source}</span></div><CodeEditor value={sql} onChange={(value) => { cancelPendingRequest(); setLoading(false); setFormatting(false); setSql(value); setResult((current) => current ? { ...current } : current); setError(null); }} minHeight={430} placeholder="Paste SQL here..." ariaLabel="Source SQL editor" /><div className="editor-footer"><span>{sql.length.toLocaleString()} chars</span><button className="link-button" onClick={() => { cancelPendingRequest(); setLoading(false); setFormatting(false); setSql(SAMPLE); setResult(null); setError(null); }}>Load example</button></div></div><div className="editor-panel"><div className="editor-head"><span><CheckCircle2 size={14} /> Target SQL</span><span className="editor-dialect">{target}</span></div>{output ? <pre className={`result-code ${stale ? "stale" : ""}`}>{output}</pre> : <EmptyState icon={<Wand2 size={20} />} title="Your converted SQL appears here" text="Choose dialects, paste a query, then run the conversion." action={<Button variant="secondary" onClick={convert} disabled={!canConvert}>Try conversion</Button>} />}<div className="editor-footer"><span>{stale ? "Result is stale — run again" : result ? `${result.target_validation_state} · ${result.transformations.length} transformations` : "Waiting for input"}</span><div className="result-actions"><CopyButton value={output} /><DownloadButton value={output} /></div></div></div></div>

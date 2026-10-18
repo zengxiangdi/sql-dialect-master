@@ -27,7 +27,7 @@ export function CodeEditor({ value, onChange, placeholder, className = "", readO
   return <textarea aria-label={ariaLabel || "SQL editor"} className={`code-editor ${className}`} style={{ minHeight }} value={value} onChange={(event) => onChange?.(event.target.value)} placeholder={placeholder} readOnly={readOnly} spellCheck={false} />;
 }
 
-export function CopyButton({ value }: { value: string }) {
+export function CopyButton({ value, disabled = false, title }: { value: string; disabled?: boolean; title?: string }) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
     try {
@@ -40,7 +40,7 @@ export function CopyButton({ value }: { value: string }) {
       setCopied(true); window.setTimeout(() => setCopied(false), 1500);
     } catch { setCopied(false); }
   };
-  return <Button variant="ghost" icon={copied ? <Check size={14} /> : <Copy size={14} />} onClick={copy} disabled={!value}>{copied ? "Copied" : "Copy"}</Button>;
+  return <Button variant="ghost" icon={copied ? <Check size={14} /> : <Copy size={14} />} onClick={copy} disabled={disabled || !value} title={title}>{copied ? "Copied" : "Copy"}</Button>;
 }
 
 export function DownloadButton({ value, filename = "converted.sql" }: { value: string; filename?: string }) {

@@ -5,12 +5,13 @@ import { AppRoutes } from "./routes";
 import { AppProvider } from "../lib/app-context";
 
 describe("React workspace shell", () => {
-  afterEach(() => { cleanup(); localStorage.clear(); vi.unstubAllGlobals(); });
+  afterEach(() => { cleanup(); localStorage.clear(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
   it("renders the Convert workspace with keyboard command affordance", () => {
     render(<MemoryRouter initialEntries={["/convert"]}><AppProvider><AppRoutes /></AppProvider></MemoryRouter>);
     expect(screen.getByRole("heading", { name: "Convert SQL with confidence" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /jump to anything/i })).toBeInTheDocument();
     expect(screen.getByLabelText("Source SQL editor")).toBeInTheDocument();
+    expect(screen.getByText("v1.1.5")).toBeInTheDocument();
   });
 
   it("clears history in memory as well as local storage", () => {
@@ -29,6 +30,41 @@ describe("React workspace shell", () => {
     localStorage.setItem("sdm.history", JSON.stringify([{ source: null }, { id: "missing-status" }]));
     render(<MemoryRouter initialEntries={["/history"]}><AppProvider><AppRoutes /></AppProvider></MemoryRouter>);
     expect(screen.getByText("No local history yet")).toBeInTheDocument();
+  });
+
+  it("keeps rendering and clearing history when persistence hits a quota error", () => {
+    localStorage.setItem("sdm.history", JSON.stringify([{
+      id: "history-quota", source: "SELECT 1", target: "SELECT 1", sourceDialect: "mysql", targetDialect: "postgres",
+      createdAt: new Date().toISOString(), status: "success",
+    }]));
+    const originalSetItem = Storage.prototype.setItem;
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(function (this: Storage, key, value) {
+      if (key === "sdm.history") throw new DOMException("full", "QuotaExceededError");
+      return originalSetItem.call(this, key, value);
+    });
+    render(<MemoryRouter initialEntries={["/history"]}><AppProvider><AppRoutes /></AppProvider></MemoryRouter>);
+    expect(screen.getByText(/mysql/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /clear local history/i }));
+    expect(screen.getByText("No local history yet")).toBeInTheDocument();
+  });
+
+  it("uses defaults when localStorage reads throw", () => {
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new DOMException("blocked", "SecurityError");
+    });
+    render(<MemoryRouter initialEntries={["/convert"]}><AppProvider><AppRoutes /></AppProvider></MemoryRouter>);
+    expect(screen.getByRole("heading", { name: "Convert SQL with confidence" })).toBeInTheDocument();
+    expect((screen.getByLabelText("Source SQL editor") as HTMLTextAreaElement).value).toContain("customer_id");
+  });
+
+  it("disables copying history entries whose SQL was truncated", () => {
+    localStorage.setItem("sdm.history", JSON.stringify([{
+      id: "history-truncated", source: "SELECT " + "s".repeat(20_000), target: "SELECT " + "t".repeat(20_000),
+      sourceDialect: "mysql", targetDialect: "postgres", createdAt: new Date().toISOString(), status: "success", truncated: true,
+    }]));
+    render(<MemoryRouter initialEntries={["/history"]}><AppProvider><AppRoutes /></AppProvider></MemoryRouter>);
+    expect(screen.getByText("Preview truncated; copy disabled")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy" })).toBeDisabled();
   });
 
   it("rechecks API health when the document becomes visible", async () => {

@@ -129,6 +129,7 @@ export interface HistoryItem {
   targetDialect: Dialect;
   createdAt: string;
   status: Status;
+  truncated?: boolean;
 }
 
 export const DIALECT_LABELS: Record<Dialect, string> = {

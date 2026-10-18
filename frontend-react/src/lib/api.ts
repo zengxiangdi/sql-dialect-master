@@ -1,4 +1,5 @@
 import type { ConvertResponse, Dialect, DialectsResponse, DiffResponse, FunctionCategory, FunctionItem, Nl2SqlResponse, ParseResponse, TypeMappingsResponse } from "./types";
+import { safeGetItem } from "./storage";
 
 export class ApiError extends Error {
   status: number;
@@ -27,13 +28,13 @@ const requestId = () => {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 };
 
-export const apiBase = () => (localStorage.getItem("sdm.apiBase")?.trim() || import.meta.env.VITE_API_BASE_URL?.trim() || "").replace(/\/+$/, "");
+export const apiBase = () => (safeGetItem("sdm.apiBase")?.trim() || import.meta.env.VITE_API_BASE_URL?.trim() || "").replace(/\/+$/, "");
 
 async function request<T>(path: string, init: RequestInit = {}, timeout = 30000): Promise<T> {
   const controller = new AbortController();
   let timedOut = false;
   const timer = window.setTimeout(() => { timedOut = true; controller.abort(); }, timeout);
-  const apiKey = localStorage.getItem("sdm.apiKey");
+  const apiKey = safeGetItem("sdm.apiKey");
   const headers = new Headers(init.headers);
   let removeCallerAbortListener: (() => void) | undefined;
   if (init.body !== undefined) headers.set("Content-Type", "application/json");
