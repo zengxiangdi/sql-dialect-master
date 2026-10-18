@@ -19,6 +19,7 @@ from starlette.concurrency import run_in_threadpool
 
 from backend.core.exceptions import ErrorCode
 
+from .client_identity import resolve_client_ip
 from .rate_limit_store import InMemoryRateLimitStore, RateLimitStore, create_rate_limit_store
 from .readiness import health_probe_response
 
@@ -67,13 +68,14 @@ class RateLimiter:
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """Rate limiting middleware with a bounded request-body guard."""
 
-    def __init__(self, app, limiter: RateLimiter = None, enabled: bool = True, max_body_bytes: int = DEFAULT_MAX_REQUEST_BODY_BYTES):
+    def __init__(self, app, limiter: RateLimiter = None, enabled: bool = True, max_body_bytes: int = DEFAULT_MAX_REQUEST_BODY_BYTES, trusted_proxies: tuple = ()):
         super().__init__(app)
         if max_body_bytes <= 0:
             raise ValueError("max_body_bytes must be positive")
         self.limiter = limiter or RateLimiter(store=None if enabled else InMemoryRateLimitStore())
         self.enabled = enabled
         self.max_body_bytes = max_body_bytes
+        self.trusted_proxies = trusted_proxies
 
     async def _read_bounded_body(self, request: Request) -> Response | None:
         """Consume and cache request bodies without trusting Content-Length."""
@@ -171,15 +173,16 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         return response
 
     def _get_client_id(self, request: Request) -> str:
-        return request.client.host if request.client else "unknown"
+        return resolve_client_ip(request, self.trusted_proxies)
 
 
 class StructuredLoggingMiddleware(BaseHTTPMiddleware):
     """Structured request logging and request-id propagation."""
 
-    def __init__(self, app, log_body: bool = False):
+    def __init__(self, app, log_body: bool = False, trusted_proxies: tuple = ()):
         super().__init__(app)
         self.log_body = log_body
+        self.trusted_proxies = trusted_proxies
 
     @staticmethod
     def _get_request_id(request: Request) -> str:
@@ -346,7 +349,7 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
         request.state.request_id = request_id
         status_code = 500
         error = None
-        log_data = {"event": "request_start", "request_id": request_id, "method": _sanitize_log_value(request.method), "path": _sanitize_log_value(request.url.path), "query": _sanitize_log_value(str(request.query_params)), "client": _sanitize_log_value(request.client.host if request.client else "unknown"), "timestamp": datetime.now().isoformat()}
+        log_data = {"event": "request_start", "request_id": request_id, "method": _sanitize_log_value(request.method), "path": _sanitize_log_value(request.url.path), "query": _sanitize_log_value(str(request.query_params)), "client": _sanitize_log_value(resolve_client_ip(request, self.trusted_proxies)), "timestamp": datetime.now().isoformat()}
         logger.info(json.dumps(log_data))
         try:
             response = await call_next(request)
