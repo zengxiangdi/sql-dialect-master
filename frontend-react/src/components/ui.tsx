@@ -20,7 +20,7 @@ export function Badge({ status = "neutral", children }: { status?: Status; child
 }
 
 export function DialectSelect({ value, onChange, label, compact = false, options }: { value: Dialect; onChange: (value: Dialect) => void; label?: string; compact?: boolean; options?: Dialect[] }) {
-  return <label className={`dialect-select ${compact ? "compact" : ""}`}>{label && <span className="field-label">{label}</span>}<span className="select-wrap"><span className="dialect-icon">{DIALECT_ICONS[value]}</span><select value={value} onChange={(event) => onChange(event.target.value as Dialect)}>{(options || Object.keys(DIALECT_LABELS) as Dialect[]).map((dialect) => <option key={dialect} value={dialect}>{DIALECT_LABELS[dialect]}</option>)}</select><ChevronDown size={14} /></span></label>;
+  return <label className={`dialect-select ${compact ? "compact" : ""}`}>{label && <span className="field-label">{label}</span>}<span className="select-wrap"><span className="dialect-icon">{DIALECT_ICONS[value]}</span><select aria-label={label} value={value} onChange={(event) => onChange(event.target.value as Dialect)}>{(options || Object.keys(DIALECT_LABELS) as Dialect[]).map((dialect) => <option key={dialect} value={dialect}>{DIALECT_LABELS[dialect]}</option>)}</select><ChevronDown size={14} /></span></label>;
 }
 
 export function CodeEditor({ value, onChange, placeholder, className = "", readOnly = false, minHeight = 300, ariaLabel }: Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, "value" | "onChange"> & { value: string; onChange?: (value: string) => void; minHeight?: number; ariaLabel?: string }) {
