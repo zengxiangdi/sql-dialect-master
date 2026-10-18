@@ -244,6 +244,7 @@ from backend.core.exceptions import SDMException, UnsupportedDialectError, Error
 
 # Configure CORS from the centralized Pydantic settings source.
 ALLOWED_ORIGINS = [origin.strip() for origin in settings.allowed_origins.split(",") if origin.strip()]
+TRUSTED_PROXY_NETWORKS = settings.trusted_proxy_networks
 
 app.add_middleware(
     CORSMiddleware,
@@ -285,10 +286,14 @@ app.add_middleware(
     RateLimitMiddleware,
     limiter=rate_limiter,
     enabled=settings.rate_limit_enabled,
+    trusted_proxies=TRUSTED_PROXY_NETWORKS,
 )
 
 # Structured request logging must wrap rate limiting so rejected requests also get IDs.
-app.add_middleware(StructuredLoggingMiddleware)
+app.add_middleware(
+    StructuredLoggingMiddleware,
+    trusted_proxies=TRUSTED_PROXY_NETWORKS,
+)
 
 # Initialize services
 transpiler = SQLTranspiler()

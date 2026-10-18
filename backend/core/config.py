@@ -10,6 +10,7 @@ Supports configuration via:
 - Default values
 """
 import logging
+import ipaddress
 import sys
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, TypedDict
@@ -225,6 +226,7 @@ class AppSettings(BaseSettings):
         "http://localhost:5174,http://127.0.0.1:5174,"
         "http://localhost:4174,http://127.0.0.1:4174"
     )
+    trusted_proxies: str = ""
     max_batch_size: int = Field(100, gt=0)
     request_timeout: int = Field(30, gt=0)
     
@@ -299,6 +301,40 @@ class AppSettings(BaseSettings):
                 "log_level must be one of DEBUG, INFO, WARNING, ERROR, CRITICAL"
             )
         return normalized
+
+    @field_validator("trusted_proxies", mode="before")
+    @classmethod
+    def _normalize_trusted_proxies(cls, value: str) -> str:
+        if value is None:
+            return ""
+        if not isinstance(value, str):
+            raise ValueError("trusted_proxies must be a comma-separated string")
+        normalized = []
+        for raw_value in value.split(","):
+            candidate = raw_value.strip()
+            if not candidate:
+                continue
+            try:
+                network = ipaddress.ip_network(candidate, strict=False)
+            except ValueError as exc:
+                raise ValueError(
+                    f"trusted_proxies contains an invalid IP/CIDR: {candidate!r}"
+                ) from exc
+            if network.prefixlen == 0:
+                raise ValueError("trusted_proxies must not contain a catch-all network")
+            normalized.append(str(network))
+        return ",".join(normalized)
+
+    @property
+    def trusted_proxy_networks(self) -> tuple:
+        """Return parsed trusted proxy networks for request identity checks."""
+        if not self.trusted_proxies:
+            return ()
+        return tuple(
+            ipaddress.ip_network(value, strict=False)
+            for value in self.trusted_proxies.split(",")
+            if value
+        )
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert settings to dictionary."""

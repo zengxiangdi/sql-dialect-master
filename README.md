@@ -326,3 +326,10 @@ Rate limiting is on by default. The two backends are:
 - `SDM_RATE_LIMIT_BACKEND=redis` — shared, atomic limits across all workers. Set `SDM_REDIS_URL` when using this backend. The store connects and pings Redis at startup and fails fast if it is unreachable; the `redis` package is required (install with `pip install redis`).
 
 `SDM_RATE_LIMIT_ENABLED=false` disables enforcement entirely. Use the in-memory backend for local development and the Redis backend for any deployment with more than one worker or instance that must enforce a single global limit.
+
+By default, the API does not trust `X-Forwarded-For`; rate limiting and logs
+use the direct peer address. Set `SDM_TRUSTED_PROXIES` to the proxy IPs/CIDRs
+only when the direct peer is a trusted proxy, after which the rightmost
+non-trusted address in the XFF chain is used. Deployments behind a proxy must
+also configure `SDM_HEALTH_PROBE_TOKEN` for readiness probes; readiness never
+uses XFF for authorization.
