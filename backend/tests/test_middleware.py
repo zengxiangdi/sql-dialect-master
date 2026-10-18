@@ -115,4 +115,5 @@ def test_security_headers_are_present():
     response = client.get("/api/test")
     assert response.headers["X-Content-Type-Options"] == "nosniff"
     assert response.headers["X-Frame-Options"] == "DENY"
+    assert response.headers["X-XSS-Protection"] == "0"
     assert response.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
