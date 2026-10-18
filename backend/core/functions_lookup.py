@@ -2,7 +2,7 @@
 """Function Encyclopedia - Search and compare SQL functions across dialects.
 
 Provides comprehensive SQL function lookup with:
-- 50+ SQL functions across 11 categories
+- Function count defined by functions_db.json (currently 298) across 11 categories
 - Cross-database syntax comparison for 12 dialects
 - Fuzzy search with relevance scoring
 - Category-based filtering
@@ -37,7 +37,7 @@ class FunctionEncyclopedia:
     """SQL Function Encyclopedia with multi-dialect comparison.
     
     Features:
-    - 50+ SQL functions
+    - Function count defined by functions_db.json (currently 298)
     - 11 categories: string, date, math, aggregate, window, conditional, conversion, json, array, system, geo
     - 12 database dialects support
     - Fuzzy search with relevance scoring

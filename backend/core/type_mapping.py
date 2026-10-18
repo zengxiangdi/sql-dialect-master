@@ -2,7 +2,7 @@
 """Type Mapper - Map SQL data types between different database dialects.
 
 Provides comprehensive data type mapping with:
-- 36 data types across 7 categories
+- Type count defined by type_mapping.json (currently 39) across 7 categories
 - 12 database dialects support
 - Precision and compatibility warnings
 - Type conversion suggestions
@@ -23,11 +23,11 @@ logger = logging.getLogger(__name__)
 
 
 class TypeMapper:
-    """SQL Type Mapper with 36 types × 12 dialects matrix support.
+    """SQL Type Mapper backed by the type_mapping.json data file.
     
     Features:
-    - 36 data types (STRING, VARCHAR, INT, DECIMAL, DATE, ARRAY, JSON, etc.)
-    - 12 database dialects
+    - Type count defined by type_mapping.json (currently 39)
+    - Database dialect support follows the configured dialect list
     - Precision warnings for DECIMAL, TIMESTAMP, VARCHAR
     - Type conversion suggestions
     """
