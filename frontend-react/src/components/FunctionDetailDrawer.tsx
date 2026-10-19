@@ -3,7 +3,7 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { api, ApiError } from "../lib/api";
 import { ALL_DIALECTS, DIALECT_LABELS, type Dialect, type FunctionDetailResponse } from "../lib/types";
-import { EmptyState, ErrorPanel } from "./ui";
+import { ErrorPanel } from "./ui";
 
 interface FunctionDetailDrawerProps {
   name: string | null;
@@ -98,16 +98,16 @@ function OpenFunctionDetailDrawer({ name, onClose }: { name: string; onClose: ()
             <ErrorPanel message={error.message} onRetry={() => { closeRef.current?.focus(); setReloadToken((value) => value + 1); }} />
           ) : detail && comparison && <>
             {(detail.description || comparison.description) && <p className="function-detail-description">{detail.description || comparison.description}</p>}
-            <section aria-label="Function parameters">
+            {parameters.length > 0 && <section aria-label="Function parameters">
               <h3>Parameters</h3>
-              {parameters.length ? <div className="table-wrap"><table>
+              <div className="table-wrap"><table>
                 <caption className="sr-only">{name} parameters</caption>
                 <thead><tr><th scope="col">Name</th><th scope="col">Type</th><th scope="col">Required</th><th scope="col">Description</th></tr></thead>
                 <tbody>{parameters.map((parameter, index) => <tr key={`${parameter.name}-${index}`}>
                   <th scope="row" className="mono">{parameter.name}</th><td className="mono">{parameter.type}</td><td>{parameter.required ? "Yes" : "No"}</td><td>{parameter.description}</td>
                 </tr>)}</tbody>
-              </table></div> : <EmptyState title="No parameters" text="No parameter information is available for this function." />}
-            </section>
+              </table></div>
+            </section>}
             <section aria-label="Dialect comparison">
               <h3>Dialect syntax</h3>
               <div className="table-wrap"><table>
