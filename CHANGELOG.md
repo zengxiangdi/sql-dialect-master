@@ -2,6 +2,39 @@
 
 All notable changes to SQL Dialect Master are documented here.
 
+## [1.1.9] - 2026-10-20
+
+### New
+
+- Added a Function detail drawer to the React function encyclopedia. It
+  shows parameters, notes, examples, and syntax across all 12 dialects,
+  with loading, error, retry, keyboard, and focus-management support.
+- Lineage now groups parsed columns under their qualified table, shows
+  join relationships and counts, and places unqualified or ambiguous
+  columns in a separate bucket.
+- Added `POST /api/convert/batch` for ordered, bounded multi-statement
+  conversion. Ordinary per-item failures return HTTP 200 with per-item
+  errors; request-level errors keep the existing envelope.
+
+### Changed
+
+- Added batch conversion metrics:
+  `sdm_transpile_batch_requests_total`,
+  `sdm_transpile_batch_items_total`, and
+  `sdm_transpile_batch_size`.
+- REST batch conversion runs sequentially inside one worker slot and
+  shares the request timeout; the SDK async batch remains independently
+  bounded.
+- Updated README and deployment documentation for the batch endpoint,
+  capacity semantics, and metrics.
+
+### Notes
+
+- No changes to the single-statement `/api/convert` contract, error-code
+  taxonomy, cache-key semantics, or SDK batch methods.
+- No new dependencies in this release.
+- Metrics remain per-process.
+
 ## [1.1.8] - 2026-10-19
 
 ### New
