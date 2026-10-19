@@ -98,6 +98,44 @@ export interface FunctionItem {
   dialects?: Record<string, string>;
 }
 
+export interface FunctionParameter {
+  name: string;
+  type: string;
+  required: boolean;
+  description: string;
+}
+
+export interface FunctionDetail {
+  name: string;
+  category: string;
+  description?: string;
+  parameters?: FunctionParameter[];
+  dialects: Record<string, string>;
+  examples?: Record<string, string>;
+  notes?: string;
+}
+
+export interface FunctionComparison {
+  name: string;
+  description: string | null;
+  category: string;
+  parameters: FunctionParameter[];
+  examples: Record<string, string>;
+  notes: string;
+  dialects: Record<string, string>;
+  availability: {
+    supported: string[];
+    not_supported: string[];
+    coverage: string;
+  };
+}
+
+export interface FunctionDetailResponse {
+  success: boolean;
+  function: FunctionDetail;
+  comparison: FunctionComparison;
+}
+
 export interface FunctionCategory {
   name: string;
   count: number;

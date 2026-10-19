@@ -1,4 +1,4 @@
-import type { ConvertResponse, Dialect, DialectsResponse, DiffResponse, FunctionCategory, FunctionItem, Nl2SqlResponse, ParseResponse, TypeMappingsResponse } from "./types";
+import type { ConvertResponse, Dialect, DialectsResponse, DiffResponse, FunctionCategory, FunctionDetailResponse, FunctionItem, Nl2SqlResponse, ParseResponse, TypeMappingsResponse } from "./types";
 import { safeGetItem } from "./storage";
 
 export class ApiError extends Error {
@@ -91,6 +91,8 @@ export const api = {
     request<DiffResponse>("/api/diff", { method: "POST", body: JSON.stringify({ source_sql, target_sql, source_dialect, target_dialect }), signal }),
   functions: (search = "", category = "", limit = 100, signal?: AbortSignal) =>
     request<{ functions: FunctionItem[]; count: number; total: number }>(`/api/functions?limit=${limit}${search ? `&search=${encodeURIComponent(search)}` : ""}${category ? `&category=${encodeURIComponent(category)}` : ""}`, { signal }),
+  functionDetail: (name: string, signal?: AbortSignal) =>
+    request<FunctionDetailResponse>(`/api/functions/${encodeURIComponent(name)}`, { signal }),
   functionCategories: (signal?: AbortSignal) =>
     request<{ categories: FunctionCategory[]; count: number }>("/api/functions/categories", { signal }),
   types: (source?: Dialect, target?: Dialect, signal?: AbortSignal) =>
