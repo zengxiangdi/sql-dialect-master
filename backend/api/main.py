@@ -27,7 +27,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
 from backend.api.auth import require_api_access
 from backend.api.metrics import MetricsMiddleware, configure_runtime_metrics, metrics_response, record_transpile_request
@@ -392,6 +392,38 @@ class ConvertResponse(BaseModel):
     )
     timestamp: str = Field(default_factory=lambda: datetime.now().isoformat(), description="Response timestamp")
 
+
+class BatchConvertRequest(BaseModel):
+    """Convert an ordered, bounded list using one dialect pair."""
+
+    statements: List[StrictStr] = Field(
+        ...,
+        min_length=1,
+        max_length=settings.max_batch_size,
+        description="SQL statements in input order; each item is converted independently",
+    )
+    source_dialect: str
+    target_dialect: str
+    pretty: bool = settings.transpiler_pretty_default
+
+
+class BatchConvertItemResponse(ConvertResponse):
+    """A conversion result associated with its original input position."""
+
+    index: int = Field(..., ge=0, description="Zero-based index in the input statements")
+
+
+class BatchConvertResponse(BaseModel):
+    """Ordered conversion results, including ordinary per-item failures."""
+
+    success: bool
+    results: List[BatchConvertItemResponse]
+    count: int
+    succeeded: int
+    failed: int
+    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
+
+
 class NL2SQLRequest(BaseModel):
     """Natural language to SQL request model."""
     text: str = Field(..., description="Natural language query (Chinese or English)")
@@ -619,6 +651,39 @@ async def convert_sql(request: ConvertRequest):
         warnings=result.warnings,
         target_validation_state=result.target_validation_state,
     )
+
+@app.post("/api/convert/batch", response_model=BatchConvertResponse, tags=["conversion"])
+async def convert_sql_batch(request: BatchConvertRequest):
+    """Convert statements sequentially in one worker slot, preserving input order.
+
+    Ordinary item failures, including a batch where every item fails, return
+    HTTP 200 with per-item errors. Request-level failures use the existing
+    error envelope. A 504 ends the wait but does not cancel the worker batch.
+    """
+    source_dialect = normalize_dialect(request.source_dialect, "source dialect")
+    target_dialect = normalize_dialect(request.target_dialect, "target dialect")
+    batch_results = await _run_cpu_bound(
+        transpiler.batch_transpile,
+        list(request.statements),
+        source_dialect,
+        target_dialect,
+        request.pretty,
+    )
+    results = [
+        BatchConvertItemResponse(index=index, **result.to_dict())
+        for index, result in enumerate(batch_results)
+    ]
+    count = len(results)
+    succeeded = sum(item.success for item in results)
+    failed = count - succeeded
+    return BatchConvertResponse(
+        success=failed == 0,
+        results=results,
+        count=count,
+        succeeded=succeeded,
+        failed=failed,
+    )
+
 
 @app.post("/api/parse", tags=["conversion"])
 async def parse_sql(request: ParseRequest):
