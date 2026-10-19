@@ -13,6 +13,7 @@ import {
   writeLineageHandoff,
 } from "../lib/handoff";
 import { saveDraft } from "../lib/storage";
+import type { ParseResponse } from "../lib/types";
 import { Button, Card, CodeEditor, DialectSelect, EmptyState, ErrorPanel } from "../components/ui";
 import { PageHeader } from "../components/PageHeader";
 
@@ -116,7 +117,7 @@ export function LineagePage() {
   const handoff = useMemo(() => readLineageHandoff(), []);
   const [sql, setSql] = useState(() => handoff?.sql || LINEAGE_DEFAULT_SQL);
   const [dialect, setDialect] = useState(() => dialectParam(searchParams.get("dialect"), handoff?.dialect || "postgres"));
-  const [tables, setTables] = useState<string[]>([]);
+  const [elements, setElements] = useState<ParseResponse["elements"] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const pendingRequest = useRef<AbortController | null>(null);
@@ -128,22 +129,86 @@ export function LineagePage() {
     return () => window.clearTimeout(timer);
   }, [dialect, sql]);
   const build = useCallback(async () => {
-    if (!sql.trim()) { setTables([]); setError("Enter SQL to build lineage."); return; }
+    if (!sql.trim()) { setElements(null); setError("Enter SQL to build lineage."); return; }
     pendingRequest.current?.abort();
     const controller = new AbortController();
     pendingRequest.current = controller;
     setLoading(true); setError(null);
     try {
       const parsed = await api.parse(sql, dialect, controller.signal);
-      if (!controller.signal.aborted) setTables(parsed.elements.tables?.map((table) => table.name) || []);
+      if (!controller.signal.aborted) setElements(parsed.elements);
     } catch (caught) {
-      if (!controller.signal.aborted) { setTables([]); setError(caught instanceof Error ? caught.message : "Lineage analysis failed"); }
+      if (!controller.signal.aborted) { setElements(null); setError(caught instanceof Error ? caught.message : "Lineage analysis failed"); }
     } finally {
       if (pendingRequest.current === controller) { pendingRequest.current = null; setLoading(false); }
     }
   }, [dialect, sql]);
   useEffect(() => () => pendingRequest.current?.abort(), []);
-  return <div><PageHeader eyebrow="WORKSPACE / LINEAGE" title="Follow data through the query" description="A clean canvas for table and column relationships, designed for static SQL exploration." actions={<Button variant="primary" loading={loading} disabled={!sql.trim()} icon={<GitBranch size={14} />} onClick={build}>Build lineage</Button>} /><Card><div className="card-header"><DialectSelect label="Dialect" compact value={dialect} onChange={(value) => { setDialect(value); setTables([]); setError(null); }} /></div><CodeEditor value={sql} onChange={(value) => { pendingRequest.current?.abort(); setSql(value); setTables([]); setError(null); }} minHeight={150} ariaLabel="Lineage SQL editor" />{error && <ErrorPanel message={error} onRetry={build} />}{tables.length ? <div className="lineage-canvas">{tables.map((table, index) => <div className="lineage-node" key={`${table}-${index}`}><span className="lineage-index">{String(index + 1).padStart(2, "0")}</span><Table2 size={16} /><strong>{table}</strong><small>table source</small></div>)}</div> : <EmptyState icon={<GitBranch size={20} />} title="Lineage canvas" text="Analyze a query to map its source relations. Runtime execution is never assumed." />}</Card></div>;
+  return <div><PageHeader eyebrow="WORKSPACE / LINEAGE" title="Follow data through the query" description="A clean canvas for table and column relationships, designed for static SQL exploration." actions={<Button variant="primary" loading={loading} disabled={!sql.trim()} icon={<GitBranch size={14} />} onClick={build}>Build lineage</Button>} /><Card><div className="card-header"><DialectSelect label="Dialect" compact value={dialect} onChange={(value) => { pendingRequest.current?.abort(); setDialect(value); setElements(null); setError(null); }} /></div><CodeEditor value={sql} onChange={(value) => { pendingRequest.current?.abort(); setSql(value); setElements(null); setError(null); }} minHeight={150} ariaLabel="Lineage SQL editor" />{error && <ErrorPanel message={error} onRetry={build} />}{elements ? <LineageResults elements={elements} /> : <EmptyState icon={<GitBranch size={20} />} title="Lineage canvas" text="Analyze a query to map its source relations. Runtime execution is never assumed." />}</Card></div>;
+}
+
+type LineageColumn = NonNullable<ParseResponse["elements"]["columns"]>[number];
+
+function LineageColumns({ columns, label, qualified = false }: { columns: LineageColumn[]; label: string; qualified?: boolean }) {
+  return <ul className="lineage-columns" aria-label={label}>{columns.map((column, index) => <li key={`${column.table || ""}-${column.name}-${index}`}>
+    <span className="mono">{qualified && column.table ? `${column.table}.${column.name}` : column.name}</span>
+    {column.alias && column.alias !== column.name && <span className="muted"> as {column.alias}</span>}
+  </li>)}</ul>;
+}
+
+function LineageResults({ elements }: { elements: ParseResponse["elements"] }) {
+  const tables = elements.tables ?? [];
+  const columns = elements.columns ?? [];
+  const joins = elements.joins ?? [];
+  const groupedColumns = new Map<string, LineageColumn[] | null>();
+  for (const table of tables) {
+    const key = table.alias || table.name;
+    // The parser has no scope identifier to disambiguate repeated aliases.
+    groupedColumns.set(key, groupedColumns.has(key) ? null : []);
+  }
+  const unqualified: LineageColumn[] = [];
+  for (const column of columns) {
+    const group = column.table ? groupedColumns.get(column.table) : undefined;
+    if (group) group.push(column);
+    else unqualified.push(column);
+  }
+  const counts = [
+    { label: "Tables", value: tables.length },
+    { label: "Columns", value: columns.length },
+    { label: "Joins", value: joins.length },
+    { label: "Unqualified columns", value: unqualified.length },
+  ];
+
+  return <section className="lineage-results" aria-label="Lineage results">
+    <dl className="lineage-summary" aria-label="Lineage summary">{counts.map((count) => <div key={count.label}>
+      <dt>{count.label}</dt><dd>{count.value}</dd>
+    </div>)}</dl>
+    {tables.length ? <ul className="lineage-table-grid" aria-label="Tables">{tables.map((table, index) => {
+      const key = table.alias || table.name;
+      const tableColumns = groupedColumns.get(key) ?? [];
+      return <li key={`${key}-${index}`}><section className="lineage-table" aria-label={`Table ${key}`}>
+        <header className="lineage-table-header"><Table2 size={16} aria-hidden="true" /><h3>{table.name}</h3></header>
+        <div className="lineage-table-metadata">
+          {table.alias && table.alias !== table.name && <p>Alias: <span className="mono">{table.alias}</span></p>}
+          {table.schema && <p>Schema: <span className="mono">{table.schema}</span></p>}
+          {table.catalog && <p>Catalog: <span className="mono">{table.catalog}</span></p>}
+        </div>
+        <p className="lineage-column-count">{tableColumns.length} {tableColumns.length === 1 ? "column" : "columns"}</p>
+        {tableColumns.length ? <LineageColumns columns={tableColumns} label={`${key} columns`} /> : <p className="lineage-empty">No columns for this table.</p>}
+      </section></li>;
+    })}</ul> : <EmptyState icon={<GitBranch size={20} />} title="Lineage canvas" text="No source tables were found in this query." />}
+    <section className="lineage-group" aria-label="Unqualified / unmatched columns">
+      <h3>Unqualified / unmatched columns</h3>
+      {unqualified.length ? <LineageColumns columns={unqualified} label="Unqualified and unmatched columns" qualified /> : <p className="lineage-empty">No unqualified or unmatched columns.</p>}
+    </section>
+    <section className="lineage-group" aria-label="Join relationships">
+      <h3>JOIN relationships</h3>
+      {joins.length ? <ul className="lineage-joins">{joins.map((join, index) => <li key={`${join.type}-${join.table}-${index}`}>
+        <div className="lineage-join-header"><strong>{join.type}</strong><span>Target table: <span className="mono">{join.table}</span></span></div>
+        <pre>{join.on_condition || "No ON condition."}</pre>
+      </li>)}</ul> : <p className="lineage-empty">No joins found.</p>}
+    </section>
+  </section>;
 }
 
 export function RuntimePage() { const navigate = useNavigate(); return <div><PageHeader eyebrow="SYSTEM / RUNTIME" title="Runtime verification" description="Use this page when a database connection is available. Local SQL conversion never requires one." /><Card className="runtime-card"><div className="runtime-symbol"><Settings2 size={22} /></div><div><h2>No database connected</h2><p>Static parsing, conversion, functions, types, and NL2SQL remain fully available. Runtime checks will appear here after you configure a safe connection.</p><Button variant="secondary" onClick={() => navigate("/settings")}>Open settings</Button></div></Card></div>; }
