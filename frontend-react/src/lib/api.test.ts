@@ -40,6 +40,37 @@ describe("API client request lifecycle", () => {
     await expect(request).rejects.toMatchObject({ name: "AbortError" });
   });
 
+  it("URL-encodes a function name as a single path segment", async () => {
+    const payload = { success: true, function: { name: "CUSTOM name/+?&" }, comparison: {} };
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      json: async () => payload,
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.functionDetail("CUSTOM name/+?&")).resolves.toEqual(payload);
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/functions/CUSTOM%20name%2F%2B%3F%26");
+  });
+
+  it("forwards function detail cancellation to fetch", async () => {
+    const fetchMock = vi.fn((_url: string, init: RequestInit) => new Promise<never>((_resolve, reject) => {
+      init.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    const request = api.functionDetail("CONCAT", controller.signal);
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+
+    expect(init.signal?.aborted).toBe(false);
+    controller.abort();
+
+    expect(init.signal?.aborted).toBe(true);
+    await expect(request).rejects.toMatchObject({ name: "AbortError" });
+  });
+
   it("sends optional NL2SQL column hints as an array", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
