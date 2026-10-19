@@ -2,6 +2,36 @@
 
 All notable changes to SQL Dialect Master are documented here.
 
+## [1.1.8] - 2026-10-19
+
+### New
+
+- Added a protected `GET /metrics` Prometheus endpoint. Metrics are
+  disabled by default (`SDM_METRICS_ENABLED=false`) and require a
+  dedicated `SDM_METRICS_TOKEN` when enabled.
+- Exposed HTTP request counts and latency, rate-limit rejections, worker
+  capacity/rejections/timeouts, transpile results, and transpiler cache
+  statistics.
+- Added `BoundedWorkerPool.stats()` with lock-protected counters.
+
+### Changed
+
+- Added CI coverage reporting with `pytest --cov=backend` and a
+  `fail_under = 93` floor.
+- Added contract tests for validators, parser, type mapping, and function
+  lookup; total line coverage is now about 94%.
+- Added `prometheus-client` as a runtime dependency.
+
+### Notes
+
+- Metrics are per-process in this release; multiprocess aggregation is a
+  follow-up for multi-worker deployments.
+- `/metrics` is outside `/api/*`, uses its own token, and never includes
+  SQL, table/column names, client IPs, request IDs, query strings, or
+  error text.
+- No public API, SDK signature, error code, response field, or cache-key
+  semantics changed.
+
 ## [1.1.7] - 2026-10-19
 
 ### New

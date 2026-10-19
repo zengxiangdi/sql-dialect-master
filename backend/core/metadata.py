@@ -17,8 +17,8 @@ Design rules:
 from __future__ import annotations
 
 # ── Release version facts (sole source of truth) ────────────────────────
-PROJECT_VERSION = "1.1.7"
-API_VERSION = "1.1.7"
+PROJECT_VERSION = "1.1.8"
+API_VERSION = "1.1.8"
 # Frontend v2 architecture — independent of the product release version.
 FRONTEND_ARCHITECTURE_VERSION = 2
 

@@ -42,7 +42,7 @@ def test_metrics_authentication_and_exposition(monkeypatch):
     response = client.get("/metrics", headers={"X-Metrics-Token": "metrics-secret"})
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/plain; version=1.0.0")
-    assert re.search(r"sdm_build_info\{version=\"1\.1\.7\"\} 1", response.text)
+    assert re.search(r"sdm_build_info\{version=\"1\.1\.8\"\} 1", response.text)
     assert "metrics-secret" not in response.text
 
 
