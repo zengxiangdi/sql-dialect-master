@@ -52,10 +52,10 @@ export interface ParseResponse {
   dialect: Dialect;
   elements: {
     query_type?: string;
-    tables?: Array<{ name: string; alias?: string | null }>;
-    columns?: Array<{ name: string; table?: string | null }>;
+    tables?: Array<{ name: string; alias?: string | null; schema?: string | null; catalog?: string | null }>;
+    columns?: Array<{ name: string; table?: string | null; alias?: string | null }>;
     functions?: Array<{ name: string }>;
-    joins?: Array<{ type: string; table: string; on_condition?: string }>;
+    joins?: Array<{ type: string; table: string; on_condition?: string | null }>;
     has_cte?: boolean;
     has_window?: boolean;
     has_aggregation?: boolean;
