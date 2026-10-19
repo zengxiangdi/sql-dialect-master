@@ -96,6 +96,7 @@ export interface FunctionItem {
   description?: string;
   syntax?: string;
   dialects?: Record<string, string>;
+  parameters?: FunctionParameter[];
 }
 
 export interface FunctionParameter {
