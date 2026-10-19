@@ -116,7 +116,47 @@ configure CSP at the static frontend or reverse-proxy layer after validating
 the policies required by the frontend and API documentation pages. It also
 does not set HSTS; configure that at the TLS termination layer.
 
-## 7. Operational checklist
+## 7. Metrics
+
+Metrics are disabled by default. Enable them with `SDM_METRICS_ENABLED=true`
+and set the dedicated `SDM_METRICS_TOKEN`; requests must send that value in
+the `X-Metrics-Token` header. Keep `/metrics` on an internal network and do
+not expose it publicly. It is separate from the business API key and the
+health-probe token.
+
+The initial implementation exposes process-local metrics. In a multi-worker
+deployment, each worker has its own counters and cache/worker gauges; a
+Prometheus scrape may reach one worker at a time. Prometheus multiprocess
+aggregation is deferred to a later batch.
+
+The endpoint exposes build info, HTTP request totals and duration histograms,
+rate-limit rejections, conversion outcomes, worker capacity/in-use/rejection/
+timeout statistics, transpiler cache hits/misses/evictions/size, and the
+in-memory rate-limit active-client gauge. HTTP labels use normalized methods,
+FastAPI route templates, and status classes (`2xx`, `3xx`, `4xx`, `5xx`).
+Conversion labels use the fixed supported dialect names and a fixed result
+vocabulary. Labels never contain SQL, query strings, client IPs, request IDs,
+error text, table names, or column names. The `/metrics` scrape itself is not
+counted as an HTTP request.
+
+Prometheus configuration can send the token in a header:
+
+```yaml
+scrape_configs:
+  - job_name: sql-dialect-master
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["api.internal:8000"]
+    http_headers:
+      X-Metrics-Token:
+        values: ["${SDM_METRICS_TOKEN}"]
+```
+
+For Prometheus versions without `http_headers`, configure the reverse proxy to
+inject `X-Metrics-Token` on the internal scrape path. Do not put the token in a
+URL query parameter or in logs.
+
+## 8. Operational checklist
 
 - Terminate TLS at the proxy and forward the required host, scheme, and XFF
   headers.

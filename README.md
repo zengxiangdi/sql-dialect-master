@@ -339,3 +339,4 @@ public catalog responses use short `private` caching. Full deployment details
 will be documented in `docs/deployment.md`.
 
 See [`docs/deployment.md`](docs/deployment.md) for production deployment guidance.
+Metrics configuration and scraping guidance are documented in the same guide.
