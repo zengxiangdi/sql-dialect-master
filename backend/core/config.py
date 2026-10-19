@@ -276,6 +276,10 @@ class AppSettings(BaseSettings):
     # Readiness probes.  SecretStr keeps the value out of settings reprs and
     # structured logs while still allowing deployment through SDM_ env vars.
     health_probe_token: Optional[SecretStr] = None
+
+    # Prometheus metrics are opt-in and use a dedicated secret.
+    metrics_enabled: bool = False
+    metrics_token: Optional[SecretStr] = None
     
     # Security settings
     security_check_enabled: bool = True
@@ -290,6 +294,14 @@ class AppSettings(BaseSettings):
         """Keep parser and transpiler limits aligned unless explicitly set."""
         if self.parser_max_sql_length is None:
             self.parser_max_sql_length = self.transpiler_max_sql_length
+        return self
+
+    @model_validator(mode="after")
+    def _validate_metrics_token(self) -> "AppSettings":
+        """Require a non-blank dedicated token when metrics are enabled."""
+        token = self.metrics_token.get_secret_value().strip() if self.metrics_token else ""
+        if self.metrics_enabled and not token:
+            raise ValueError("metrics_token is required when metrics_enabled is true")
         return self
 
     @field_validator("log_level", mode="before")
