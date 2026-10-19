@@ -20,6 +20,7 @@ from starlette.concurrency import run_in_threadpool
 from backend.core.exceptions import ErrorCode
 
 from .client_identity import resolve_client_ip
+from .metrics import record_rate_limit_rejection
 from .rate_limit_store import InMemoryRateLimitStore, RateLimitStore, create_rate_limit_store
 from .readiness import health_probe_response
 
@@ -108,7 +109,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next) -> Response:
         is_health_probe = (
-            request.url.path in {"/health", "/", "/ready", "/health/deep"}
+            request.url.path in {"/health", "/", "/ready", "/health/deep", "/metrics"}
             and request.method in {"GET", "HEAD"}
         )
         # Browser CORS preflight requests carry no business payload and are
@@ -133,6 +134,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             is_allowed, remaining, reset_time = await run_in_threadpool(self.limiter.is_allowed, client_id)
             rate_limit_checked = True
             if not is_allowed:
+                record_rate_limit_rejection()
                 logger.warning("Rate limit exceeded for client: %s", _sanitize_log_value(client_id))
                 return JSONResponse(
                     status_code=429,
@@ -164,6 +166,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if is_health_probe:
             if request.url.path in {"/ready", "/health/deep"}:
                 return await health_probe_response(request)
+            if request.url.path == "/metrics":
+                from .metrics import metrics_response
+                return await metrics_response(request)
             return await call_next(request)
         response = await call_next(request)
         if rate_limit_checked:
@@ -386,6 +391,8 @@ class CacheControlMiddleware(BaseHTTPMiddleware):
         if request.method == "OPTIONS":
             return None
         path = request.url.path
+        if path == "/metrics":
+            return "no-store"
         if path in {"/docs", "/redoc", "/openapi.json"}:
             return None
         if request.method == "POST" and path.startswith("/api/"):

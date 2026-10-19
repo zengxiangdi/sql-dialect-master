@@ -30,6 +30,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.api.auth import require_api_access
+from backend.api.metrics import MetricsMiddleware, configure_runtime_metrics, metrics_response, record_transpile_request
 from backend.api.rate_limit_store import InMemoryRateLimitStore
 from backend.api.readiness import health_probe_response
 from backend.api.workers import BoundedWorkerPool, WorkerCapacityError
@@ -303,6 +304,12 @@ func_encyclopedia = FunctionEncyclopedia()
 type_mapper = TypeMapper()
 nl2sql_generator = NL2SQLGenerator()
 
+configure_runtime_metrics(
+    transpiler_provider=lambda: transpiler,
+    worker_provider=_get_worker_pool,
+    limiter_provider=lambda: rate_limiter,
+)
+
 # Request timing middleware with logging
 @app.middleware("http")
 async def add_process_time_header(request: Request, call_next):
@@ -319,6 +326,11 @@ async def add_process_time_header(request: Request, call_next):
     api_logger.info("%s %r - %s - %.4fs", request.method, request.url.path,
                     response.status_code, process_time)
     return response
+
+
+# This is the outermost application middleware, so it also observes short
+# circuit responses returned by rate limiting and worker-capacity guards.
+app.add_middleware(MetricsMiddleware)
 
 # Dialect info for enhanced responses (from centralized config)
 DIALECT_INFO = get_dialect_api_info()
@@ -460,6 +472,10 @@ class APIResponse(BaseModel):
 
 # === API Endpoints ===
 
+@app.get("/metrics", include_in_schema=False)
+async def metrics_endpoint(request: Request):
+    return await metrics_response(request)
+
 @app.get("/", tags=["system"])
 async def root():
     """
@@ -560,11 +576,13 @@ async def convert_sql(request: ConvertRequest):
     source_dialect = request.source_dialect.strip().lower()
     target_dialect = request.target_dialect.strip().lower()
     if source_dialect not in SUPPORTED_DIALECTS:
+        record_transpile_request("unknown", "unknown", "validation_error")
         raise HTTPException(
             status_code=400,
             detail=f"Unsupported source dialect: {request.source_dialect}. Supported: {SUPPORTED_DIALECTS}"
         )
     if target_dialect not in SUPPORTED_DIALECTS:
+        record_transpile_request(source_dialect, "unknown", "validation_error")
         raise HTTPException(
             status_code=400,
             detail=f"Unsupported target dialect: {request.target_dialect}. Supported: {SUPPORTED_DIALECTS}"
@@ -572,12 +590,21 @@ async def convert_sql(request: ConvertRequest):
 
     # sqlglot parsing/transpilation is CPU-bound.  Keep it off the event loop
     # so one large request cannot stall unrelated async requests.
-    result = await _run_cpu_bound(
-        transpiler.transpile,
-        request.sql,
+    try:
+        result = await _run_cpu_bound(
+            transpiler.transpile,
+            request.sql,
+            source_dialect,
+            target_dialect,
+            request.pretty,
+        )
+    except HTTPException:
+        record_transpile_request(source_dialect, target_dialect, "error")
+        raise
+    record_transpile_request(
         source_dialect,
         target_dialect,
-        request.pretty,
+        "success" if result.success else "error",
     )
     return ConvertResponse(
         success=result.success,

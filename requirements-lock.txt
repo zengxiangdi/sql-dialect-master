@@ -19,6 +19,7 @@ httpcore==1.0.9
 idna==3.19
 iniconfig==2.3.0
 packaging==26.3
+prometheus-client==0.26.0
 pluggy==1.6.0
 pygments==2.21.0
 python-dotenv==1.2.3
