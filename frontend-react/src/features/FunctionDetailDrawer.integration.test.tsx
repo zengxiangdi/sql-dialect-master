@@ -1,4 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FunctionDetailDrawer } from "../components/FunctionDetailDrawer";
@@ -85,11 +86,13 @@ describe("function detail drawer", () => {
     expect(screen.getByRole("dialog", { name: "CONCAT" })).toBeInTheDocument();
   });
 
-  it("shows an empty state when a function has no parameters", async () => {
+  it("hides the parameters section when a function has no parameters", async () => {
     mockLibrary(detail("CURRENT_DATE", []));
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "View CURRENT_DATE details" }));
-    expect(await screen.findByText("No parameters")).toBeInTheDocument();
+    expect(await screen.findByRole("table", { name: "CURRENT_DATE syntax across 12 dialects" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Function parameters" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Parameters" })).not.toBeInTheDocument();
   });
 
   it("handles catalog records without optional parameter, example, or note fields", async () => {
@@ -105,8 +108,8 @@ describe("function detail drawer", () => {
       comparison: { ...payload.comparison, parameters: [], examples: {}, notes: "" },
     })));
     render(drawer("CURRENT_DATE"));
-    expect(await screen.findByText("No parameters")).toBeInTheDocument();
-    const table = screen.getByRole("table", { name: "CURRENT_DATE syntax across 12 dialects" });
+    const table = await screen.findByRole("table", { name: "CURRENT_DATE syntax across 12 dialects" });
+    expect(screen.queryByRole("region", { name: "Function parameters" })).not.toBeInTheDocument();
     expect(within(table).getAllByRole("row")).toHaveLength(13);
     for (const dialect of ALL_DIALECTS) expect(within(table).getByRole("rowheader", { name: DIALECT_LABELS[dialect] })).toBeInTheDocument();
     expect(within(table).getAllByText("N/A")).toHaveLength(10);
@@ -178,7 +181,7 @@ describe("function detail drawer", () => {
     renderPage();
     const card = await screen.findByRole("button", { name: "View CONCAT details" });
     card.focus();
-    fireEvent.keyDown(card, { key });
+    await userEvent.keyboard(key === "Enter" ? "{Enter}" : " ");
     expect(await screen.findByRole("dialog", { name: "CONCAT" })).toBeInTheDocument();
   });
 
@@ -219,7 +222,8 @@ describe("function detail drawer", () => {
     expect(oldSignal.aborted).toBe(false);
     view.rerender(drawer("LOWER"));
     expect(oldSignal.aborted).toBe(true);
-    expect(await screen.findByText("No parameters")).toBeInTheDocument();
+    expect(await screen.findByRole("table", { name: "LOWER syntax across 12 dialects" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Function parameters" })).not.toBeInTheDocument();
     await act(async () => { resolveOld(response(detail("CONCAT"))); });
     expect(screen.getByRole("dialog", { name: "LOWER" })).toBeInTheDocument();
     expect(screen.queryByText("First string to concatenate")).not.toBeInTheDocument();
