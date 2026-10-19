@@ -23,6 +23,29 @@ back to the same value unless `SDM_PARSER_MAX_SQL_LENGTH` is explicitly set.
 For a single process, the in-memory rate-limit backend is suitable. For several
 workers or instances, use Redis so all workers share one rate-limit counter.
 
+### Batch conversion
+
+`POST /api/convert/batch` accepts one source/target dialect pair and between
+one and `SDM_MAX_BATCH_SIZE` statements (default `100`). The entire JSON body
+remains subject to the 512 KiB limit, and each SQL statement uses the existing
+SQL-length and security checks. Empty or oversized arrays and non-string
+items return 422; unsupported dialects return 400. Ordinary item failures
+return HTTP 200 with per-item errors, even when every item fails.
+
+A batch occupies one worker slot and runs its statements sequentially. The
+default 30-second `SDM_REQUEST_TIMEOUT` covers queue waiting plus execution
+for the whole batch, not a separate budget for each statement. It does not
+cover the entire HTTP lifecycle, such as body reading or response serialization.
+Capacity rejection returns 503 with `Retry-After`; timeout returns 504. Neither
+response contains partial results. A 504 does not cancel the batch: background
+work may continue through the remaining statements, update the cache, and
+retain its slot until completion.
+
+Rate limiting counts one HTTP request per batch, rather than one request per
+statement. Prefer smaller batches when latency and fairness to other requests
+matter; the default 100-statement limit does not guarantee completion within
+30 seconds.
+
 ## 2. Reverse proxy and TLS
 
 Terminate TLS at the reverse proxy and forward HTTP traffic to the Uvicorn
@@ -138,6 +161,36 @@ Conversion labels use the fixed supported dialect names and a fixed result
 vocabulary. Labels never contain SQL, query strings, client IPs, request IDs,
 error text, table names, or column names. The `/metrics` scrape itself is not
 counted as an HTTP request.
+
+Batch conversion adds three metrics, also scoped to one process:
+
+| Metric | Labels | Meaning |
+|--------|--------|---------|
+| `sdm_transpile_batch_requests_total` | `source`, `target`, `result` | One outcome for each request entering the batch handler |
+| `sdm_transpile_batch_items_total` | `source`, `target`, `result` | Item outcomes only after a complete result list reaches the handler |
+| `sdm_transpile_batch_size` | None | Histogram of validated statement counts before worker admission |
+
+Batch request results are `success` (all items succeeded), `partial_failure`
+(both successful and failed items), `error` (all items failed, or a request-level
+503/504/500), and `validation_error` (an unsupported dialect found in the
+handler). Item results are only `success` or `error`. Dialect labels contain
+normalized supported names or the fixed value `unknown` for invalid input.
+The existing `sdm_transpile_requests_total` continues to count only the
+single-conversion endpoint; batch items do not increment it.
+
+The size histogram has fixed buckets of 1, 2, 5, 10, 20, 50, and 100 statements,
+plus the implicit `+Inf` bucket. It is observed after dialect validation and
+before worker admission, including batches that subsequently receive 503/504.
+Rejections before the handler, such as authentication, body-size, rate-limit,
+or Pydantic validation failures, use the existing HTTP metrics and do not
+increment batch metrics.
+
+503/504 responses do not increment the item counter. Even if a timed-out
+background batch later completes, its items remain excluded because the
+handler did not receive its complete results. Cache statistics can still
+increase as that background work finishes. Batch labels never include item
+indices or batch lengths; the existing privacy and per-process boundaries
+apply to all three metrics.
 
 Prometheus configuration can send the token in a header:
 

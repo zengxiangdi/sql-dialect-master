@@ -260,6 +260,7 @@ sql-dialect-master/
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/convert` | POST | Convert SQL between dialects; response includes `error_code` on failure |
+| `/api/convert/batch` | POST | Convert an ordered batch with one dialect pair and per-item results |
 | `/api/parse` | POST | Parse SQL and extract structural elements |
 | `/api/nl2sql` | POST | Generate SQL from natural language |
 | `/api/functions` | GET | Search SQL functions |
@@ -270,6 +271,24 @@ sql-dialect-master/
 | `/health` | GET | Health check |
 | `/health/deep` | GET | Deep health check |
 | `/api/stats` | GET | Service and dataset statistics |
+
+For example, send this JSON body to `POST /api/convert/batch`:
+
+```json
+{
+  "statements": ["SELECT id FROM users", "SELECT user_id FROM orders"],
+  "source_dialect": "postgres",
+  "target_dialect": "mysql",
+  "pretty": true
+}
+```
+
+Results retain input order and include a zero-based `index` alongside the
+single-conversion response fields. The summary includes `count`, `succeeded`,
+and `failed`; top-level `success` is true only when every item succeeds.
+Ordinary item failures, including a batch where every item fails, return HTTP
+200 with per-item `error` and `error_code`. Request-level errors use the
+existing error envelope; 503/504 responses do not include partial results.
 
 ## 🧪 Quality, Validation & Performance
 
@@ -283,7 +302,14 @@ The semantic CI gate executes representative conversions against PostgreSQL and 
 
 Security validation structurally detects stacked SQL statements using the parser when available, with configurable policy controlling whether dangerous input is blocked or only warned about.
 
-The async batch API bounds concurrent work and preserves input order. A reproducible transpiler benchmark is available under `backend/benchmarks/` and is also executed in CI for performance observability. The benchmark intentionally reports measurements without failing the build on a fixed latency threshold because hosted CI timing is variable.
+The SDK's `batch_transpile_async` bounds concurrent work and preserves input
+order. REST batch conversion runs sequentially in one API worker slot, and the
+entire batch shares the default 30-second queue-plus-execution budget
+(`SDM_REQUEST_TIMEOUT`). HTTP 504 does not cancel the background batch. See
+the [deployment limits](docs/deployment.md#1-deployment-model) for capacity
+and timeout behavior.
+
+A reproducible transpiler benchmark is available under `backend/benchmarks/` and is also executed in CI for performance observability. The benchmark intentionally reports measurements without failing the build on a fixed latency threshold because hosted CI timing is variable.
 
 README source-of-truth checks run in CI and verify the release version, Python requirement, supported dialect list, and benchmark references against repository sources.
 
