@@ -48,6 +48,24 @@ TRANSPILE_REQUESTS = Counter(
     ["source", "target", "result"],
     registry=REGISTRY,
 )
+TRANSPILE_BATCH_REQUESTS = Counter(
+    "sdm_transpile_batch_requests_total",
+    "Batch conversion handler outcomes by dialect pair and result",
+    ["source", "target", "result"],
+    registry=REGISTRY,
+)
+TRANSPILE_BATCH_ITEMS = Counter(
+    "sdm_transpile_batch_items_total",
+    "Items in complete batch results received by the API handler",
+    ["source", "target", "result"],
+    registry=REGISTRY,
+)
+TRANSPILE_BATCH_SIZE = Histogram(
+    "sdm_transpile_batch_size",
+    "Statement count of validated batches before worker admission",
+    buckets=(1, 2, 5, 10, 20, 50, 100),
+    registry=REGISTRY,
+)
 
 _transpiler_provider: Callable[[], object] | None = None
 _worker_provider: Callable[[], object] | None = None
@@ -128,6 +146,21 @@ def record_rate_limit_rejection() -> None:
 
 def record_transpile_request(source: str, target: str, result: str) -> None:
     TRANSPILE_REQUESTS.labels(source=source, target=target, result=result).inc()
+
+
+def record_transpile_batch_request(source: str, target: str, result: str) -> None:
+    TRANSPILE_BATCH_REQUESTS.labels(source=source, target=target, result=result).inc()
+
+
+def record_transpile_batch_items(source: str, target: str, succeeded: int, failed: int) -> None:
+    if succeeded:
+        TRANSPILE_BATCH_ITEMS.labels(source=source, target=target, result="success").inc(succeeded)
+    if failed:
+        TRANSPILE_BATCH_ITEMS.labels(source=source, target=target, result="error").inc(failed)
+
+
+def observe_transpile_batch_size(size: int) -> None:
+    TRANSPILE_BATCH_SIZE.observe(size)
 
 
 def _authorized(request: Request) -> bool:
