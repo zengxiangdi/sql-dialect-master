@@ -1,14 +1,18 @@
 """REST batches preserve item contracts while sharing one bounded worker slot."""
 
+import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from threading import Event
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 
 from backend.api import main
-from backend.api.workers import BoundedWorkerPool
+from backend.api.metrics import REGISTRY
+from backend.api.middleware import DEFAULT_MAX_REQUEST_BODY_BYTES
+from backend.api.workers import BoundedWorkerPool, WorkerCapacityError
 from backend.core.config import settings
 from backend.core.transpiler import TranspileResult
 
@@ -40,6 +44,50 @@ def assert_error_envelope(response, status, code):
     assert payload["request_id"] == response.headers["X-Request-ID"]
     assert "results" not in payload
     datetime.fromisoformat(payload["timestamp"])
+
+
+def batch_metric_snapshot(source="postgres", target="mysql"):
+    def value(name, labels=None):
+        return REGISTRY.get_sample_value(name, labels or {}) or 0
+
+    snapshot = {}
+    for result in ("success", "partial_failure", "error", "validation_error"):
+        snapshot[f"requests_{result}"] = value(
+            "sdm_transpile_batch_requests_total", {"source": source, "target": target, "result": result},
+        )
+    for result in ("success", "error"):
+        snapshot[f"items_{result}"] = value(
+            "sdm_transpile_batch_items_total", {"source": source, "target": target, "result": result},
+        )
+    for suffix in ("count", "sum"):
+        snapshot[f"size_{suffix}"] = value(f"sdm_transpile_batch_size_{suffix}")
+    for boundary in ("1.0", "2.0", "5.0", "10.0", "20.0", "50.0", "100.0", "+Inf"):
+        snapshot[f"bucket_{boundary}"] = value("sdm_transpile_batch_size_bucket", {"le": boundary})
+    snapshot["single_requests"] = sum(
+        sample.value
+        for metric in REGISTRY.collect()
+        for sample in metric.samples
+        if sample.name == "sdm_transpile_requests_total"
+    )
+    return snapshot
+
+
+def assert_batch_metric_delta(
+    before, *, request_result=None, succeeded=0, failed=0, size=None, source="postgres", target="mysql",
+):
+    after = batch_metric_snapshot(source, target)
+    actual = {key: after[key] - before[key] for key in before}
+    expected = dict.fromkeys(before, 0)
+    if request_result:
+        expected[f"requests_{request_result}"] = 1
+    expected["items_success"] = succeeded
+    expected["items_error"] = failed
+    if size is not None:
+        expected["size_count"] = 1
+        expected["size_sum"] = size
+        for boundary in ("1.0", "2.0", "5.0", "10.0", "20.0", "50.0", "100.0", "+Inf"):
+            expected[f"bucket_{boundary}"] = int(size <= float(boundary))
+    assert actual == expected
 
 
 def test_batch_success_preserves_order_and_conversion_fields(client):
@@ -297,16 +345,19 @@ def test_batch_timeout_holds_slot_until_background_batch_finishes(client, monkey
     monkeypatch.setattr(main.transpiler, "batch_transpile", blocked_batch)
     monkeypatch.setattr(settings, "request_timeout", 0.03)
     try:
+        metrics_before = batch_metric_snapshot()
         response = client.post("/api/convert/batch", json=batch_payload(["SELECT 1", "SELECT 2"]))
         assert started.is_set()
         assert_error_envelope(response, 504, "REQUEST_TIMEOUT")
         assert pool.stats()["in_use"] == 1
         assert pool.stats()["timeouts"] == 1
         assert not finished.is_set()
+        assert_batch_metric_delta(metrics_before, request_result="error", size=2)
 
         rejected = client.post("/api/convert/batch", json=batch_payload())
         assert_error_envelope(rejected, 503, "SERVICE_UNAVAILABLE")
         assert rejected.headers["Retry-After"] == "1"
+        before_background_completion = batch_metric_snapshot()
 
         release.set()
         assert finished.wait(2), "background batch did not finish"
@@ -316,6 +367,7 @@ def test_batch_timeout_holds_slot_until_background_batch_finishes(client, monkey
         assert pool.stats()["in_use"] == 0
         assert len(background_results) == 2
         assert all(item.success for item in background_results)
+        assert_batch_metric_delta(before_background_completion)
 
         monkeypatch.setattr(settings, "request_timeout", 2)
         recovered = client.post("/api/convert/batch", json=batch_payload())
@@ -324,3 +376,153 @@ def test_batch_timeout_holds_slot_until_background_batch_finishes(client, monkey
     finally:
         release.set()
         pool.shutdown()
+
+
+@pytest.mark.parametrize(
+    "statements,result,succeeded,failed",
+    [
+        (["SELECT 1", "SELECT 2", "SELECT 3"], "success", 3, 0),
+        (["SELECT 1", "", "DROP TABLE users"], "partial_failure", 1, 2),
+        (["", "DROP TABLE users"], "error", 0, 2),
+    ],
+    ids=["success", "partial-failure", "all-failed"],
+)
+def test_batch_result_metrics_have_exact_deltas(client, statements, result, succeeded, failed):
+    before = batch_metric_snapshot()
+    response = client.post(
+        "/api/convert/batch",
+        json=batch_payload(statements, source_dialect=" POSTGRES ", target_dialect=" MySQL "),
+    )
+
+    assert response.status_code == 200
+    assert_batch_metric_delta(
+        before, request_result=result, succeeded=succeeded, failed=failed, size=len(statements),
+    )
+
+
+@pytest.mark.parametrize("status", [503, 504])
+def test_batch_worker_failure_metrics_do_not_invent_item_results(client, monkeypatch, status):
+    class UnavailablePool:
+        async def run(self, *_args, **_kwargs):
+            if status == 503:
+                raise WorkerCapacityError("test worker is busy")
+            raise asyncio.TimeoutError()
+
+    monkeypatch.setattr(main, "_get_worker_pool", lambda: UnavailablePool())
+    before = batch_metric_snapshot()
+    response = client.post("/api/convert/batch", json=batch_payload(["SELECT 1", "SELECT 2"]))
+
+    code = "SERVICE_UNAVAILABLE" if status == 503 else "REQUEST_TIMEOUT"
+    assert_error_envelope(response, status, code)
+    assert_batch_metric_delta(before, request_result="error", size=2)
+
+
+@pytest.mark.parametrize("failure", ["worker-exception", "malformed-result"])
+def test_batch_unexpected_failure_metrics_do_not_count_items(client, monkeypatch, failure):
+    if failure == "worker-exception":
+        def fail_batch(*_args):
+            raise RuntimeError("private worker failure detail")
+
+        monkeypatch.setattr(main.transpiler, "batch_transpile", fail_batch)
+    else:
+        malformed_result = TranspileResult(
+            success=True,
+            source_sql="SELECT 1",
+            target_sql=123,
+            source_dialect="postgres",
+            target_dialect="mysql",
+        )
+        monkeypatch.setattr(main.transpiler, "batch_transpile", lambda *_args: [malformed_result])
+    before = batch_metric_snapshot()
+    error_client = TestClient(main.app, raise_server_exceptions=False)
+    try:
+        response = error_client.post("/api/convert/batch", json=batch_payload())
+    finally:
+        error_client.close()
+
+    assert response.status_code == 500
+    assert response.json()["error"]["code"] == "INTERNAL_ERROR"
+    assert "results" not in response.json()
+    assert "private worker failure detail" not in response.text
+    assert_batch_metric_delta(before, request_result="error", size=1)
+
+
+@pytest.mark.parametrize(
+    "field,source,target",
+    [("source_dialect", "unknown", "unknown"), ("target_dialect", "postgres", "unknown")],
+)
+def test_batch_invalid_dialect_metrics_use_only_fixed_unknown_labels(client, field, source, target):
+    before = batch_metric_snapshot(source, target)
+    response = client.post(
+        "/api/convert/batch", json=batch_payload(**{field: "private-unsupported-dialect-value"}),
+    )
+
+    assert_error_envelope(response, 400, "BAD_REQUEST")
+    assert_batch_metric_delta(before, request_result="validation_error", source=source, target=target)
+    for metric in REGISTRY.collect():
+        for sample in metric.samples:
+            if sample.name.startswith("sdm_transpile_batch_"):
+                assert "private-unsupported-dialect-value" not in sample.labels.values()
+
+
+@pytest.mark.parametrize("status", [401, 413, 422, 429])
+def test_batch_prehandler_rejections_do_not_increment_batch_metrics(client, monkeypatch, status):
+    before = batch_metric_snapshot()
+    if status == 401:
+        monkeypatch.setattr(settings, "api_key", SecretStr("test-business-api-key"))
+        response = client.post("/api/convert/batch", json=batch_payload())
+        code = "UNAUTHORIZED"
+    elif status == 413:
+        response = client.post(
+            "/api/convert/batch", content=b"x",
+            headers={"Content-Length": str(DEFAULT_MAX_REQUEST_BODY_BYTES + 1)},
+        )
+        code = "PAYLOAD_TOO_LARGE"
+    elif status == 422:
+        response = client.post("/api/convert/batch", json=batch_payload([]))
+        code = "VALIDATION_FAILED"
+    else:
+        monkeypatch.setattr(main.rate_limiter, "is_allowed", lambda _client_id: (False, 0, 17))
+        response = client.post("/api/convert/batch", json=batch_payload())
+        code = "RATE_LIMITED"
+
+    assert_error_envelope(response, status, code)
+    assert_batch_metric_delta(before)
+
+
+def test_batch_metrics_exposition_has_bounded_labels_and_no_request_data(client, monkeypatch):
+    token = "batch-metrics-private-token"
+    request_id = "ea6de6e7-75d1-45e9-8a82-cd6231c5a121"
+    client_ip = "198.51.100.174"
+    sql = "SELECT private_batch_column FROM private_batch_table"
+    monkeypatch.setattr(settings, "metrics_enabled", True)
+    monkeypatch.setattr(settings, "metrics_token", SecretStr(token))
+    response = client.post(
+        "/api/convert/batch?private-query=private-query-marker",
+        json=batch_payload([sql, "DROP TABLE private_batch_table"]),
+        headers={"X-Request-ID": request_id, "X-Forwarded-For": client_ip},
+    )
+    assert response.status_code == 200
+    error_text = response.json()["results"][1]["error"]
+    scrape = client.get("/metrics", headers={"X-Metrics-Token": token})
+
+    assert scrape.status_code == 200
+    for private_value in (
+        token, request_id, client_ip, sql, "private_batch_column", "private_batch_table",
+        "private-query", "private-query-marker", error_text,
+    ):
+        assert private_value not in scrape.text
+    for metric in REGISTRY.collect():
+        for sample in metric.samples:
+            if sample.name in {"sdm_transpile_batch_requests_total", "sdm_transpile_batch_items_total"}:
+                assert set(sample.labels) == {"source", "target", "result"}
+                assert sample.labels["source"] in {*main.SUPPORTED_DIALECTS, "unknown"}
+                assert sample.labels["target"] in {*main.SUPPORTED_DIALECTS, "unknown"}
+                allowed_results = (
+                    {"success", "error"}
+                    if sample.name == "sdm_transpile_batch_items_total"
+                    else {"success", "partial_failure", "error", "validation_error"}
+                )
+                assert sample.labels["result"] in allowed_results
+            elif sample.name == "sdm_transpile_batch_size_bucket":
+                assert set(sample.labels) == {"le"}

@@ -30,7 +30,15 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
 from backend.api.auth import require_api_access
-from backend.api.metrics import MetricsMiddleware, configure_runtime_metrics, metrics_response, record_transpile_request
+from backend.api.metrics import (
+    MetricsMiddleware,
+    configure_runtime_metrics,
+    metrics_response,
+    observe_transpile_batch_size,
+    record_transpile_batch_items,
+    record_transpile_batch_request,
+    record_transpile_request,
+)
 from backend.api.rate_limit_store import InMemoryRateLimitStore
 from backend.api.readiness import health_probe_response
 from backend.api.workers import BoundedWorkerPool, WorkerCapacityError
@@ -660,29 +668,50 @@ async def convert_sql_batch(request: BatchConvertRequest):
     HTTP 200 with per-item errors. Request-level failures use the existing
     error envelope. A 504 ends the wait but does not cancel the worker batch.
     """
-    source_dialect = normalize_dialect(request.source_dialect, "source dialect")
-    target_dialect = normalize_dialect(request.target_dialect, "target dialect")
-    batch_results = await _run_cpu_bound(
-        transpiler.batch_transpile,
-        list(request.statements),
+    source_dialect = target_dialect = "unknown"
+    try:
+        source_dialect = normalize_dialect(request.source_dialect, "source dialect")
+        target_dialect = normalize_dialect(request.target_dialect, "target dialect")
+        observe_transpile_batch_size(len(request.statements))
+        batch_results = await _run_cpu_bound(
+            transpiler.batch_transpile,
+            list(request.statements),
+            source_dialect,
+            target_dialect,
+            request.pretty,
+        )
+        results = [
+            BatchConvertItemResponse(index=index, **result.to_dict())
+            for index, result in enumerate(batch_results)
+        ]
+        count = len(results)
+        succeeded = sum(item.success for item in results)
+        failed = count - succeeded
+        response = BatchConvertResponse(
+            success=failed == 0,
+            results=results,
+            count=count,
+            succeeded=succeeded,
+            failed=failed,
+        )
+    except HTTPException as exc:
+        record_transpile_batch_request(
+            source_dialect,
+            target_dialect,
+            "validation_error" if exc.status_code == 400 else "error",
+        )
+        raise
+    except Exception:
+        record_transpile_batch_request(source_dialect, target_dialect, "error")
+        raise
+
+    record_transpile_batch_items(source_dialect, target_dialect, succeeded, failed)
+    record_transpile_batch_request(
         source_dialect,
         target_dialect,
-        request.pretty,
+        "success" if failed == 0 else "partial_failure" if succeeded else "error",
     )
-    results = [
-        BatchConvertItemResponse(index=index, **result.to_dict())
-        for index, result in enumerate(batch_results)
-    ]
-    count = len(results)
-    succeeded = sum(item.success for item in results)
-    failed = count - succeeded
-    return BatchConvertResponse(
-        success=failed == 0,
-        results=results,
-        count=count,
-        succeeded=succeeded,
-        failed=failed,
-    )
+    return response
 
 
 @app.post("/api/parse", tags=["conversion"])
