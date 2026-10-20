@@ -146,6 +146,12 @@ def test_success_posts_expected_headers_options_and_messages():
     assert "postgres" in system
     assert "UNSAFE" in system
     assert "no Markdown, explanations, or comments" in system
+    assert "If hints are absent" in system
+    assert "infer reasonable table and column names" in system
+    assert "provided, use them" in system
+    assert "strongly implied" in system
+    assert "do not invent unrelated tables" in system
+    assert "cannot be satisfied safely" in system
     assert json.loads(payload["messages"][1]["content"]) == {
         "dialect": "postgres", "table_hint": "users", "column_hints": ["users.id"], "text": "Find users",
     }
@@ -156,12 +162,47 @@ def test_success_posts_expected_headers_options_and_messages():
 def test_optional_headers_and_hints_are_not_invented():
     def handler(request):
         assert "HTTP-Referer" not in request.headers
-        user = json.loads(json.loads(request.content)["messages"][1]["content"])
+        payload = json.loads(request.content)
+        system = payload["messages"][0]["content"]
+        assert "SELECT or UNION" in system
+        assert "no Markdown, explanations, or comments" in system
+        assert "Do not generate data modifications, DDL, SELECT INTO, or locking queries" in system
+        assert "If hints are absent" in system
+        assert "infer reasonable table and column names" in system
+        assert "provided, use them" in system
+        assert "strongly implied" in system
+        assert "do not invent unrelated tables" in system
+        assert "return exactly UNSAFE" in system
+        user = json.loads(payload["messages"][1]["content"])
         assert user == {"dialect": "mysql", "table_hint": "", "column_hints": [], "text": "查询"}
         return httpx.Response(200, json=completion("SELECT 1"))
 
     client = LLMN2SQLClient(configured(), httpx.MockTransport(handler))
     assert asyncio.run(client.generate("查询", "mysql")).sql == "SELECT 1"
+
+
+@pytest.mark.parametrize("content", ["UNSAFE", "SELECT id FROM users"])
+def test_no_hint_response_still_requires_explicit_sql_validation(content):
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        payload = json.loads(request.content)
+        assert json.loads(payload["messages"][1]["content"]) == {
+            "dialect": "postgres", "table_hint": "", "column_hints": [], "text": "Find user ids",
+        }
+        return httpx.Response(200, json=completion(content))
+
+    client = LLMN2SQLClient(configured(), httpx.MockTransport(handler))
+    result = asyncio.run(client.generate("Find user ids", "postgres"))
+    assert len(requests) == 1
+    assert result.sql == content
+    assert result.model == "provider/test-model"
+    if content == "UNSAFE":
+        with pytest.raises(LLMError, match="invalid_sql"):
+            validate_llm_sql(result.sql, "postgres")
+    else:
+        assert validate_llm_sql(result.sql, "postgres") == content
 
 
 @pytest.mark.parametrize("enabled,missing_field", [(False, None), (True, "nl2sql_llm_api_key"), (True, "nl2sql_llm_model")])
