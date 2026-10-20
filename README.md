@@ -141,6 +141,52 @@ print(result.sql)
 # Output: SELECT * FROM orders WHERE created_at >= DATE_SUB(CURRENT_DATE, 7)
 ```
 
+#### Optional LLM (OpenRouter)
+
+`POST /api/nl2sql` can optionally call an OpenRouter-compatible chat-completions
+service. This is disabled by default; the SDK generator and the default API
+path remain deterministic. Configure only the server's untracked `.env`:
+
+```dotenv
+SDM_NL2SQL_LLM_ENABLED=true
+SDM_NL2SQL_LLM_BASE_URL=https://openrouter.ai/api/v1
+SDM_NL2SQL_LLM_API_KEY="your-server-side-key"
+SDM_NL2SQL_LLM_MODEL="openai/gpt-4o-mini"
+SDM_NL2SQL_LLM_TIMEOUT=15
+SDM_NL2SQL_LLM_MAX_TOKENS=800
+SDM_NL2SQL_LLM_TEMPERATURE=0.0
+SDM_NL2SQL_LLM_FALLBACK=true
+SDM_NL2SQL_LLM_APP_NAME="SQL Dialect Master"
+SDM_NL2SQL_LLM_APP_URL=""
+```
+
+The model above is an example, not a default; enabling generation requires an
+explicit model and API key. The optional app URL supplies `HTTP-Referer`, and
+the app name supplies `X-Title`. Keep the key on the server: never add it to
+frontend configuration, browser storage, logs, or committed files. The server
+now includes `httpx` as a runtime dependency, using the existing locked version.
+
+When enabled, natural-language text and table/column hints are sent to the
+configured external provider. Do not submit sensitive content. The LLM path
+accepts only one target-dialect `SELECT`/`UNION`, including read-only CTEs;
+DDL, DML, `SELECT INTO`, locking queries, and stacked statements are rejected.
+INSERT/UPDATE/DELETE intents continue through the deterministic generator.
+Hints constrain the prompt; they are not a database schema or authorization
+boundary. No SQL is executed by generation.
+
+Responses add `provider` (`deterministic` or `llm`), `model`, and
+`fallback_reason`. An accepted LLM result reports confidence `0.8` with an
+`llm_generated` evidence item; the model's reasoning is never returned.
+Provider errors or rejected SQL fall back to deterministic generation by
+default, with a fixed reason code in `fallback_reason`. With fallback disabled,
+the API returns an ordinary failed generation with a safe explanation.
+The frontend labels the provider and shows a fixed fallback notice.
+
+Target-dialect parsing and structural checks do not guarantee semantic
+correctness or harmless database behavior. Review generated SQL before
+executing it. See [deployment guidance](docs/deployment.md#optional-nl2sql-llm)
+for egress, timeout, cost, privacy, and metrics details.
+
 #### Relational Query Support (D2)
 
 NL2SQL supports existential relationship queries using `EXISTS` / `NOT EXISTS` subqueries instead of physical `JOIN`s, preserving row count and avoiding duplicate expansion from 1:N relationships.
@@ -329,7 +375,10 @@ python scripts/verify_readme_consistency.py
 
 SQL dialect conversion is not universally semantics-preserving. The engine validates generated SQL against the target parser, but parser acceptance does not prove equivalent runtime behavior. Database-specific differences in NULL handling, implicit casts, date/time semantics, collation, timezone behavior, JSON/array operations, and other vendor features may require manual review or execution against the target database.
 
-NL2SQL is heuristic/template-driven rather than a calibrated probabilistic model. The returned confidence score should be treated as a generation-quality signal, not as a statistical probability that the SQL is correct.
+NL2SQL defaults to heuristic/template-driven generation, with an optional
+server-side LLM path for read-only queries. Neither path provides a calibrated
+probability: the returned confidence is a generation-quality signal, not the
+statistical probability that the SQL is correct.
 
 ## ⚙️ Configuration
 
