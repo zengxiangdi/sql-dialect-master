@@ -1,4 +1,4 @@
-import type { ConvertResponse, Dialect, DialectsResponse, DiffResponse, FunctionCategory, FunctionDetailResponse, FunctionItem, Nl2SqlResponse, ParseResponse, TypeMappingsResponse } from "./types";
+import type { ConvertResponse, Dialect, DialectsResponse, DiffResponse, FunctionCategory, FunctionDetailResponse, FunctionItem, Nl2SqlResponse, ParseResponse, SchemaDefinition, TypeMappingsResponse } from "./types";
 import { safeGetItem } from "./storage";
 
 export class ApiError extends Error {
@@ -76,14 +76,14 @@ export const api = {
   dialects: () => request<DialectsResponse>("/api/dialects"),
   convert: (sql: string, source_dialect: Dialect, target_dialect: Dialect, pretty = true, signal?: AbortSignal) =>
     request<ConvertResponse>("/api/convert", { method: "POST", body: JSON.stringify({ sql, source_dialect, target_dialect, pretty }), signal }),
-  nl2sql: (text: string, dialect: Dialect, table_hint?: string, column_hintsOrSignal?: string[] | AbortSignal, signal?: AbortSignal) => {
+  nl2sql: (text: string, dialect: Dialect, table_hint?: string, column_hintsOrSignal?: string[] | AbortSignal, signal?: AbortSignal, schema?: SchemaDefinition | null) => {
     // Keep the previous fourth-argument AbortSignal form working for callers
     // that do not provide column hints yet.
     const column_hints = Array.isArray(column_hintsOrSignal) ? column_hintsOrSignal : undefined;
     const requestSignal = Array.isArray(column_hintsOrSignal)
       ? signal
       : column_hintsOrSignal ?? signal;
-    return request<Nl2SqlResponse>("/api/nl2sql", { method: "POST", body: JSON.stringify({ text, dialect, table_hint: table_hint || null, column_hints: column_hints?.length ? column_hints : null }), signal: requestSignal });
+    return request<Nl2SqlResponse>("/api/nl2sql", { method: "POST", body: JSON.stringify({ text, dialect, table_hint: table_hint || null, column_hints: column_hints?.length ? column_hints : null, schema: schema ?? null }), signal: requestSignal });
   },
   parse: (sql: string, dialect: Dialect, signal?: AbortSignal) =>
     request<ParseResponse>("/api/parse", { method: "POST", body: JSON.stringify({ sql, dialect }), signal }),

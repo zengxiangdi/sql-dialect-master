@@ -88,6 +88,7 @@ describe("API client request lifecycle", () => {
       dialect: "postgres",
       table_hint: "orders",
       column_hints: ["orders.id", "orders.created_at"],
+      schema: null,
     });
   });
 
@@ -106,5 +107,39 @@ describe("API client request lifecycle", () => {
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(init.signal).toBeInstanceOf(AbortSignal);
     expect(JSON.parse(String(init.body))).toMatchObject({ column_hints: null });
+  });
+
+  it("sends optional schema with column hints and forwards caller cancellation", async () => {
+    const fetchMock = vi.fn((_url: string, init: RequestInit) => new Promise<never>((_resolve, reject) => {
+      init.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const schema = { tables: [{ name: "orders", columns: [{ name: "id", type: "integer" }] }] };
+    const controller = new AbortController();
+    const request = api.nl2sql("list orders", "postgres", "orders", ["orders.id"], controller.signal, schema);
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+
+    expect(JSON.parse(String(init.body))).toEqual({
+      text: "list orders", dialect: "postgres", table_hint: "orders", column_hints: ["orders.id"], schema,
+    });
+    expect(init.signal?.aborted).toBe(false);
+    controller.abort();
+    expect(init.signal?.aborted).toBe(true);
+    await expect(request).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("preserves the fourth-argument cancellation form when schema is provided", async () => {
+    const fetchMock = vi.fn((_url: string, init: RequestInit) => new Promise<never>((_resolve, reject) => {
+      init.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    const schema = { tables: [{ name: "orders" }] };
+    const request = api.nl2sql("list orders", "postgres", undefined, controller.signal, undefined, schema);
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+
+    expect(JSON.parse(String(init.body))).toMatchObject({ table_hint: null, column_hints: null, schema });
+    controller.abort();
+    await expect(request).rejects.toMatchObject({ name: "AbortError" });
   });
 });

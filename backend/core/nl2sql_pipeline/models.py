@@ -34,3 +34,4 @@ class NL2SQLResult:
     provider: str = "deterministic"
     model: str | None = None
     fallback_reason: str | None = None
+    schema_used: bool = False

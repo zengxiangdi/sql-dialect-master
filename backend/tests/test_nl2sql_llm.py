@@ -205,6 +205,174 @@ def test_no_hint_response_still_requires_explicit_sql_validation(content):
         assert validate_llm_sql(result.sql, "postgres") == content
 
 
+def test_schema_is_added_to_prompt_only_when_provided():
+    schema = {
+        "tables": [
+            {"name": "users", "columns": [{"name": "id", "type": "INTEGER"}]},
+            {"name": "orders", "columns": [{"name": "user_id"}]},
+        ],
+        "relationships": [{
+            "from_table": "orders", "from_column": "user_id",
+            "to_table": "users", "to_column": "id",
+        }],
+    }
+    requests = []
+
+    def handler(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json=completion())
+
+    client = LLMN2SQLClient(configured(), httpx.MockTransport(handler))
+    asyncio.run(client.generate("Find users", "postgres", schema=schema))
+    asyncio.run(client.generate("Find users", "postgres"))
+    schema_payload, default_payload = requests
+    assert json.loads(schema_payload["messages"][1]["content"]) == {
+        "dialect": "postgres", "table_hint": "", "column_hints": [], "text": "Find users",
+        "schema": schema,
+    }
+    assert (
+        schema_payload["messages"][0]["content"]
+        == default_payload["messages"][0]["content"]
+        + " Prefer the provided schema. Do not reference tables or columns outside the schema."
+    )
+    assert "schema" not in json.loads(default_payload["messages"][1]["content"])
+    assert "provided schema" not in default_payload["messages"][0]["content"]
+
+
+SCHEMA = {
+    "tables": [
+        {"name": "users", "columns": [{"name": "id"}, {"name": "name"}]},
+        {"name": "orders", "columns": [{"name": "user_id"}, {"name": "amount"}]},
+        {"name": "events", "columns": []},
+        {"name": "public.accounts", "columns": [{"name": "id"}]},
+    ],
+    "relationships": [],
+}
+
+
+@pytest.mark.parametrize("sql", [
+    "SELECT id FROM users",
+    "SELECT U.ID FROM USERS U",
+    "SELECT u.id, o.amount FROM users u JOIN orders o ON u.id = o.user_id",
+    "SELECT * FROM users",
+    "SELECT u.* FROM users u",
+    "SELECT arbitrary_column FROM events",
+    "SELECT e.arbitrary_column FROM events e",
+    "SELECT public.accounts.id FROM public.accounts",
+    'SELECT "public"."accounts"."id" FROM "public"."accounts"',
+    "SELECT a.id FROM public.accounts a",
+    "SELECT id FROM users UNION ALL SELECT user_id FROM orders",
+    "SELECT u.id FROM users u WHERE EXISTS (SELECT 1 FROM orders o WHERE o.user_id = u.id)",
+    "SELECT u.id FROM users u WHERE EXISTS (SELECT u.amount FROM orders u)",
+    "WITH chosen AS (SELECT id FROM users) SELECT chosen.id FROM chosen",
+    "WITH chosen AS (SELECT * FROM users) SELECT chosen.name FROM chosen",
+    "WITH chosen AS (SELECT * FROM users) SELECT chosen.id, chosen.name FROM chosen",
+    "SELECT d.identifier FROM (SELECT id AS identifier FROM users) d",
+    "SELECT d.id FROM (SELECT u.* FROM users u) d",
+    "SELECT d.arbitrary_column FROM (SELECT * FROM events) d",
+    "SELECT d.renamed FROM (SELECT id FROM users) d(renamed)",
+    "SELECT d.id FROM (SELECT id FROM users UNION ALL SELECT user_id FROM orders) d",
+])
+def test_schema_validation_accepts_known_sources_and_scope_aliases(sql):
+    # An unrestricted table permits arbitrary *qualified* columns. Unqualified
+    # names follow the complete schema's explicit column set when one exists.
+    schema = SCHEMA if sql != "SELECT arbitrary_column FROM events" else {
+        "tables": [{"name": "events", "columns": []}],
+    }
+    assert validate_llm_sql(sql, "postgres", schema=schema) == sql
+
+
+@pytest.mark.parametrize("sql", [
+    "SELECT * FROM hidden_table",
+    "SELECT id FROM users JOIN hidden_table h ON users.id = h.id",
+    "SELECT users.secret FROM users",
+    "SELECT secret FROM users",
+    "SELECT missing.id FROM users",
+    "SELECT missing.* FROM users",
+    "SELECT u.secret FROM users u",
+    "SELECT users.id FROM users u",
+    "SELECT id FROM private.users",
+    'SELECT id FROM "public.accounts"',
+    "SELECT id FROM accounts",
+    "SELECT private.accounts.id FROM public.accounts",
+    'SELECT "public.accounts".id FROM public.accounts',
+    'SELECT "public.accounts".* FROM public.accounts',
+    "SELECT public.accounts.secret FROM public.accounts",
+    "SELECT u.id FROM users u WHERE EXISTS (SELECT u.id FROM orders u)",
+    "SELECT u.id FROM users u WHERE EXISTS (SELECT 1 FROM orders o WHERE u.secret = o.user_id)",
+    "SELECT u.id FROM users u JOIN orders U ON u.id = U.user_id",
+    "WITH chosen AS (SELECT id FROM hidden_table) SELECT chosen.id FROM chosen",
+    "WITH chosen AS (SELECT id FROM users) SELECT chosen.secret FROM chosen",
+    "SELECT d.secret FROM (SELECT * FROM users) d",
+    "SELECT d.id FROM (SELECT id AS identifier FROM users) d",
+    "SELECT id FROM users UNION ALL SELECT secret FROM orders",
+    "SELECT id FROM users UNION ALL SELECT id FROM unknown",
+    "SELECT u.id FROM users u SEMI JOIN unknown x ON u.id = x.id",
+    "SELECT u.id FROM users u ANTI JOIN unknown x ON u.id = x.id",
+    "WITH RECURSIVE x AS (SELECT * FROM x) SELECT x.id FROM x",
+    "SELECT 1 FROM users WHERE EXISTS (SELECT unknown.id)",
+    "SELECT * FROM users WHERE EXISTS (SELECT 1 FROM users u WHERE unknown.id = u.id)",
+])
+def test_schema_validation_rejects_unknown_tables_columns_and_aliases(sql):
+    with pytest.raises(LLMError, match="invalid_sql"):
+        validate_llm_sql(sql, "postgres", schema=SCHEMA)
+
+
+def test_schema_without_column_information_leaves_column_names_unrestricted():
+    schema = {"tables": [{"name": "users", "columns": []}]}
+    sql = "SELECT unknown, u.anything, u.* FROM users u"
+    assert validate_llm_sql(sql, "postgres", schema=schema) == sql
+    with pytest.raises(LLMError, match="invalid_sql"):
+        validate_llm_sql("SELECT unknown.id FROM users", "postgres", schema=schema)
+
+
+def test_unqualified_columns_can_match_any_provided_table_column():
+    sql = "SELECT amount FROM users"
+    assert validate_llm_sql(sql, "postgres", schema=SCHEMA) == sql
+
+
+def test_empty_schema_disallows_physical_tables_but_preserves_select_literals():
+    assert validate_llm_sql("SELECT 1", "postgres", schema={}) == "SELECT 1"
+    with pytest.raises(LLMError, match="invalid_sql"):
+        validate_llm_sql("SELECT * FROM users", "postgres", schema={})
+
+
+def test_schema_validation_preserves_original_sql_and_positional_settings_argument():
+    sql = "SELECT u.id  FROM users u;"
+    assert validate_llm_sql(sql, "postgres", configured(), schema=SCHEMA) == sql
+    assert validate_llm_sql("SELECT hidden FROM unknown", "postgres", configured()) == "SELECT hidden FROM unknown"
+
+
+def test_schema_failure_does_not_expose_schema_or_sql_in_logs_or_exceptions(caplog):
+    schema = {"tables": [{"name": "sensitive_schema_table", "columns": [{"name": "private_column"}]}]}
+    sql = "SELECT provider_private_sql FROM unrelated_table"
+    with pytest.raises(LLMError, match="invalid_sql") as caught:
+        validate_llm_sql(sql, "postgres", schema=schema)
+    for private_text in ("sensitive_schema_table", "private_column", "provider_private_sql", "unrelated_table"):
+        assert private_text not in caplog.text
+        assert private_text not in "".join(traceback.format_exception(caught.value))
+
+
+def test_schema_scope_diagnostics_and_unexpected_errors_are_sanitized(monkeypatch, caplog):
+    sensitive_detail = "private-schema-and-sql-diagnostic"
+    logger = logging.getLogger("sqlglot")
+    previous_filters = list(logger.filters)
+
+    def fail_scope_analysis(_statement):
+        logger.warning(sensitive_detail)
+        raise ValueError(sensitive_detail)
+
+    monkeypatch.setattr(nl2sql_llm, "traverse_scope", fail_scope_analysis)
+    with caplog.at_level(logging.WARNING, logger="sqlglot"):
+        with pytest.raises(LLMError, match="invalid_sql") as caught:
+            validate_llm_sql("SELECT id FROM users", "postgres", schema=SCHEMA)
+        logger.warning("normal scope diagnostics remain enabled")
+    assert sensitive_detail not in caplog.text
+    assert sensitive_detail not in "".join(traceback.format_exception(caught.value))
+    assert "normal scope diagnostics remain enabled" in caplog.text
+    assert logger.filters == previous_filters
+
+
 @pytest.mark.parametrize("enabled,missing_field", [(False, None), (True, "nl2sql_llm_api_key"), (True, "nl2sql_llm_model")])
 def test_disabled_or_mutated_unconfigured_client_never_makes_a_request(enabled, missing_field):
     values = configured(nl2sql_llm_enabled=enabled)
