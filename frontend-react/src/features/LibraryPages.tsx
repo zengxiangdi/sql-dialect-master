@@ -7,10 +7,12 @@ import { PageHeader } from "../components/PageHeader";
 import { FunctionDetailDrawer } from "../components/FunctionDetailDrawer";
 
 const FALLBACK_FUNCTION_CATEGORIES = ["string", "date", "math", "aggregate", "window", "conditional", "conversion", "json", "array", "system", "geo"];
+const FUNCTIONS_PAGE_SIZE = 60;
 
 export function FunctionsPage() {
   const [items, setItems] = useState<FunctionItem[]>([]);
   const [total, setTotal] = useState(0);
+  const [visibleCount, setVisibleCount] = useState(FUNCTIONS_PAGE_SIZE);
   const [categories, setCategories] = useState<string[]>(FALLBACK_FUNCTION_CATEGORIES);
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("");
@@ -35,11 +37,12 @@ export function FunctionsPage() {
     let active = true;
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
-      setLoading(true); setError(null);
-      api.functions(search, category, 100, controller.signal).then((data) => { if (active) { setItems(data.functions); setTotal(data.total); } }).catch((e) => { if (active && !controller.signal.aborted) setError(e instanceof ApiError ? e : new ApiError("Unable to load functions", 0)); }).finally(() => { if (active) setLoading(false); });
+      setLoading(true); setError(null); setVisibleCount(FUNCTIONS_PAGE_SIZE);
+      api.functions(search, category, 500, controller.signal).then((data) => { if (active) { setItems(data.functions); setTotal(data.total); setVisibleCount(FUNCTIONS_PAGE_SIZE); } }).catch((e) => { if (active && !controller.signal.aborted) setError(e instanceof ApiError ? e : new ApiError("Unable to load functions", 0)); }).finally(() => { if (active) setLoading(false); });
     }, 180);
     return () => { active = false; controller.abort(); window.clearTimeout(timer); };
   }, [search, category, reloadToken]);
+  const visibleItems = items.slice(0, visibleCount);
   return <div>
     <PageHeader eyebrow="LIBRARY / FUNCTIONS" title="Function encyclopedia" description="Search syntax, semantics, and dialect coverage from one compact reference." />
     <Card>
@@ -56,12 +59,12 @@ export function FunctionsPage() {
             </select>
           </label>
         </div>
-        {!loading && !error && <p className="functions-summary" aria-live="polite">Showing {items.length} of {total} functions · {categories.length} {categories.length === 1 ? "category" : "categories"} · {ALL_DIALECTS.length} dialects</p>}
+        {!loading && !error && <p className="functions-summary" aria-live="polite">Showing {Math.min(visibleCount, items.length)} of {items.length} matching functions · {total} in catalog · {categories.length} {categories.length === 1 ? "category" : "categories"} · {ALL_DIALECTS.length} dialects</p>}
       </div>
       {error ? <ErrorPanel message={error.message} onRetry={() => setReloadToken((value) => value + 1)} />
         : loading ? <div className="loading-line" role="status">Loading functions…</div>
-        : items.length ? <div className="function-grid">
-          {items.map((item) => {
+        : items.length ? <><div className="function-grid">
+          {visibleItems.map((item) => {
             const dialects = Object.entries(item.dialects || {}).filter(([, syntax]) => syntax.trim() && syntax.trim().toUpperCase() !== "N/A");
             return <button type="button" className="function-card" key={item.name} aria-label={`View ${item.name} details`} aria-haspopup="dialog" aria-expanded={selectedName === item.name} onClick={(event) => { event.currentTarget.focus(); setSelectedName(item.name); }}>
               <span className="function-title">
@@ -79,7 +82,9 @@ export function FunctionsPage() {
             </button>;
           })}
         </div>
-        : <div className="function-empty"><EmptyState icon={<BookOpen size={20} />} title="No functions found" text="Try a broader search or clear the category filter." action={<Button onClick={() => { setSearch(""); setCategory(""); }}>Clear filters</Button>} /></div>}
+          {visibleCount < items.length && <div className="functions-load-more"><Button variant="secondary" onClick={() => setVisibleCount((count) => Math.min(count + FUNCTIONS_PAGE_SIZE, items.length))}>Load more ({items.length - visibleCount} remaining)</Button></div>}
+        </>
+        : <div className="function-empty"><EmptyState icon={<BookOpen size={20} />} title="No functions found" text="Try a broader search or clear the category filter." action={<Button onClick={() => { setSearch(""); setCategory(""); setVisibleCount(FUNCTIONS_PAGE_SIZE); }}>Clear filters</Button>} /></div>}
     </Card>
     <FunctionDetailDrawer name={selectedName} onClose={() => setSelectedName(null)} />
   </div>;
