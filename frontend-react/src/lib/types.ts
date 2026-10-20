@@ -45,6 +45,9 @@ export interface Nl2SqlResponse {
   parameter_style?: string | null;
   parameters?: string[];
   evidence?: Record<string, unknown> | null;
+  provider?: "deterministic" | "llm";
+  model?: string | null;
+  fallback_reason?: string | null;
 }
 
 export interface ParseResponse {

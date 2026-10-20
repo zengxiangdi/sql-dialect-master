@@ -31,3 +31,6 @@ class NL2SQLResult:
     # DML callers need to know how generated placeholders should be bound.
     parameter_style: str | None = None
     parameters: list = field(default_factory=list)
+    provider: str = "deterministic"
+    model: str | None = None
+    fallback_reason: str | None = None
