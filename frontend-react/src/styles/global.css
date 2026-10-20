@@ -89,6 +89,7 @@
 .nl-result-meta { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; min-width: 0; max-width: 100%; }
 .nl-result-meta .badge { max-width: 100%; overflow-wrap: anywhere; }
 .nl-fallback-hint { margin: 0 0 14px; }
+.nl-result-card .button-row { flex-wrap: wrap; }
 .json-block { max-height: 360px; overflow: auto; margin: 12px 0 0; padding: 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); color: var(--text); font: 11px/1.7 var(--mono); }
 
 /* History and preferences retain their existing markup and behavior. */
