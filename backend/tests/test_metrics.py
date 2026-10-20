@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import re
-
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr, ValidationError
@@ -10,6 +8,7 @@ from backend.api.main import app
 from backend.api import main
 from backend.api.workers import BoundedWorkerPool, WorkerCapacityError
 from backend.core.config import AppSettings, settings
+from backend.core.metadata import PROJECT_VERSION
 
 
 @pytest.fixture()
@@ -42,7 +41,7 @@ def test_metrics_authentication_and_exposition(monkeypatch):
     response = client.get("/metrics", headers={"X-Metrics-Token": "metrics-secret"})
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/plain; version=1.0.0")
-    assert re.search(r"sdm_build_info\{version=\"1\.1\.9\"\} 1", response.text)
+    assert f'sdm_build_info{{version="{PROJECT_VERSION}"}} 1' in response.text
     assert "metrics-secret" not in response.text
 
 

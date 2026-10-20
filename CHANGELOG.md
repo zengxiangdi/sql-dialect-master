@@ -2,6 +2,53 @@
 
 All notable changes to SQL Dialect Master are documented here.
 
+## [1.2.0] - 2026-10-21
+
+### New
+
+- Redesigned the Function encyclopedia with a search/category toolbar,
+  result summary, responsive cards, and dialect coverage.
+- The Function catalog now loads the full 298 entries and reveals them in
+  client-side batches with a Load more button.
+- Added an opt-in NL2SQL LLM path compatible with OpenRouter's
+  OpenAI-style `/chat/completions` API. It is disabled by default and
+  requires server-side configuration.
+- Added `provider`, `model`, and `fallback_reason` to NL2SQL responses so
+  clients can distinguish deterministic and LLM generation.
+
+### Changed
+
+- NL2SQL and shared native controls (search fields, category selects,
+  example chips, textareas, History, Settings, theme options, API-key
+  inputs) now share the same visual system.
+- The Function detail drawer omits the Parameters section when no
+  parameter metadata is available instead of showing an empty state.
+- The Types page no longer silently caps the table at 80 rows; it renders
+  all matching types and shows a “Showing X of Y” summary.
+- Added 41 previously missing CSS classes and dedicated Functions-page
+  styles.
+
+### Security / operations
+
+- When the optional LLM path is enabled, natural-language text and hints
+  are sent to OpenRouter; the API key remains server-side only.
+- LLM output is validated as a single SELECT/UNION for the target dialect;
+  DDL, DML, multiple statements, `SELECT INTO`, nested writes, and locking
+  statements are rejected.
+- LLM failures fall back to the deterministic generator by default and are
+  marked with a fixed `fallback_reason`.
+- Added optional LLM request, duration, and fallback metrics.
+- Added `httpx` as a runtime dependency for the OpenRouter-compatible
+  client.
+
+### Notes
+
+- No changes to the deterministic generator's output or to the existing
+  `/api/nl2sql` request fields and error envelope.
+- No versioned API removals; NL2SQL response additions are optional fields.
+- LLM generation is SELECT/UNION-only; DML intents continue to use the
+  deterministic generator.
+
 ## [1.1.9] - 2026-10-20
 
 ### New
