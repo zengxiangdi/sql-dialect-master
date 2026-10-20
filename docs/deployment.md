@@ -209,6 +209,67 @@ For Prometheus versions without `http_headers`, configure the reverse proxy to
 inject `X-Metrics-Token` on the internal scrape path. Do not put the token in a
 URL query parameter or in logs.
 
+### Optional NL2SQL LLM
+
+`SDM_NL2SQL_LLM_ENABLED` defaults to `false`. Enabling it requires a non-blank
+`SDM_NL2SQL_LLM_API_KEY` and `SDM_NL2SQL_LLM_MODEL`. The default base URL is
+`https://openrouter.ai/api/v1`; another HTTP(S) OpenRouter-compatible endpoint
+can be configured with `SDM_NL2SQL_LLM_BASE_URL`. Use HTTPS when sending a key
+over an external network. Provider URLs cannot contain credentials, query
+parameters, or fragments. Store the key only in the server's untracked `.env`
+or server-side environment, never in `VITE_*` settings or browser storage.
+The server unwraps the secret only when constructing the Authorization header.
+
+Allow outbound network access to the configured provider and account for its
+availability, quotas, and pricing. The feature has no database connection and
+does not execute SQL. Enabling it sends the user's text and hints to the
+provider, so exclude confidential data and review the provider's retention
+policy. The optional app URL and app name become `HTTP-Referer` and `X-Title`.
+
+The LLM HTTP client uses `SDM_NL2SQL_LLM_TIMEOUT` (default 15 seconds, maximum
+60) and performs no automatic retries. HTTPX applies this timeout to network
+operations; it is not an end-to-end HTTP request deadline. Generation is
+awaited asynchronously and does not occupy a CPU worker slot. Validation of
+the returned SQL then requires a single target-dialect SELECT/UNION without
+write statements, SELECT INTO, or locking clauses anywhere in its AST.
+This verifies syntax and structure, not semantic correctness, database
+permissions, or the behavior of arbitrary SQL functions.
+
+`SDM_NL2SQL_LLM_MAX_TOKENS` defaults to 800 (maximum 8192), and
+`SDM_NL2SQL_LLM_TEMPERATURE` defaults to 0.0 (range 0–2). Choose a model and token
+budget appropriate for its output; a response with no usable content triggers
+the same safe failure path as other provider errors. There are no model
+defaults, automatic model substitutions, or automatic provider retries.
+
+With `SDM_NL2SQL_LLM_FALLBACK=true` (default), a provider or SQL validation
+failure invokes the unchanged deterministic generator. Its work retains the
+existing worker capacity/timeout behavior, including 503/504 and Retry-After.
+Total wall time can include the provider wait followed by the deterministic
+worker wait; `SDM_REQUEST_TIMEOUT` continues to bound only the CPU-worker phase.
+The response identifies `provider="deterministic"` and a fixed
+`fallback_reason`. With fallback disabled, a safe failed generation reports
+`provider="llm"`, no SQL, and zero confidence. The API's existing request fields
+and error envelope are unchanged. DML intents, invalid/empty input, and invalid
+column hints stay on the deterministic path. SDK and readiness probes never
+call the provider.
+
+Three process-local metrics describe actual LLM attempts:
+
+| Metric | Labels | Meaning |
+|--------|--------|---------|
+| `sdm_nl2sql_llm_requests_total` | `result` | One completed LLM attempt, including SQL validation outcome |
+| `sdm_nl2sql_llm_duration_seconds` | None | Provider request plus SQL validation duration, excluding fallback |
+| `sdm_nl2sql_llm_fallbacks_total` | None | Failed attempts routed to deterministic generation |
+
+The fixed result vocabulary is `success`, `timeout`, `http_429`, `http_5xx`,
+`http_error`, `invalid_response`, `empty_content`, `invalid_sql`, and `disabled`.
+Ordinary disabled operation and DML bypass do not record attempts; `disabled`
+only describes an attempted client call that detects unavailable configuration.
+A fallback is counted when selected, even if its worker subsequently returns
+503/504. Metrics never label the prompt, SQL, model, API key, IP, request ID, or
+provider error text. The provider client does not log prompts, response bodies,
+or keys; deterministic fallback retains the existing request logging behavior.
+
 ## 8. Operational checklist
 
 - Terminate TLS at the proxy and forward the required host, scheme, and XFF
