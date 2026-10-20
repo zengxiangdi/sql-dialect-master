@@ -14,6 +14,7 @@ import ipaddress
 import sys
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, TypedDict
+from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -211,7 +212,8 @@ class AppSettings(BaseSettings):
         env_prefix="SDM_",
         env_file=".env",
         env_file_encoding="utf-8",
-        extra="ignore"
+        extra="ignore",
+        hide_input_in_errors=True,
     )
 
     # API settings
@@ -259,6 +261,18 @@ class AppSettings(BaseSettings):
     # bounded prevents enormous interval literals from reaching renderers.
     nl2sql_max_date_interval_days: int = Field(36525, gt=0)
 
+    # Optional external generation. Secrets are unwrapped only by the client.
+    nl2sql_llm_enabled: bool = False
+    nl2sql_llm_base_url: str = "https://openrouter.ai/api/v1"
+    nl2sql_llm_api_key: Optional[SecretStr] = None
+    nl2sql_llm_model: str = ""
+    nl2sql_llm_timeout: float = Field(15, gt=0, le=60)
+    nl2sql_llm_max_tokens: int = Field(800, gt=0, le=8192)
+    nl2sql_llm_temperature: float = Field(0, ge=0, le=2)
+    nl2sql_llm_fallback: bool = True
+    nl2sql_llm_app_name: str = "SQL Dialect Master"
+    nl2sql_llm_app_url: str = ""
+
     # SQL Transpiler / Parser settings
     #
     # Canonical maximum SQL input length.  ``parser_max_sql_length`` is a
@@ -303,6 +317,43 @@ class AppSettings(BaseSettings):
         if self.metrics_enabled and not token:
             raise ValueError("metrics_token is required when metrics_enabled is true")
         return self
+
+    @model_validator(mode="after")
+    def _validate_llm_credentials(self) -> "AppSettings":
+        """Require explicit credentials and a model only for enabled clients."""
+        key = self.nl2sql_llm_api_key
+        if self.nl2sql_llm_enabled:
+            if key is None or not key.get_secret_value().strip():
+                raise ValueError("nl2sql_llm_api_key is required when LLM generation is enabled")
+            if not self.nl2sql_llm_model.strip():
+                raise ValueError("nl2sql_llm_model is required when LLM generation is enabled")
+        return self
+
+    @field_validator("nl2sql_llm_base_url", "nl2sql_llm_app_url")
+    @classmethod
+    def _validate_llm_url(cls, value: str, info) -> str:
+        """Normalize provider URLs without reflecting credentials in errors."""
+        normalized = value.strip()
+        if not normalized and info.field_name == "nl2sql_llm_app_url":
+            return ""
+        try:
+            parsed = urlsplit(normalized)
+            valid = (
+                parsed.scheme.lower() in {"http", "https"}
+                and bool(parsed.hostname)
+                and parsed.username is None
+                and parsed.password is None
+                and not parsed.query
+                and not parsed.fragment
+                and not any(character.isspace() or ord(character) < 32 or ord(character) == 127 for character in normalized)
+            )
+            # Accessing port rejects malformed or out-of-range port values.
+            parsed.port
+        except ValueError:
+            valid = False
+        if not valid:
+            raise ValueError("LLM URLs must be HTTP(S) URLs with a host and no credentials, query, or fragment")
+        return normalized.rstrip("/")
 
     @field_validator("log_level", mode="before")
     @classmethod
