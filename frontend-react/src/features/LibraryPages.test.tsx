@@ -17,6 +17,10 @@ const concat: FunctionItem = {
 
 const categoryResponse = { success: true, categories: [{ name: "string", count: 1 }, { name: "math", count: 1 }], count: 2 };
 
+function functions(count: number, prefix = "FUNCTION", category = "string"): FunctionItem[] {
+  return Array.from({ length: count }, (_, index) => ({ ...concat, name: `${prefix}_${index + 1}`, category }));
+}
+
 describe("function library", () => {
   afterEach(() => {
     cleanup();
@@ -49,7 +53,8 @@ describe("function library", () => {
 
     render(<FunctionsPage />);
 
-    expect(await screen.findByText("Showing 3 of 298 functions · 2 categories · 12 dialects")).toBeInTheDocument();
+    expect(await screen.findByText("Showing 3 of 3 matching functions · 298 in catalog · 2 categories · 12 dialects")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Load more/ })).not.toBeInTheDocument();
     const card = screen.getByRole("button", { name: "View CONCAT details" });
     expect(card.tagName).toBe("BUTTON");
     expect(within(card).getByText(concat.description!)).toBeInTheDocument();
@@ -77,33 +82,94 @@ describe("function library", () => {
     await user.type(screen.getByRole("textbox", { name: "Search functions" }), "CON");
     await user.selectOptions(screen.getByRole("combobox", { name: "Filter functions by category" }), "string");
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/functions?limit=100&search=CON&category=string", expect.objectContaining({ signal: expect.any(AbortSignal) })));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/functions?limit=500&search=CON&category=string", expect.objectContaining({ signal: expect.any(AbortSignal) })));
     expect(screen.getByRole("textbox", { name: "Search functions" })).toHaveValue("CON");
     expect(screen.getByRole("combobox", { name: "Filter functions by category" })).toHaveValue("string");
   });
 
   it("clears both filters from the empty state and loads the unfiltered catalog", async () => {
     const user = userEvent.setup();
+    const catalog = [concat, ...functions(129)];
     const fetchMock = vi.fn().mockImplementation(async (url: string) => {
       if (url === "/api/functions/categories") return response(categoryResponse);
       const params = new URL(url, "https://example.test").searchParams;
-      const items = params.has("search") || params.has("category") ? [] : [concat];
+      const items = params.has("search") || params.has("category") ? [] : catalog;
       return response({ success: true, functions: items, count: items.length, total: 298 });
     });
     vi.stubGlobal("fetch", fetchMock);
     render(<FunctionsPage />);
     await screen.findByRole("button", { name: "View CONCAT details" });
+    await user.click(screen.getByRole("button", { name: "Load more (70 remaining)" }));
+    expect(screen.getAllByRole("button", { name: /^View .+ details$/ })).toHaveLength(120);
     await user.type(screen.getByRole("textbox", { name: "Search functions" }), "missing");
     await user.selectOptions(screen.getByRole("combobox", { name: "Filter functions by category" }), "math");
 
     expect(await screen.findByText("No functions found")).toBeInTheDocument();
-    expect(screen.getByText("Showing 0 of 298 functions · 2 categories · 12 dialects")).toBeInTheDocument();
+    expect(screen.getByText("Showing 0 of 0 matching functions · 298 in catalog · 2 categories · 12 dialects")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Clear filters" }));
 
     expect(screen.getByRole("textbox", { name: "Search functions" })).toHaveValue("");
     expect(screen.getByRole("combobox", { name: "Filter functions by category" })).toHaveValue("");
     expect(await screen.findByRole("button", { name: "View CONCAT details" })).toBeInTheDocument();
-    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe("/api/functions?limit=100");
+    expect(screen.getAllByRole("button", { name: /^View .+ details$/ })).toHaveLength(60);
+    expect(screen.getByRole("button", { name: "Load more (70 remaining)" })).toBeInTheDocument();
+    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe("/api/functions?limit=500");
+  });
+
+  it("reveals the fetched catalog in groups of 60 without fetching again", async () => {
+    const user = userEvent.setup();
+    const catalog = functions(130);
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => response(url === "/api/functions/categories"
+      ? categoryResponse
+      : { success: true, functions: catalog, count: catalog.length, total: 130 }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<FunctionsPage />);
+
+    expect(await screen.findByText("Showing 60 of 130 matching functions · 130 in catalog · 2 categories · 12 dialects")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /^View .+ details$/ })).toHaveLength(60);
+    expect(screen.queryByRole("button", { name: "View FUNCTION_61 details" })).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith("/api/functions?limit=500", expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    const fetchCount = fetchMock.mock.calls.length;
+
+    await user.click(screen.getByRole("button", { name: "Load more (70 remaining)" }));
+    expect(screen.getAllByRole("button", { name: /^View .+ details$/ })).toHaveLength(120);
+    expect(screen.getByText("Showing 120 of 130 matching functions · 130 in catalog · 2 categories · 12 dialects")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "View FUNCTION_121 details" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Load more (10 remaining)" }));
+    expect(screen.getAllByRole("button", { name: /^View .+ details$/ })).toHaveLength(130);
+    expect(screen.getByRole("button", { name: "View FUNCTION_130 details" })).toBeInTheDocument();
+    expect(screen.getByText("Showing 130 of 130 matching functions · 130 in catalog · 2 categories · 12 dialects")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Load more/ })).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(fetchCount);
+  });
+
+  it.each([
+    { filter: "search", count: 125, requestUrl: "/api/functions?limit=500&search=MATCH" },
+    { filter: "category", count: 90, requestUrl: "/api/functions?limit=500&category=math" },
+  ])("resets the visible cards after changing $filter", async ({ filter, count, requestUrl }) => {
+    const user = userEvent.setup();
+    const catalog = functions(130);
+    const matching = functions(count, "MATCH", "math");
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url === "/api/functions/categories") return response(categoryResponse);
+      const items = url === "/api/functions?limit=500" ? catalog : matching;
+      return response({ success: true, functions: items, count: items.length, total: 298 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<FunctionsPage />);
+    await screen.findByRole("button", { name: "View FUNCTION_1 details" });
+    await user.click(screen.getByRole("button", { name: "Load more (70 remaining)" }));
+    expect(screen.getAllByRole("button", { name: /^View .+ details$/ })).toHaveLength(120);
+
+    if (filter === "search") await user.type(screen.getByRole("textbox", { name: "Search functions" }), "MATCH");
+    else await user.selectOptions(screen.getByRole("combobox", { name: "Filter functions by category" }), "math");
+
+    expect(await screen.findByText(`Showing 60 of ${count} matching functions · 298 in catalog · 2 categories · 12 dialects`)).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /^View .+ details$/ })).toHaveLength(60);
+    expect(screen.getByRole("button", { name: `Load more (${count - 60} remaining)` })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "View MATCH_61 details" })).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(requestUrl, expect.objectContaining({ signal: expect.any(AbortSignal) }));
   });
 
   it("opens the real detail drawer from a native button card", async () => {
