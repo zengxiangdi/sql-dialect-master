@@ -76,6 +76,8 @@
 .nl-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
 .nl-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: end; gap: 12px; margin: 16px 0; }
 .nl-options > .field, .nl-options > .dialect-select { min-width: 0; }
+.nl-schema { margin: 0 0 16px; }
+.nl-schema .card-subtitle { margin: 10px 0; }
 .field-label small { color: var(--muted); font-size: 10px; font-weight: 400; }
 .surface-hint { display: inline-flex; align-items: center; gap: 7px; padding: 6px 10px; border: 1px solid var(--border-soft); border-radius: 999px; background: var(--surface-2); color: var(--muted); font-size: 11px; line-height: 1.5; }
 .surface-hint > svg { flex-shrink: 0; }

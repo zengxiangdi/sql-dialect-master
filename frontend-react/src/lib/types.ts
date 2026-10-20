@@ -34,6 +34,28 @@ export interface ConvertResponse {
   timestamp?: string;
 }
 
+export interface SchemaColumn {
+  name: string;
+  type?: string | null;
+}
+
+export interface SchemaTable {
+  name: string;
+  columns?: SchemaColumn[];
+}
+
+export interface SchemaRelationship {
+  from_table: string;
+  from_column: string;
+  to_table: string;
+  to_column: string;
+}
+
+export interface SchemaDefinition {
+  tables?: SchemaTable[];
+  relationships?: SchemaRelationship[];
+}
+
 export interface Nl2SqlResponse {
   success: boolean;
   input_text: string;
@@ -48,6 +70,7 @@ export interface Nl2SqlResponse {
   provider?: "deterministic" | "llm";
   model?: string | null;
   fallback_reason?: string | null;
+  schema_used?: boolean;
 }
 
 export interface ParseResponse {

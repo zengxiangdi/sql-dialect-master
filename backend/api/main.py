@@ -21,13 +21,15 @@ from dataclasses import asdict
 from datetime import datetime
 from functools import lru_cache
 from threading import Lock
-from typing import Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field, StrictStr
+from pydantic import BaseModel, ConfigDict, Field, StrictStr, model_validator
 
 from backend.api.auth import require_api_access
 from backend.api.metrics import (
@@ -437,6 +439,44 @@ class BatchConvertResponse(BaseModel):
     timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
 
 
+SchemaIdentifier = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)*$",
+    ),
+]
+
+
+class SchemaColumn(BaseModel):
+    name: SchemaIdentifier
+    type: Optional[str] = None
+
+
+class SchemaTable(BaseModel):
+    name: SchemaIdentifier
+    columns: List[SchemaColumn] = Field(default_factory=list, max_length=200)
+
+
+class SchemaRelationship(BaseModel):
+    from_table: SchemaIdentifier
+    from_column: SchemaIdentifier
+    to_table: SchemaIdentifier
+    to_column: SchemaIdentifier
+
+
+class SchemaDefinition(BaseModel):
+    tables: List[SchemaTable] = Field(default_factory=list, max_length=50)
+    relationships: List[SchemaRelationship] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_total_columns(self):
+        if sum(len(table.columns) for table in self.tables) > 1000:
+            raise ValueError("Schema must contain at most 1000 columns in total")
+        return self
+
+
 class NL2SQLRequest(BaseModel):
     """Natural language to SQL request model."""
     text: str = Field(..., description="Natural language query (Chinese or English)")
@@ -445,6 +485,10 @@ class NL2SQLRequest(BaseModel):
     column_hints: Optional[List[str]] = Field(
         None,
         description="Optional column identifier hints; accepts simple or dotted identifiers",
+    )
+    # Alias avoids shadowing Pydantic's legacy BaseModel.schema method.
+    schema_definition: Optional[SchemaDefinition] = Field(
+        None, alias="schema", description="Optional database schema for LLM generation and validation",
     )
 
     model_config = ConfigDict(json_schema_extra={
@@ -482,6 +526,7 @@ class NL2SQLResponse(BaseModel):
     provider: str = "deterministic"
     model: Optional[str] = None
     fallback_reason: Optional[str] = None
+    schema_used: bool = False
 
 class ParseRequest(BaseModel):
     """SQL parse request model."""
@@ -950,12 +995,20 @@ async def generate_sql(request: NL2SQLRequest):
             request.column_hints,
         )
     else:
+        schema = (
+            request.schema_definition.model_dump(exclude_none=True)
+            if request.schema_definition is not None else None
+        )
         started = time.perf_counter()
         try:
+            # Keep the legacy no-schema client call compatible with direct
+            # callers and providers that implement the existing signature.
+            schema_options = {"schema": schema} if schema is not None else {}
             generation = await LLMN2SQLClient().generate(
                 request.text, dialect, request.table_hint, request.column_hints,
+                **schema_options,
             )
-            sql = validate_llm_sql(generation.sql, dialect)
+            sql = validate_llm_sql(generation.sql, dialect, **schema_options)
         except LLMError as exc:
             record_nl2sql_llm_request(exc.reason, time.perf_counter() - started)
             if settings.nl2sql_llm_fallback:
@@ -970,6 +1023,7 @@ async def generate_sql(request: NL2SQLRequest):
                 result.provider = "deterministic"
                 result.model = None
                 result.fallback_reason = exc.reason
+                result.schema_used = False
             else:
                 result = NL2SQLResult(
                     input_text=request.text,
@@ -992,6 +1046,7 @@ async def generate_sql(request: NL2SQLRequest):
                 suggestions=["Review the generated SQL before executing it."],
                 provider="llm",
                 model=generation.model,
+                schema_used=bool(schema and (schema["tables"] or schema["relationships"])),
             )
     return NL2SQLResponse(
         success=result.success,
@@ -1007,6 +1062,7 @@ async def generate_sql(request: NL2SQLRequest):
         provider=getattr(result, "provider", "deterministic"),
         model=getattr(result, "model", None),
         fallback_reason=getattr(result, "fallback_reason", None),
+        schema_used=getattr(result, "schema_used", False),
     )
 
 @app.get("/health", tags=["system"])
@@ -1069,6 +1125,22 @@ async def get_stats():
     }
 
 # Custom exception handler for better error responses
+@app.exception_handler(RequestValidationError)
+async def safe_schema_validation_handler(request: Request, exc: RequestValidationError):
+    """Keep schema inputs out of 422 details without changing the envelope."""
+    if request.url.path == "/api/nl2sql" and isinstance(exc.body, dict) and "schema" in exc.body:
+        # A missing top-level field can include the entire body as its input,
+        # so sanitize every error for schema-bearing requests, not only errors
+        # whose location is inside schema. All messages remain fixed by the
+        # Pydantic constraints above; context and input may contain user data.
+        errors = [
+            {key: error[key] for key in ("type", "loc", "msg") if key in error}
+            for error in exc.errors()
+        ]
+        exc = RequestValidationError(errors)
+    return await request_validation_exception_handler(request, exc)
+
+
 @app.exception_handler(HTTPException)
 async def custom_http_exception_handler(request: Request, exc: HTTPException):
     error_code_by_status = {
