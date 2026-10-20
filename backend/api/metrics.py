@@ -66,6 +66,22 @@ TRANSPILE_BATCH_SIZE = Histogram(
     buckets=(1, 2, 5, 10, 20, 50, 100),
     registry=REGISTRY,
 )
+NL2SQL_LLM_REQUESTS = Counter(
+    "sdm_nl2sql_llm_requests_total",
+    "LLM generation attempts by fixed outcome",
+    ["result"],
+    registry=REGISTRY,
+)
+NL2SQL_LLM_DURATION = Histogram(
+    "sdm_nl2sql_llm_duration_seconds",
+    "LLM generation and SQL validation duration, excluding deterministic fallback",
+    registry=REGISTRY,
+)
+NL2SQL_LLM_FALLBACKS = Counter(
+    "sdm_nl2sql_llm_fallbacks_total",
+    "LLM failures routed to deterministic generation",
+    registry=REGISTRY,
+)
 
 _transpiler_provider: Callable[[], object] | None = None
 _worker_provider: Callable[[], object] | None = None
@@ -161,6 +177,15 @@ def record_transpile_batch_items(source: str, target: str, succeeded: int, faile
 
 def observe_transpile_batch_size(size: int) -> None:
     TRANSPILE_BATCH_SIZE.observe(size)
+
+
+def record_nl2sql_llm_request(result: str, duration: float) -> None:
+    NL2SQL_LLM_REQUESTS.labels(result=result).inc()
+    NL2SQL_LLM_DURATION.observe(duration)
+
+
+def record_nl2sql_llm_fallback() -> None:
+    NL2SQL_LLM_FALLBACKS.inc()
 
 
 def _authorized(request: Request) -> bool:

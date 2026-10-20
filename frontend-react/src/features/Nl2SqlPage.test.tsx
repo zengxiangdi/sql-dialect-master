@@ -107,4 +107,53 @@ describe("natural language query form", () => {
       parameter_style: result.parameter_style,
     });
   });
+
+  it.each([
+    { metadata: { provider: "llm", model: "openai/gpt-4.1-mini" }, label: "LLM · openai/gpt-4.1-mini" },
+    { metadata: { provider: "deterministic", model: null }, label: "Deterministic" },
+    { metadata: {}, label: "Deterministic" },
+    { metadata: { provider: "llm", model: null }, label: "LLM" },
+  ])("shows $label beside confidence for provider metadata $metadata", async ({ metadata, label }) => {
+    const result = {
+      success: true, input_text: "count orders", sql: "SELECT COUNT(*) FROM orders", dialect: "postgres",
+      explanation: "Count the supplied table.", confidence: 0.9, suggestions: [], ...metadata,
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true, status: 200, headers: new Headers(), json: async () => result,
+    }));
+    const user = userEvent.setup();
+    renderPage();
+    await user.type(screen.getByRole("textbox", { name: "Natural language" }), result.input_text);
+    await user.click(screen.getByRole("button", { name: "Generate SQL" }));
+
+    const provider = await screen.findByText(label);
+    expect(provider).toHaveClass("badge-neutral");
+    expect(provider.parentElement).toContainElement(screen.getByText("90% confidence"));
+    expect(screen.getByRole("textbox", { name: "Generated SQL" })).toHaveValue(result.sql);
+    expect(screen.queryByText("LLM unavailable; using deterministic generation.")).not.toBeInTheDocument();
+  });
+
+  it("uses a fixed fallback hint without displaying the provider failure reason", async () => {
+    const rawReason = "upstream_error: private-provider-diagnostic";
+    const result = {
+      success: true, input_text: "count orders", sql: "SELECT COUNT(*) FROM orders", dialect: "postgres",
+      explanation: "Count the supplied table.", confidence: 0.9, suggestions: [],
+      provider: "deterministic", model: null, fallback_reason: rawReason,
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true, status: 200, headers: new Headers(), json: async () => result,
+    }));
+    const user = userEvent.setup();
+    renderPage();
+    await user.type(screen.getByRole("textbox", { name: "Natural language" }), result.input_text);
+    await user.click(screen.getByRole("button", { name: "Generate SQL" }));
+
+    expect(await screen.findByText("LLM unavailable; using deterministic generation.")).toBeInTheDocument();
+    expect(screen.getByText("Deterministic")).toBeInTheDocument();
+    expect(screen.queryByText(rawReason)).not.toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent(rawReason);
+    expect(screen.getByRole("textbox", { name: "Generated SQL" })).toHaveValue(result.sql);
+    expect(screen.getByRole("button", { name: "Use in Convert" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Use in Diff" })).toBeInTheDocument();
+  });
 });

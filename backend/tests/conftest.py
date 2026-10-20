@@ -4,6 +4,18 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
+def disable_optional_llm_by_default(monkeypatch):
+    """Keep local provider settings from turning contract tests into live calls.
+
+    Provider tests explicitly enable the feature with a fake client or an
+    HTTPX MockTransport after this fixture has established the safe default.
+    """
+    from backend.core.config import settings
+
+    monkeypatch.setattr(settings, "nl2sql_llm_enabled", False)
+
+
+@pytest.fixture(autouse=True)
 def reset_global_api_rate_limit_store():
     """Keep TestClient cases independent from the process-wide limiter.
 
