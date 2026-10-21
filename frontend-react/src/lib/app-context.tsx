@@ -16,6 +16,7 @@ interface AppContextValue {
   history: HistoryItem[];
   addHistory: (item: Omit<HistoryItem, "id" | "createdAt">) => void;
   removeHistory: (id: string) => void;
+  toggleFavorite: (id: string) => void;
   clearHistory: () => void;
   apiBase: string;
   setApiBase: (value: string) => void;
@@ -34,6 +35,7 @@ function readHistory(): HistoryItem[] {
     typeof item.target === "string" && ALL_DIALECTS.includes(item.sourceDialect) &&
     ALL_DIALECTS.includes(item.targetDialect) && typeof item.createdAt === "string" &&
     (item.truncated === undefined || typeof item.truncated === "boolean") &&
+    (item.favorite === undefined || typeof item.favorite === "boolean") &&
     (item.status === "success" || item.status === "warning" || item.status === "error" || item.status === "neutral"),
   ));
   return normalizeHistory(valid);
@@ -55,8 +57,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setHistory((items) => normalizeHistory([{ ...item, id, createdAt: new Date().toISOString() }, ...items]));
   }, []);
   const removeHistory = useCallback((id: string) => setHistory((items) => items.filter((item) => item.id !== id)), []);
+  const toggleFavorite = useCallback((id: string) => setHistory((items) => items.map((item) => item.id === id ? { ...item, favorite: !item.favorite } : item)), []);
   const clearHistory = useCallback(() => { setHistory([]); safeRemoveItem(HISTORY_STORAGE_KEY); }, []);
-  const value = useMemo(() => ({ theme, setTheme, history, addHistory, removeHistory, clearHistory, apiBase, setApiBase, apiKey, setApiKey }), [theme, setTheme, history, addHistory, removeHistory, clearHistory, apiBase, setApiBase, apiKey, setApiKey]);
+  const value = useMemo(() => ({ theme, setTheme, history, addHistory, removeHistory, toggleFavorite, clearHistory, apiBase, setApiBase, apiKey, setApiKey }), [theme, setTheme, history, addHistory, removeHistory, toggleFavorite, clearHistory, apiBase, setApiBase, apiKey, setApiKey]);
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
 

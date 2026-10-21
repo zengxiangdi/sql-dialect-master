@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { HistoryItem } from "./types";
 import {
   DRAFT_MAX_CHARS,
   HISTORY_MAX_SERIALIZED_BYTES,
@@ -54,12 +55,16 @@ describe("safe browser storage", () => {
       targetDialect: "postgres" as const,
       createdAt: new Date().toISOString(),
       status: "success" as const,
+      favorite: index % 2 === 0,
     }));
 
     const normalized = normalizeHistory(items);
     expect(normalized[0].truncated).toBe(true);
     expect(normalized[0].source).toHaveLength(SQL_PREVIEW_MAX_CHARS);
     expect(normalized.length).toBeLessThan(items.length);
+    expect(normalized.map((item) => item.favorite)).toEqual(
+      items.slice(0, normalized.length).map((item) => item.favorite),
+    );
     expect(serializedByteLength(JSON.stringify(normalized))).toBeLessThanOrEqual(
       HISTORY_MAX_SERIALIZED_BYTES,
     );
@@ -73,5 +78,43 @@ describe("safe browser storage", () => {
     const oversizedDraft = "y".repeat(DRAFT_MAX_CHARS + 1);
     expect(saveDraft(oversizedDraft)).toBe(true);
     expect(readDraft()).toBe(oversizedDraft);
+  });
+
+  it.each([true, false, undefined])("preserves favorite=%s while normalizing history", (favorite) => {
+    const item: HistoryItem = {
+      id: "favorite-history",
+      source: "SELECT id FROM users",
+      target: "SELECT id FROM users",
+      sourceDialect: "mysql",
+      targetDialect: "postgres",
+      createdAt: "2026-10-21T00:00:00Z",
+      status: "success",
+      ...(favorite === undefined ? {} : { favorite }),
+    };
+
+    const [normalized] = normalizeHistory([item]);
+
+    expect(normalized).toEqual(item);
+    expect(normalized.favorite).toBe(favorite);
+  });
+
+  it.each([true, false])("preserves favorite=%s when SQL is truncated", (favorite) => {
+    const item: HistoryItem = {
+      id: "truncated-favorite-history",
+      source: "s".repeat(SQL_PREVIEW_MAX_CHARS + 1),
+      target: "t".repeat(SQL_PREVIEW_MAX_CHARS + 1),
+      sourceDialect: "mysql",
+      targetDialect: "postgres",
+      createdAt: "2026-10-21T00:00:00Z",
+      status: "success",
+      favorite,
+    };
+
+    const [normalized] = normalizeHistory([item]);
+
+    expect(normalized.source).toHaveLength(SQL_PREVIEW_MAX_CHARS);
+    expect(normalized.target).toHaveLength(SQL_PREVIEW_MAX_CHARS);
+    expect(normalized.truncated).toBe(true);
+    expect(normalized.favorite).toBe(favorite);
   });
 });
