@@ -55,6 +55,7 @@ python_files = ["test_*.py"]
 addopts = "-v --tb=short"
 
 [tool.coverage.run]
+branch = true
 source = ["backend"]
 omit = [
     "backend/tests/*",
@@ -64,7 +65,7 @@ omit = [
 [tool.coverage.report]
 show_missing = true
 skip_covered = false
-fail_under = 93
+fail_under = 91
 exclude_lines = [
     "pragma: no cover",
     "if __name__ == .__main__.:",
