@@ -195,6 +195,7 @@ export interface HistoryItem {
   createdAt: string;
   status: Status;
   truncated?: boolean;
+  favorite?: boolean;
 }
 
 export const DIALECT_LABELS: Record<Dialect, string> = {

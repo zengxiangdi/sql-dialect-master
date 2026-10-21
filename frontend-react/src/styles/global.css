@@ -105,6 +105,16 @@
 .history-main small { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; }
 .history-main small[role='status'] { color: var(--warning); }
 .history-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
+.history-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.history-toolbar .wide-search { flex: 1 1 240px; width: auto; }
+.history-tabs { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-2); }
+.history-tabs .button[aria-pressed='true'] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.history-favorite { flex-shrink: 0; border: 1px solid transparent; }
+.history-favorite.selected { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.history-pagination { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border-soft); }
+.history-pagination-summary { display: flex; flex-wrap: wrap; gap: 8px 16px; color: var(--muted); font-size: 12px; }
+.history-pagination-controls { display: flex; flex-wrap: wrap; gap: 8px; }
+@media (max-width: 680px) { .history-toolbar .wide-search { flex-basis: 100%; width: 100%; } .history-pagination-summary { flex-basis: 100%; } }
 .settings-grid { display: grid; grid-template-columns: minmax(0, .85fr) minmax(0, 1.15fr); align-items: start; gap: 18px; }
 .settings-grid > .card { min-width: 0; }
 .settings-fields { display: grid; gap: 16px; }
