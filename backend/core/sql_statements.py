@@ -1,6 +1,8 @@
 """Shared bounded parsing contract for single SQL statements."""
 from __future__ import annotations
 
+from typing import cast
+
 import sqlglot
 from sqlglot import exp
 
@@ -14,7 +16,8 @@ def parse_single_sql(sql: str, dialect: str) -> exp.Expression:
         raise sqlglot.errors.ParseError("SQL statement must be a string")
     if not sql.strip():
         raise sqlglot.errors.ParseError("Empty SQL statement")
-    maximum = settings.parser_max_sql_length
+    # AppSettings' after validator resolves the optional parser limit.
+    maximum = cast(int, settings.parser_max_sql_length)
     if len(sql) > maximum:
         raise sqlglot.errors.ParseError(f"SQL exceeds maximum length of {maximum} characters")
     statements = sqlglot.parse(prepare_sql_for_parser(sql, dialect), read=dialect)
@@ -27,4 +30,5 @@ def parse_single_sql(sql: str, dialect: str) -> exp.Expression:
         raise sqlglot.errors.ParseError("Empty SQL statement")
     if len(statements) != 1 or isinstance(statements[0], exp.Semicolon):
         raise sqlglot.errors.ParseError("Multiple SQL statements are not supported")
-    return statements[0]
+    # The empty-statement guard above has already excluded None entries.
+    return cast(exp.Expression, statements[0])
