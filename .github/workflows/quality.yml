@@ -24,12 +24,17 @@ jobs:
 
       - name: Install locked project and quality tools
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements-lock.txt
-          pip install -e . --no-deps
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install -r requirements-lock.txt
+          .venv/bin/python -m pip install -e . --no-deps
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Ruff correctness checks
         run: ruff check backend/core backend/api --select E9,F --ignore F401
+
+      - name: Progressive mypy checks
+        run: .venv/bin/python -m mypy
 
       - name: Bandit security scan
         run: |

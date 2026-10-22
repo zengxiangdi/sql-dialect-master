@@ -23,6 +23,7 @@ dev = [
     "requests>=2.31.0",
 ]
 qa = [
+    "mypy>=1.11,<2.0",
     "ruff>=0.6",
     "bandit>=1.7",
     "pip-audit>=2.7",
@@ -53,6 +54,24 @@ exclude = ["backend.tests*", "backend.benchmarks*"]
 testpaths = ["backend/tests"]
 python_files = ["test_*.py"]
 addopts = "-v --tb=short"
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+check_untyped_defs = true
+no_implicit_optional = true
+warn_unused_ignores = true
+disallow_untyped_defs = false
+# Preserve imported type information without reporting errors outside this pilot.
+follow_imports = "silent"
+files = [
+    "backend/core/nl2sql_llm.py",
+    "backend/api/client_identity.py",
+    "backend/api/workers.py",
+    "backend/core/sql_statements.py",
+    "backend/api/rate_limit_store.py",
+    "backend/core/metadata.py",
+]
 
 [tool.coverage.run]
 branch = true
