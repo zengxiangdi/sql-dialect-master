@@ -1,0 +1,3 @@
+# Semantic test requirements from pyproject.toml.
+duckdb>=1.5.5
+psycopg[binary]>=3.3.5
