@@ -612,6 +612,8 @@ class PipelineNL2SQLGenerator:
             if match:
                 found.setdefault(table.key, (match.start(), table))
         for pattern, mapped_name in self.TABLE_PATTERNS.items():
+            if pattern == "order" and re.search(r"\border\b\s+by\b", text, re.IGNORECASE):
+                continue
             candidates = schema.table_candidates(mapped_name)
             if len(candidates) != 1:
                 continue

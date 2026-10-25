@@ -53,6 +53,7 @@ from backend.core.functions_lookup import FunctionEncyclopedia
 from backend.core.nl2sql import NL2SQLGenerator, NL2SQLResult
 from backend.core.nl2sql_components.evidence import EvidenceItem, GenerationEvidence
 from backend.core.nl2sql_llm import LLMError, LLMN2SQLClient, validate_llm_sql
+from backend.core.nl2sql_schema import SchemaContext
 from backend.core.nl2sql_pipeline.orchestrator import SAFE_TABLE_HINT
 from backend.core.parser import SUPPORTED_DIALECTS, SQLParser
 from backend.core.semantic_diff import diff_sql_ast
@@ -474,6 +475,13 @@ class SchemaDefinition(BaseModel):
     def validate_total_columns(self):
         if sum(len(table.columns) for table in self.tables) > 1000:
             raise ValueError("Schema must contain at most 1000 columns in total")
+        table_names = {table.name.casefold() for table in self.tables}
+        for relationship in self.relationships:
+            if (
+                relationship.from_table.casefold() not in table_names
+                or relationship.to_table.casefold() not in table_names
+            ):
+                raise ValueError("Schema relationship references an unknown table")
         return self
 
 
@@ -979,6 +987,14 @@ async def generate_sql(request: NL2SQLRequest):
                 "dotted identifier"
             ),
         )
+    schema_payload = (
+        request.schema_definition.model_dump(exclude_none=True)
+        if request.schema_definition is not None else None
+    )
+    schema_context = (
+        SchemaContext.from_mapping(schema_payload)
+        if schema_payload is not None else None
+    )
     use_llm = (
         settings.nl2sql_llm_enabled
         and bool(request.text.strip())
@@ -987,18 +1003,25 @@ async def generate_sql(request: NL2SQLRequest):
         and nl2sql_generator._detect_operation(request.text.lower()) not in {"INSERT", "UPDATE", "DELETE"}
     )
     if not use_llm:
-        result = await _run_cpu_bound(
-            nl2sql_generator.generate,
-            request.text,
-            dialect,
-            request.table_hint,
-            request.column_hints,
-        )
+        if schema_context is None:
+            result = await _run_cpu_bound(
+                nl2sql_generator.generate,
+                request.text,
+                dialect,
+                request.table_hint,
+                request.column_hints,
+            )
+        else:
+            result = await _run_cpu_bound(
+                nl2sql_generator.generate,
+                request.text,
+                dialect,
+                request.table_hint,
+                request.column_hints,
+                schema_context,
+            )
     else:
-        schema = (
-            request.schema_definition.model_dump(exclude_none=True)
-            if request.schema_definition is not None else None
-        )
+        schema = schema_payload
         started = time.perf_counter()
         try:
             # Keep the legacy no-schema client call compatible with direct
@@ -1013,17 +1036,32 @@ async def generate_sql(request: NL2SQLRequest):
             record_nl2sql_llm_request(exc.reason, time.perf_counter() - started)
             if settings.nl2sql_llm_fallback:
                 record_nl2sql_llm_fallback()
-                result = copy.copy(await _run_cpu_bound(
-                    nl2sql_generator.generate,
-                    request.text,
-                    dialect,
-                    request.table_hint,
-                    request.column_hints,
-                ))
+                if schema_context is None:
+                    deterministic_result = await _run_cpu_bound(
+                        nl2sql_generator.generate,
+                        request.text,
+                        dialect,
+                        request.table_hint,
+                        request.column_hints,
+                    )
+                else:
+                    deterministic_result = await _run_cpu_bound(
+                        nl2sql_generator.generate,
+                        request.text,
+                        dialect,
+                        request.table_hint,
+                        request.column_hints,
+                        schema_context,
+                    )
+                result = copy.copy(deterministic_result)
                 result.provider = "deterministic"
                 result.model = None
                 result.fallback_reason = exc.reason
-                result.schema_used = False
+                result.schema_used = bool(
+                    schema_context is not None
+                    and deterministic_result.success
+                    and deterministic_result.schema_used
+                )
             else:
                 result = NL2SQLResult(
                     input_text=request.text,
