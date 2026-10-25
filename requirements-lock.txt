@@ -49,7 +49,7 @@ fastapi==0.141.1
     # via
     #   -c constraints.txt
     #   -r requirements.in
-filelock==3.32.6
+filelock==4.2.4
     # via cachecontrol
 h11==0.16.0
     # via
@@ -193,7 +193,7 @@ ruff==0.16.6
     # via -r requirements.in
 secretstorage==3.5.0 ; platform_machine != 'ppc64le' and platform_machine != 's390x' and sys_platform == 'linux'
     # via keyring
-setuptools==84.0.0
+setuptools==84.2.1
     # via -r requirements.in
 sortedcontainers==2.4.0
     # via
