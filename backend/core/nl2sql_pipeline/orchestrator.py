@@ -31,6 +31,13 @@ from ..nl2sql_components.mappings import (
 from ..nl2sql_components.templates import DEFAULT_QUERY_TEMPLATES, QueryTemplate
 from ..nl2sql_components.tokenizer import Tokenizer
 from ..p1_sql_scanner import mask_non_executable
+from ..nl2sql_schema import (
+    SchemaContext,
+    SchemaTableContext,
+    SchemaValidationError,
+    validate_schema_references,
+)
+from ..sql_statements import parse_single_sql
 from . import ir as _nl2sql_ir
 from .aggregations import extract_aggregations as _pipeline_extract_aggregations
 from .clause_extract import (
@@ -190,6 +197,7 @@ class PipelineNL2SQLGenerator:
         dialect: str = None,
         table_hint: str = None,
         column_hints: List[str] = None,
+        schema: SchemaContext | None = None,
     ) -> NL2SQLResult:
         """Generate SQL from natural language text."""
         # Validate inputs
@@ -359,6 +367,13 @@ class PipelineNL2SQLGenerator:
             or extract_boolean_conditions(text_lower)
             or recognized_time
         )
+        if schema is not None:
+            if not schema.is_valid:
+                return self._schema_failure(
+                    text, dialect, "The provided schema is invalid."
+                )
+            schema_tables = self._schema_table_mentions(text, schema)
+            recognized_intent = recognized_intent or bool(schema_tables)
         if not recognized_intent:
             return NL2SQLResult(
                 success=False,
@@ -368,6 +383,17 @@ class PipelineNL2SQLGenerator:
                 confidence=0.0,
                 suggestions=["Mention an operation and table, e.g. 'show all users'."],
                 evidence=GenerationEvidence(),
+            )
+
+        if schema is not None:
+            return self._generate_with_schema(
+                text,
+                text_lower,
+                dialect,
+                table_hint,
+                column_hints,
+                analysis,
+                schema,
             )
 
         boolean_conditions = extract_boolean_conditions(text_lower)
@@ -550,6 +576,230 @@ class PipelineNL2SQLGenerator:
             suggestions=suggestions,
             parsed_elements=parsed,
         ))
+
+    @staticmethod
+    def _schema_failure(text: str, dialect: str, explanation: str) -> NL2SQLResult:
+        return NL2SQLResult(
+            success=False,
+            input_text=text,
+            dialect=dialect,
+            sql=None,
+            explanation=explanation,
+            confidence=0.0,
+            suggestions=["Provide an unambiguous table, column, or schema relationship."],
+            evidence=GenerationEvidence(),
+            schema_used=False,
+        )
+
+    @staticmethod
+    def _schema_text_match(text: str, pattern: str) -> Optional[re.Match]:
+        if pattern.isascii():
+            return re.search(
+                r"(?<![\w$])" + re.escape(pattern) + r"(?![\w$])",
+                text,
+                re.IGNORECASE,
+            )
+        return re.search(re.escape(pattern), text, re.IGNORECASE)
+
+    def _schema_table_mentions(
+        self, text: str, schema: SchemaContext
+    ) -> list[SchemaTableContext]:
+        """Find exact schema names and uniquely mapped existing aliases."""
+        found: dict[str, tuple[int, SchemaTableContext]] = {}
+        for table in schema.tables:
+            match = self._schema_text_match(text, table.name)
+            if match:
+                found.setdefault(table.key, (match.start(), table))
+        for pattern, mapped_name in self.TABLE_PATTERNS.items():
+            candidates = schema.table_candidates(mapped_name)
+            if len(candidates) != 1:
+                continue
+            match = self._schema_text_match(text, pattern)
+            if match:
+                table = candidates[0]
+                found.setdefault(table.key, (match.start(), table))
+        return [table for _, table in sorted(found.values(), key=lambda item: item[0])]
+
+    def _schema_resolve_table(
+        self,
+        text: str,
+        table_hint: Optional[str],
+        schema: SchemaContext,
+    ) -> SchemaTableContext:
+        if table_hint:
+            candidates = schema.table_candidates(table_hint)
+            if len(candidates) == 1:
+                return candidates[0]
+            raise SchemaValidationError("table hint is not a unique schema table")
+        candidates = self._schema_table_mentions(text, schema)
+        if len(candidates) == 1:
+            return candidates[0]
+        if not candidates:
+            if len(schema.tables) == 1:
+                return schema.tables[0]
+            raise SchemaValidationError("no schema table matched the request")
+        raise SchemaValidationError("multiple schema tables matched the request")
+
+    def _schema_resolve_columns(
+        self,
+        text: str,
+        table: SchemaTableContext,
+        column_hints: Optional[List[str]],
+        schema: SchemaContext,
+    ) -> list[str]:
+        if column_hints:
+            resolved: list[str] = []
+            for hint in column_hints:
+                parts = hint.split(".")
+                target_table = table
+                if len(parts) > 1:
+                    table_candidates = schema.table_candidates(".".join(parts[:-1]))
+                    if len(table_candidates) != 1 or table_candidates[0].key != table.key:
+                        raise SchemaValidationError("column hint table is not the selected schema table")
+                    target_table = table_candidates[0]
+                column_name = parts[-1]
+                canonical = schema.canonical_column(target_table, column_name)
+                if target_table.has_column_metadata and canonical is None:
+                    raise SchemaValidationError("column hint is outside the schema")
+                canonical = canonical or column_name
+                resolved.append(
+                    f"{target_table.name}.{canonical}" if len(parts) > 1 else canonical
+                )
+            return resolved
+
+        columns = self._extract_columns(text)
+        if columns == ["*"]:
+            for candidate in table.columns:
+                if self._schema_text_match(text, candidate):
+                    columns.append(candidate)
+            if len(columns) > 1:
+                columns.remove("*")
+        if not table.has_column_metadata:
+            return columns
+        resolved = []
+        for column in columns:
+            if column == "*":
+                resolved.append(column)
+                continue
+            canonical = schema.canonical_column(table, column)
+            if canonical is None:
+                raise SchemaValidationError("column is outside the schema")
+            resolved.append(canonical)
+        return resolved
+
+    def _schema_resolve_conditions(
+        self,
+        text: str,
+        conditions: list,
+        table: SchemaTableContext,
+        schema: SchemaContext,
+    ) -> list:
+        if not conditions or not table.has_column_metadata:
+            return conditions
+        resolved: list[str] = []
+        for condition in conditions:
+            rewritten = condition
+            if schema.canonical_column(table, "date") is None:
+                created_at = schema.canonical_column(table, "created_at")
+                if created_at is not None:
+                    rewritten = re.sub(
+                        r"(?<![\w$])date(?![\w$])",
+                        created_at,
+                        rewritten,
+                        flags=re.IGNORECASE,
+                    )
+            resolved.append(rewritten)
+        return resolved
+
+    def _schema_finalize(
+        self, result: NL2SQLResult, schema: SchemaContext
+    ) -> NL2SQLResult:
+        if not result.success or not result.sql:
+            result.schema_used = False
+            return result
+        try:
+            statement = parse_single_sql(result.sql, result.dialect)
+            validate_schema_references(
+                statement,
+                schema,
+                reject_ambiguous_unqualified=True,
+            )
+        except Exception:
+            return self._schema_failure(
+                result.input_text,
+                result.dialect,
+                "Generated SQL could not be validated against the provided schema.",
+            )
+        result.schema_used = True
+        return result
+
+    def _generate_with_schema(
+        self,
+        text: str,
+        text_lower: str,
+        dialect: str,
+        table_hint: Optional[str],
+        column_hints: Optional[List[str]],
+        analysis: dict,
+        schema: SchemaContext,
+    ) -> NL2SQLResult:
+        """Generate through the enhanced path with strict schema resolution."""
+        try:
+            table_context = self._schema_resolve_table(text, table_hint, schema)
+            columns = self._schema_resolve_columns(
+                text_lower, table_context, column_hints, schema
+            )
+            joins = self._extract_joins(text_lower)
+            if joins:
+                raise SchemaValidationError("schema relationships are handled separately")
+            conditions = self._schema_resolve_conditions(
+                text_lower,
+                self._extract_conditions_enhanced(text_lower, text),
+                table_context,
+                schema,
+            )
+            parsed = self._parse_text(text_lower, text)
+            parsed.update(analysis)
+            operation = self._detect_operation(text_lower)
+            aggregations = self._extract_aggregations(text_lower)
+            group_by = self._extract_group_by(text_lower)
+            ordering = self._extract_ordering(text_lower)
+            limit = self._extract_limit(text_lower)
+            distinct = self._check_distinct(text_lower)
+            sql, explanation, confidence, evidence = self._build_sql_enhanced(
+                operation,
+                table_context.name,
+                columns,
+                conditions,
+                aggregations,
+                group_by,
+                ordering,
+                limit,
+                [],
+                distinct,
+                dialect,
+            )
+            result = self._apply_confidence_policy(NL2SQLResult(
+                success=sql is not None,
+                input_text=text,
+                sql=sql,
+                dialect=dialect,
+                explanation=explanation,
+                confidence=confidence,
+                evidence=evidence,
+                suggestions=(
+                    self._generate_suggestions(text, sql, dialect)
+                    if sql is not None else []
+                ),
+                parsed_elements=parsed,
+            ))
+            return self._schema_finalize(result, schema)
+        except (SchemaValidationError, ValueError):
+            return self._schema_failure(
+                text,
+                dialect,
+                "The request could not be resolved unambiguously against the provided schema.",
+            )
 
     @staticmethod
     def _parameter_metadata(sql: Optional[str], dialect: str) -> tuple[str | None, list[str]]:

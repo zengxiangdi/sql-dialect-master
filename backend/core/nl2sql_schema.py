@@ -220,6 +220,16 @@ class SchemaContext:
     def column_owners(self, name: str) -> tuple[SchemaTableContext, ...]:
         return self._column_owners.get(_key(name), ())
 
+    def canonical_column(
+        self, table: SchemaTableContext, name: str
+    ) -> str | None:
+        """Return the schema spelling of a column, or ``None`` if unknown."""
+        wanted = _key(name)
+        for column in table.columns:
+            if _key(column) == wanted:
+                return column
+        return None
+
     def relationship_candidates(
         self, from_table: str, to_table: str
     ) -> tuple[SchemaRelationshipContext, ...]:

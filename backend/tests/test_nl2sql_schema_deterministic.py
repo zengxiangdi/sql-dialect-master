@@ -3,6 +3,7 @@
 import pytest
 import sqlglot
 
+from backend.core.nl2sql import NL2SQLGenerator
 from backend.core.nl2sql_schema import (
     SchemaContext,
     SchemaValidationError,
@@ -142,3 +143,111 @@ def test_missing_relationship_endpoint_marks_context_invalid_and_fails_closed():
     assert context.is_valid is False
     with pytest.raises(SchemaValidationError):
         validate_schema_references(parse("SELECT id FROM users"), context)
+
+
+SINGLE_TABLE_SCHEMA = SchemaContext.from_mapping(
+    {
+        "tables": [
+            {
+                "name": "users",
+                "columns": [
+                    {"name": "id"},
+                    {"name": "name"},
+                    {"name": "price"},
+                    {"name": "quantity"},
+                    {"name": "created_at"},
+                ],
+            }
+        ]
+    }
+)
+
+
+@pytest.mark.parametrize("dialect", [
+    "mysql", "postgres", "oracle", "tsql", "hive", "spark",
+    "trino", "databricks", "snowflake", "redshift", "clickhouse", "duckdb",
+])
+def test_deterministic_schema_plain_select_parses_in_all_dialects(dialect):
+    result = NL2SQLGenerator().generate(
+        "show users", dialect=dialect, schema=SINGLE_TABLE_SCHEMA
+    )
+    assert result.success is True
+    assert result.schema_used is True
+    assert sqlglot.parse_one(result.sql, read=dialect) is not None
+
+
+def test_deterministic_schema_uses_enhanced_path_for_top_n_aggregate_date_and_boolean():
+    generator = NL2SQLGenerator()
+    top_n = generator.generate(
+        "find top 5 users by price", "postgres", schema=SINGLE_TABLE_SCHEMA
+    )
+    assert top_n.success and "ORDER BY price DESC" in top_n.sql
+    assert "LIMIT 5" in top_n.sql
+
+    aggregate = generator.generate(
+        "calculate average price for users grouped by name",
+        "postgres",
+        schema=SINGLE_TABLE_SCHEMA,
+    )
+    assert aggregate.success and "GROUP BY name" in aggregate.sql
+
+    date = generator.generate("last 7 days", "postgres", schema=SINGLE_TABLE_SCHEMA)
+    assert date.success and "created_at" in date.sql
+
+    boolean = generator.generate(
+        "find users with price greater than 3 and quantity less than 9",
+        "postgres",
+        schema=SINGLE_TABLE_SCHEMA,
+    )
+    assert boolean.success and "price" in boolean.sql and "quantity" in boolean.sql
+
+
+@pytest.mark.parametrize(
+    "schema,text,kwargs",
+    [
+        ({}, "show users", {}),
+        (
+            {
+                "tables": [
+                    {"name": "audit.users", "columns": [{"name": "id"}]},
+                    {"name": "public.users", "columns": [{"name": "id"}]},
+                ]
+            },
+            "show users",
+            {},
+        ),
+        (SINGLE_TABLE_SCHEMA, "show users", {"column_hints": ["secret"]}),
+    ],
+)
+def test_deterministic_schema_unknown_or_ambiguous_requests_fail_closed(
+    schema, text, kwargs
+):
+    context = schema if isinstance(schema, SchemaContext) else SchemaContext.from_mapping(schema)
+    result = NL2SQLGenerator().generate(text, "postgres", schema=context, **kwargs)
+    assert result.success is False
+    assert result.sql is None
+    assert result.schema_used is False
+    assert result.confidence == 0.0
+
+
+def test_deterministic_schema_hints_are_checked_before_generation():
+    result = NL2SQLGenerator().generate(
+        "show users",
+        "postgres",
+        table_hint="missing",
+        schema=SINGLE_TABLE_SCHEMA,
+    )
+    assert result.success is False
+    assert result.sql is None
+
+
+def test_deterministic_schema_empty_columns_allow_qualified_columns():
+    context = SchemaContext.from_mapping({"tables": [{"name": "events", "columns": []}]})
+    result = NL2SQLGenerator().generate(
+        "show events",
+        "postgres",
+        column_hints=["events.anything"],
+        schema=context,
+    )
+    assert result.success is True
+    assert "events.anything" in result.sql
