@@ -2,6 +2,41 @@
 
 All notable changes to SQL Dialect Master are documented here.
 
+## [1.3.0] - 2026-10-25
+
+### New
+
+- Added optional schema-aware NL2SQL. A request may include tables,
+  columns, and relationships; the LLM prompt is grounded in the schema
+  and generated table/column references are validated against it.
+- Added `schema_used` to NL2SQL responses.
+- Added friendly NL2SQL fallback messages, Copy SQL, and Regenerate
+  actions in the React workspace.
+- Added conversion-history favorites, All/Favorites filtering, and
+  pagination (10 entries per page).
+
+### Changed
+
+- Updated `certifi` to the patched release for GHSA-6q48-6c7w-9gw2.
+- Enabled branch coverage with a measured floor; line coverage is about
+  94.4% and branch coverage about 92.6%.
+- Added progressive mypy checks for six focused core modules in the
+  Quality workflow.
+- Regenerated runtime and semantic lockfiles with cross-platform markers
+  while preserving the pinned core runtime versions.
+
+### Notes
+
+- The optional NL2SQL LLM remains disabled by default; enabling it
+  requires a server-side API key.
+- Enabling the LLM sends natural-language text and hints to the
+  configured provider; schema content is included only when supplied.
+- LLM output is validated as a single SELECT/UNION; DML continues to use
+  the deterministic generator.
+- No breaking API changes: `schema`, `schema_used`, `provider`, `model`,
+  and `fallback_reason` are optional additions.
+- No changes to the deterministic generator's existing output.
+
 ## [1.2.0] - 2026-10-21
 
 ### New
