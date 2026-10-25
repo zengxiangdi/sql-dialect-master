@@ -28,6 +28,7 @@ from ..nl2sql_components.mappings import (
     KEYWORDS as MAPPING_KEYWORDS,
     TABLE_PATTERNS as MAPPING_TABLE_PATTERNS,
 )
+from ..nl2sql_components.relations import parse_join_spec
 from ..nl2sql_components.templates import DEFAULT_QUERY_TEMPLATES, QueryTemplate
 from ..nl2sql_components.tokenizer import Tokenizer
 from ..p1_sql_scanner import mask_non_executable
@@ -711,6 +712,72 @@ class PipelineNL2SQLGenerator:
             resolved.append(rewritten)
         return resolved
 
+    def _schema_resolve_joins(
+        self,
+        text: str,
+        table_hint: Optional[str],
+        schema: SchemaContext,
+    ) -> tuple[SchemaTableContext, list[dict]]:
+        mentions = self._schema_table_mentions(text, schema)
+        if len(mentions) < 2:
+            return self._schema_resolve_table(text, table_hint, schema), []
+
+        if table_hint:
+            subject_candidates = schema.table_candidates(table_hint)
+            if len(subject_candidates) != 1:
+                raise SchemaValidationError("table hint is not a unique schema table")
+            subject = subject_candidates[0]
+        else:
+            cn_relation = self._cn_relation_table(text.lower())
+            if cn_relation:
+                relation_candidates = schema.table_candidates(cn_relation)
+                subject_candidates = [
+                    table for table in mentions
+                    if not relation_candidates or table.key != relation_candidates[0].key
+                ]
+                if len(subject_candidates) != 1:
+                    raise SchemaValidationError("relationship subject is ambiguous")
+                subject = subject_candidates[0]
+            else:
+                subject = mentions[0]
+
+        relational = self._has_relational_keyword(text.lower())
+        join_spec = parse_join_spec(text)
+        if not relational and join_spec is None:
+            raise SchemaValidationError("multiple tables lack explicit relationship intent")
+        if relational:
+            if any(
+                keyword in text.lower()
+                for keyword in ["without", "not have", "no ", "没有任何", "没有"]
+            ):
+                join_type = "NOT EXISTS"
+            else:
+                join_type = "EXISTS"
+        else:
+            join_type = "INNER" if join_spec.kind == "JOIN" else join_spec.kind
+
+        joins: list[dict] = []
+        for related in mentions:
+            if related.key == subject.key:
+                continue
+            candidates = schema.relationship_candidates(subject.name, related.name)
+            condition = None
+            if len(candidates) == 1:
+                relationship = candidates[0]
+                condition = (
+                    f"{relationship.from_table}.{relationship.from_column} = "
+                    f"{relationship.to_table}.{relationship.to_column}"
+                )
+            joins.append({
+                "type": join_type,
+                "table": related.name,
+                "subject": subject.name,
+                "condition": condition,
+                "relational": relational,
+                "join_spec": join_spec,
+            })
+        return subject, joins
+
     def _schema_finalize(
         self, result: NL2SQLResult, schema: SchemaContext
     ) -> NL2SQLResult:
@@ -745,13 +812,10 @@ class PipelineNL2SQLGenerator:
     ) -> NL2SQLResult:
         """Generate through the enhanced path with strict schema resolution."""
         try:
-            table_context = self._schema_resolve_table(text, table_hint, schema)
+            table_context, joins = self._schema_resolve_joins(text, table_hint, schema)
             columns = self._schema_resolve_columns(
                 text_lower, table_context, column_hints, schema
             )
-            joins = self._extract_joins(text_lower)
-            if joins:
-                raise SchemaValidationError("schema relationships are handled separately")
             conditions = self._schema_resolve_conditions(
                 text_lower,
                 self._extract_conditions_enhanced(text_lower, text),
@@ -775,7 +839,7 @@ class PipelineNL2SQLGenerator:
                 group_by,
                 ordering,
                 limit,
-                [],
+                joins,
                 distinct,
                 dialect,
             )

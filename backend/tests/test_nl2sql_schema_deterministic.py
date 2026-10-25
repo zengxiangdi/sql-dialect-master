@@ -251,3 +251,101 @@ def test_deterministic_schema_empty_columns_allow_qualified_columns():
     )
     assert result.success is True
     assert "events.anything" in result.sql
+
+
+RELATION_SCHEMA = SchemaContext.from_mapping(
+    {
+        "tables": [
+            {"name": "users", "columns": [{"name": "id"}]},
+            {"name": "orders", "columns": [{"name": "user_id"}]},
+        ],
+        "relationships": [
+            {
+                "from_table": "orders",
+                "from_column": "user_id",
+                "to_table": "users",
+                "to_column": "id",
+            }
+        ],
+    }
+)
+
+
+def test_schema_relationships_generate_forward_and_reverse_exists():
+    generator = NL2SQLGenerator()
+    forward = generator.generate(
+        "find users who have orders", "postgres", schema=RELATION_SCHEMA
+    )
+    assert forward.success
+    assert "WHERE EXISTS" in forward.sql
+    assert "users.id = orders.user_id" in forward.sql
+
+    reverse = generator.generate(
+        "find orders who have users", "postgres", schema=RELATION_SCHEMA
+    )
+    assert reverse.success
+    assert "WHERE EXISTS" in reverse.sql
+    assert "orders.user_id = users.id" in reverse.sql
+
+
+def test_schema_relationships_generate_not_exists_and_physical_join():
+    generator = NL2SQLGenerator()
+    negative = generator.generate(
+        "find users without orders", "postgres", schema=RELATION_SCHEMA
+    )
+    assert negative.success
+    assert "WHERE NOT EXISTS" in negative.sql
+
+    physical = generator.generate(
+        "show users left join orders", "postgres", schema=RELATION_SCHEMA
+    )
+    assert physical.success
+    assert "LEFT JOIN orders" in physical.sql
+    assert "users.id = orders.user_id" in physical.sql
+
+
+def test_schema_missing_relationship_fails_closed():
+    context = SchemaContext.from_mapping(
+        {
+            "tables": [
+                {"name": "users", "columns": [{"name": "id"}]},
+                {"name": "invoices", "columns": [{"name": "user_id"}]},
+            ]
+        }
+    )
+    result = NL2SQLGenerator().generate(
+        "find users who have invoices", "postgres", schema=context
+    )
+    assert result.success is False
+    assert result.sql is None
+    assert result.schema_used is False
+
+
+def test_schema_duplicate_relationships_fail_closed():
+    context = SchemaContext.from_mapping(
+        {
+            "tables": [
+                {"name": "users", "columns": [{"name": "id"}]},
+                {"name": "orders", "columns": [{"name": "user_id"}]},
+            ],
+            "relationships": [
+                {
+                    "from_table": "orders",
+                    "from_column": "user_id",
+                    "to_table": "users",
+                    "to_column": "id",
+                },
+                {
+                    "from_table": "orders",
+                    "from_column": "user_id",
+                    "to_table": "users",
+                    "to_column": "id",
+                },
+            ],
+        }
+    )
+    result = NL2SQLGenerator().generate(
+        "find users who have orders", "postgres", schema=context
+    )
+    assert result.success is False
+    assert result.sql is None
