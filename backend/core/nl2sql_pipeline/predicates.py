@@ -17,6 +17,12 @@ from ..nl2sql_components.boolean_conditions import (
 )
 from ..p1_sql_scanner import mask_non_executable
 
+_QUOTED_COMPARISON_PREFIX = re.compile(
+    r"(?<![\w$])([A-Za-z_][A-Za-z0-9_$]*)\s*"
+    r"(is\s+not|isn't|not|is|<>|!=|>=|<=|=|>|<)\s*",
+    re.IGNORECASE,
+)
+
 
 def _column_for_text(text: str, column_patterns: Dict[str, str]) -> Optional[str]:
     for pattern, column in sorted(column_patterns.items(), key=lambda item: -len(item[0])):
@@ -32,14 +38,38 @@ def _quoted_comparisons(
     original: str, column_patterns: Dict[str, str]
 ) -> list[str]:
     quoted = []
-    pattern = re.compile(
-        r"(?<![\w$])([A-Za-z_][A-Za-z0-9_$]*)\s*"
-        r"(is\s+not|isn't|not|is|<>|!=|>=|<=|=|>|<)\s*(['\"])((?:\\.|(?!\3).)*)\3",
-        re.IGNORECASE,
-    )
+    executable = mask_non_executable(original)
     known_columns = {value.casefold(): value for value in column_patterns.values()}
-    for match in pattern.finditer(original):
-        raw_column, operator, quote, value = match.groups()
+    for match in _QUOTED_COMPARISON_PREFIX.finditer(original):
+        if executable[match.start():match.end()] != original[match.start():match.end()]:
+            continue
+        position = match.end()
+        if position >= len(original) or original[position] not in "'\"":
+            continue
+        quote = original[position]
+        position += 1
+        value_chars: list[str] = []
+        closed = False
+        while position < len(original):
+            character = original[position]
+            if character == "\\" and position + 1 < len(original):
+                value_chars.extend((character, original[position + 1]))
+                position += 2
+                continue
+            if character == quote:
+                if position + 1 < len(original) and original[position + 1] == quote:
+                    value_chars.append(quote)
+                    position += 2
+                    continue
+                closed = True
+                position += 1
+                break
+            value_chars.append(character)
+            position += 1
+        if not closed:
+            continue
+        raw_column, operator = match.groups()
+        value = "".join(value_chars)
         column = known_columns.get(raw_column.casefold(), raw_column)
         if quote == "'":
             literal = quote + value.replace("'", "''") + quote

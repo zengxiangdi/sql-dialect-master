@@ -1,10 +1,14 @@
 """P0 regression coverage for deterministic predicate safety."""
 
+import time
+
 import pytest
 import sqlglot
 
 from backend.core.nl2sql import NL2SQLGenerator
 from backend.core.nl2sql_schema import SchemaContext
+from backend.core.nl2sql_pipeline.predicates import _quoted_comparisons
+from backend.core.nl2sql_components.mappings import COLUMN_PATTERNS
 
 
 SCHEMA = SchemaContext.from_mapping(
@@ -150,6 +154,34 @@ def test_predicate_results_are_deterministic():
     second = generate("show users where status is not active and price < -10", schema=True)
     assert first.success and second.success
     assert first.sql == second.sql
+
+
+def test_quoted_comparison_scanner_handles_adversarial_long_unclosed_input_quickly():
+    value = '_="' + "\\a" * 1000
+    started = time.perf_counter()
+    assert _quoted_comparisons(value, COLUMN_PATTERNS) == []
+    assert time.perf_counter() - started < 1.0
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("name = 'O''Brien'", "name = 'O''Brien'"),
+        ('name = "O""Brien"', 'name = \'O"Brien\''),
+        ("created_at = '2024-01-01'", "created_at = '2024-01-01'"),
+        ('created_at = "2024-01-01"', "created_at = '2024-01-01'"),
+    ],
+)
+def test_quoted_comparison_scanner_handles_escaping_and_doubled_quotes(value, expected):
+    assert _quoted_comparisons(value, COLUMN_PATTERNS) == [expected]
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["name = 'unterminated", 'name = "unterminated', "name = '" + "\\" * 2000],
+)
+def test_quoted_comparison_scanner_skips_unclosed_literals(value):
+    assert _quoted_comparisons(value, COLUMN_PATTERNS) == []
 
 
 @pytest.mark.parametrize(
