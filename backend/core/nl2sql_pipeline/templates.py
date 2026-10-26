@@ -316,17 +316,6 @@ def generate_from_template(
             # never re-append them here as a second WHERE.
             if template.name == "top_n_query" and "DATE_SUB" not in c and "ADD_MONTHS" not in c and "DATE_ADD" not in c:
                 continue
-            if not any(
-                kw in text_lower
-                for kw in [
-                    "today", "yesterday", "tomorrow", "last", "past",
-                    "本周", "本月", "本年", "今天", "昨天", "明天"
-                ]
-            ) and c in [
-                "status = 'active'", "status = 'inactive'",
-                "is_deleted = 1", "is_deleted = 0"
-            ]:
-                continue
             merged_conditions.append(c)
         if merged_conditions:
             if "WHERE" in sql.upper():
