@@ -10,7 +10,7 @@ from backend.core.nl2sql_schema import SchemaContext
 SCHEMA = SchemaContext.from_mapping(
     {
         "tables": [
-            {"name": "users", "columns": [{"name": "id"}, {"name": "user_id"}, {"name": "name"}]},
+            {"name": "users", "columns": [{"name": "id"}, {"name": "user_id"}, {"name": "name"}, {"name": "price"}]},
             {"name": "orders", "columns": [{"name": "id"}, {"name": "user_id"}, {"name": "amount"}, {"name": "status"}]},
         ],
         "relationships": [{
@@ -59,6 +59,43 @@ def test_schema_count_group_by_explicit_column(column):
     assert result.success
     assert f"SELECT {column}, COUNT(*) AS count" in result.sql
     assert f"GROUP BY {column}" in result.sql
+
+
+@pytest.mark.parametrize(
+    "text,aggregate",
+    [
+        ("Show average amount of orders", "AVG(amount)"),
+        ("Sum amount of orders", "SUM(amount)"),
+        ("Show maximum amount of orders", "MAX(amount)"),
+        ("Show minimum amount of orders", "MIN(amount)"),
+    ],
+)
+def test_schema_non_count_aggregations_are_preserved(text, aggregate):
+    result = generate(text)
+    assert result.success
+    assert aggregate in result.sql
+    assert "SELECT amount" not in result.sql
+
+
+@pytest.mark.parametrize(
+    "text,group_column,aggregate",
+    [
+        ("calculate average price for users grouped by name", "name", "AVG(price)"),
+        ("Show average amount of orders per user_id", "user_id", "AVG(amount)"),
+    ],
+)
+def test_schema_non_count_aggregation_with_group(text, group_column, aggregate):
+    result = generate(text)
+    assert result.success
+    assert f"SELECT {group_column}, {aggregate}" in result.sql
+    assert f"GROUP BY {group_column}" in result.sql
+
+
+def test_schema_mixed_count_and_average_does_not_duplicate_count():
+    result = generate("Count and average amount of orders")
+    assert result.success
+    assert result.sql.count("COUNT(*) AS count") == 1
+    assert "AVG(amount)" in result.sql
 
 
 @pytest.mark.parametrize("text", [

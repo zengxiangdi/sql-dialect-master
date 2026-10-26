@@ -810,9 +810,14 @@ class PipelineNL2SQLGenerator:
             raise SchemaValidationError("ordering column is outside the schema")
         return canonical, direction
 
-    @staticmethod
-    def _schema_extract_aggregations(text: str) -> list[str]:
-        if any(
+    def _schema_extract_aggregations(
+        self,
+        text: str,
+        table: SchemaTableContext | None = None,
+        schema: SchemaContext | None = None,
+    ) -> list[str]:
+        existing = self._extract_aggregations(text)
+        has_count_intent = any(
             re.search(pattern, text, re.IGNORECASE)
             for pattern in (
                 r"\bnumber\s+of\b",
@@ -820,9 +825,31 @@ class PipelineNL2SQLGenerator:
                 r"\bcount\b",
                 r"\bhow\s+many\b",
             )
+        )
+        if has_count_intent and not any(
+            aggregation.upper().startswith("COUNT(") for aggregation in existing
         ):
-            return ["COUNT(*) AS count"]
-        return []
+            existing = [*existing, "COUNT(*) AS count"]
+        if table is None or schema is None or not table.has_column_metadata:
+            return existing
+
+        group_match = re.search(r"\b(?:group(?:ed)?\s+by|per|each|by)\b", text, re.IGNORECASE)
+        metric_text = text if group_match is None else text[:group_match.start()]
+        metric_candidates: list[tuple[int, str]] = []
+        for column in table.columns:
+            pattern = rf"(?<![\w$]){re.escape(column)}(?![\w$])"
+            match = re.search(pattern, metric_text, re.IGNORECASE)
+            if match:
+                metric_candidates.append((match.start(), column))
+        if metric_candidates:
+            metric = min(metric_candidates, key=lambda item: item[0])[1]
+            existing = [
+                re.sub(r"^(AVG|SUM|MAX|MIN)\([^)]*\)$", lambda m: f"{m.group(1)}({metric})", aggregation, flags=re.IGNORECASE)
+                if re.match(r"^(AVG|SUM|MAX|MIN)\(", aggregation, re.IGNORECASE)
+                else aggregation
+                for aggregation in existing
+            ]
+        return existing
 
     def _schema_resolve_group_by(
         self,
@@ -1063,7 +1090,9 @@ class PipelineNL2SQLGenerator:
             parsed = self._parse_text(text_lower, text)
             parsed.update(analysis)
             operation = self._detect_operation(text_lower)
-            aggregations = self._schema_extract_aggregations(text_lower)
+            aggregations = self._schema_extract_aggregations(
+                text_lower, table_context, schema
+            )
             group_by = self._schema_resolve_group_by(
                 text_lower, table_context, schema, aggregations
             )
