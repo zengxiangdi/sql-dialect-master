@@ -143,10 +143,13 @@ print(result.sql)
 
 An optional request `schema` can ground both deterministic and LLM
 generation. It contains `tables` with optional `columns`, plus explicit
-`relationships`. Table and column references are matched case-insensitively;
-ambiguous or unknown references, and multi-table requests without a declared
-relationship, fail closed instead of falling back to hardcoded table or column
-names. Empty column metadata means that the table's columns are unrestricted.
+`relationships`. Table and column references that the deterministic parser maps
+to the schema are matched case-insensitively; ambiguous mapped references and
+multi-table requests without a declared relationship fail closed instead of
+falling back to hardcoded table or column names. Empty column metadata means
+that the table's columns are unrestricted. Natural-language column names
+outside the deterministic mapping may be ignored; use `column_hints` or the
+LLM path for those.
 The response field `schema_used` is true when a successful deterministic or LLM
 generation was validated against the supplied schema. With no schema, the
 existing deterministic behavior is unchanged.
