@@ -7,39 +7,41 @@ user-supplied parentheses.
 import re
 from typing import List, Optional, Tuple
 
+from ..p1_sql_scanner import mask_non_executable
+
 
 _COMPARISON_PATTERNS = (
     re.compile(
         r"(?<![A-Za-z0-9_])(price|quantity|amount|age|score|rating|views|clicks)\s+"
         r"(greater(?:\s+than)?|more\s+than|above|over|less(?:\s+than)?|"
         r"below|under|equal(?:\s+to)?|equals)\s+"
-        r"([0-9]+(?:\.[0-9]+)?)",
+        r"(-?[0-9]+(?:\.[0-9]+)?)",
         re.IGNORECASE,
     ),
     re.compile(
         r"(?<![A-Za-z0-9_])(price|quantity|amount|age|score|rating|views|clicks)\s*"
-        r"(>=|<=|!=|=|>|<)\s*([0-9]+(?:\.[0-9]+)?)",
+        r"(>=|<=|!=|<>|=|>|<)\s*(-?[0-9]+(?:\.[0-9]+)?)",
         re.IGNORECASE,
     ),
     re.compile(
         r"(价格|数量|金额|年龄|得分|评分|浏览量|点击量)\s*"
         r"(大于等于|小于等于|不等于|大于|小于|超过|低于|等于)\s*"
-        r"([0-9]+(?:\.[0-9]+)?)"
+        r"(-?[0-9]+(?:\.[0-9]+)?)"
     ),
 )
 
 _RANGE_PATTERN = re.compile(
     r"(?<![A-Za-z0-9_])(price|quantity|amount|age|score|rating|views|clicks)\s+"
-    r"(?:between\s+([0-9]+(?:\.[0-9]+)?)\s+and\s+([0-9]+(?:\.[0-9]+)?)|"
-    r"in\s+(?:the\s+)?range\s+([0-9]+(?:\.[0-9]+)?)\s*(?:to|-)\s*"
-    r"([0-9]+(?:\.[0-9]+)?))",
+    r"(?:between\s+(-?[0-9]+(?:\.[0-9]+)?)\s+and\s+(-?[0-9]+(?:\.[0-9]+)?)|"
+    r"in\s+(?:the\s+)?range\s+(-?[0-9]+(?:\.[0-9]+)?)\s*(?:to|-)\s*"
+    r"(-?[0-9]+(?:\.[0-9]+)?))",
     re.IGNORECASE,
 )
 
 _CN_RANGE_PATTERN = re.compile(
     r"(价格|数量|金额|年龄|得分|评分|浏览量|点击量)\s*"
-    r"(?:在|介于)\s*([0-9]+(?:\.[0-9]+)?)\s*(?:和|到|至|-)\s*"
-    r"([0-9]+(?:\.[0-9]+)?)\s*(?:之间|范围内|以内)?"
+    r"(?:在|介于)\s*(-?[0-9]+(?:\.[0-9]+)?)\s*(?:和|到|至|-)\s*"
+    r"(-?[0-9]+(?:\.[0-9]+)?)\s*(?:之间|范围内|以内)?"
 )
 
 _TEXT_PATTERN = re.compile(
@@ -100,6 +102,29 @@ _STATUS_CONDITIONS = {
     "unpaid": "status = 'unpaid'",
     "未支付": "status = 'unpaid'",
 }
+
+_STATUS_VALUES = {
+    "active": "active",
+    "inactive": "inactive",
+    "enabled": "active",
+    "disabled": "inactive",
+    "valid": "active",
+    "invalid": "inactive",
+    "completed": "completed",
+    "done": "completed",
+    "pending": "pending",
+    "paid": "paid",
+    "unpaid": "unpaid",
+    "有效": "active",
+    "无效": "inactive",
+    "已完成": "completed",
+    "未完成": "pending",
+    "已支付": "paid",
+    "未支付": "unpaid",
+}
+_STATUS_VALUE_PATTERN = "(?:" + "|".join(
+    sorted((re.escape(value) for value in _STATUS_VALUES), key=len, reverse=True)
+) + ")"
 
 _CN_COLUMNS = {
     "价格": "price",
@@ -168,15 +193,16 @@ def _format_set_values(raw_values: str) -> str:
 
 def _comparison_matches(text: str) -> List[Tuple[int, int, str]]:
     matches: List[Tuple[int, int, str]] = []
+    executable = mask_non_executable(text)
 
     for pattern in _COMPARISON_PATTERNS:
-        for match in pattern.finditer(text):
+        for match in pattern.finditer(executable):
             first, raw_operator, value = match.groups()
             column = _CN_COLUMNS.get(first, first)
             matches.append((match.start(), match.end(), f"{column} {_normalize_operator(raw_operator)} {value}"))
 
     for pattern in (_RANGE_PATTERN, _CN_RANGE_PATTERN):
-        for match in pattern.finditer(text):
+        for match in pattern.finditer(executable):
             groups = match.groups()
             if len(groups) == 5:
                 first, low1, high1, low2, high2 = groups
@@ -193,7 +219,7 @@ def _comparison_matches(text: str) -> List[Tuple[int, int, str]]:
             matches.append((match.start(), match.end(), _text_sql(column, value)))
 
     for pattern in (_NULL_PATTERN, _CN_NULL_PATTERN):
-        for match in pattern.finditer(text):
+        for match in pattern.finditer(executable):
             first, raw_predicate = match.groups()
             column = _CN_COLUMNS.get(first, first)
             normalized = raw_predicate.replace(" ", "").lower()
@@ -229,9 +255,7 @@ def _comparison_matches(text: str) -> List[Tuple[int, int, str]]:
             operator = "NOT IN" if operator_text == "不在" else "IN"
             matches.append((match.start(), value_end, f"{_CN_SET_COLUMNS[column]} {operator} ({values})"))
 
-    for match in _STATUS_PATTERN.finditer(text):
-        status = match.group(1).lower()
-        matches.append((match.start(), match.end(), _STATUS_CONDITIONS[status]))
+    matches.extend(_status_matches(text))
 
     matches.sort(key=lambda item: (item[0], item[1]))
     deduped: List[Tuple[int, int, str]] = []
@@ -240,6 +264,86 @@ def _comparison_matches(text: str) -> List[Tuple[int, int, str]]:
             continue
         deduped.append(item)
     return deduped
+
+
+def _status_matches(text: str) -> List[Tuple[int, int, str]]:
+    """Extract status predicates without matching quoted values."""
+    executable = mask_non_executable(text)
+    matches: list[Tuple[int, int, str]] = []
+    explicit_patterns = [
+        (
+            re.compile(
+                rf"\bstatus\s*(?:is\s+not|isn't|not|!=|<>)\s*({_STATUS_VALUE_PATTERN})\b",
+                re.IGNORECASE,
+            ),
+            "!=",
+        ),
+        (
+            re.compile(rf"\bstatus\s*(?:is|=)\s*({_STATUS_VALUE_PATTERN})\b", re.IGNORECASE),
+            "=",
+        ),
+        (
+            re.compile(rf"\bstatus\s+({_STATUS_VALUE_PATTERN})\b", re.IGNORECASE),
+            "=",
+        ),
+        (
+            re.compile(rf"状态\s*(?:不是|不为|!=|<>)\s*({_STATUS_VALUE_PATTERN})"),
+            "!=",
+        ),
+        (
+            re.compile(rf"状态\s*(?:为|是|=)\s*({_STATUS_VALUE_PATTERN})"),
+            "=",
+        ),
+    ]
+    for pattern, operator in explicit_patterns:
+        for match in pattern.finditer(executable):
+            raw_value = match.group(1)
+            canonical = _STATUS_VALUES[raw_value.casefold() if raw_value.isascii() else raw_value]
+            matches.append((match.start(), match.end(), f"status {operator} '{canonical}'"))
+
+    occupied = [(start, end) for start, end, _ in matches]
+    text_spans = [
+        (match.start(), match.end())
+        for pattern in (_TEXT_PATTERN, _CN_TEXT_PATTERN)
+        for match in pattern.finditer(executable)
+    ]
+    for raw_value, canonical in sorted(_STATUS_VALUES.items(), key=lambda item: -len(item[0])):
+        if raw_value.isascii():
+            pattern = re.compile(rf"(?<![\w$]){re.escape(raw_value)}(?![\w$])", re.IGNORECASE)
+        else:
+            pattern = re.compile(re.escape(raw_value))
+        for match in pattern.finditer(executable):
+            if any(start <= match.start() < end or match.start() <= start < match.end() for start, end in occupied):
+                continue
+            if any(start <= match.start() < end for start, end in text_spans):
+                continue
+            prefix = executable[:match.start()]
+            negative = bool(
+                re.search(r"(?:\b(?:not|except|excluding)\s*)$", prefix, re.IGNORECASE)
+                or re.search(r"(?:不是|不为|非)\s*$", prefix)
+            )
+            operator = "!=" if negative else "="
+            matches.append((match.start(), match.end(), f"status {operator} '{canonical}'"))
+            occupied.append((match.start(), match.end()))
+
+    deleted_patterns = [
+        (
+            re.compile(r"(?:未删除|没有删除|不是删除|非删除|\bnot\s+deleted\b)", re.IGNORECASE),
+            "is_deleted = 0",
+        ),
+        (re.compile(r"(?:已删除|\bdeleted\b|\bremoved\b)", re.IGNORECASE), "is_deleted = 1"),
+    ]
+    for pattern, condition in deleted_patterns:
+        for match in pattern.finditer(executable):
+            if any(start <= match.start() < end or match.start() <= start < match.end() for start, end, _ in matches):
+                continue
+            matches.append((match.start(), match.end(), condition))
+    return matches
+
+
+def extract_status_conditions(text: str) -> list[str]:
+    """Return standalone status predicates for the single-condition path."""
+    return [condition for _, _, condition in _status_matches(text)]
 
 
 def extract_boolean_conditions(text: str) -> Optional[List[str]]:
