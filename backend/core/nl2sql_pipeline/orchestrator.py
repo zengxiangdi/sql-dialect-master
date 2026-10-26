@@ -820,20 +820,27 @@ class PipelineNL2SQLGenerator:
         table: SchemaTableContext,
         schema: SchemaContext,
     ) -> tuple[str, str | None] | None:
-        count_intent = bool(
-            re.search(
-                r"统计|数量|多少|几个|数(?:量)?|\bnumber\s+of\b|\bcount(?:\s+of)?\b|\bhow\s+many\b",
-                text,
-                re.IGNORECASE,
-            )
-        )
+        count_intent = bool(re.search(
+            r"统计|数量|多少|几个|总数|个数|条数|件数|行数|人数|记录数|"
+            r"\bnumber\s+of\b|\bcount(?:\s+of)?\b|\bhow\s+many\b",
+            text,
+            re.IGNORECASE,
+        ))
+        if not count_intent:
+            for pattern, mapped in self.TABLE_PATTERNS.items():
+                if not re.search(re.escape(pattern) + r"数", text, re.IGNORECASE):
+                    continue
+                candidates = schema.table_candidates(mapped)
+                if len(candidates) == 1 and candidates[0].key == table.key:
+                    count_intent = True
+                    break
         measure_table: str | None = None
         if "库存数量" in text:
             measure_table = "inventory"
         elif "购买数量" in text:
             measure_table = "orders"
         if measure_table is not None:
-            if table.key != measure_table:
+            if table.name.rsplit(".", 1)[-1].casefold() != measure_table:
                 raise SchemaValidationError("quantity measure table is not selected")
             quantity = schema.canonical_column(table, "quantity")
             if quantity is None:

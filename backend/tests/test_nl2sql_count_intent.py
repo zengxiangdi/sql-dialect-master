@@ -25,6 +25,13 @@ def context(*, inventory_columns=None, orders_quantity=False):
     return SchemaContext.from_mapping({"tables": tables, "relationships": []})
 
 
+def single_table_context(name: str, columns: list[str]) -> SchemaContext:
+    return SchemaContext.from_mapping({
+        "tables": [{"name": name, "columns": [{"name": column} for column in columns]}],
+        "relationships": [],
+    })
+
+
 def generate(text: str, schema: SchemaContext | None):
     return NL2SQLGenerator().generate(text, "postgres", schema=schema)
 
@@ -53,6 +60,42 @@ def test_products_quantity_does_not_turn_product_count_into_sum():
     assert "FROM products" in result.sql
     assert "COUNT(*) AS count" in result.sql
     assert "SUM(quantity)" not in result.sql
+
+
+@pytest.mark.parametrize("text,table", [
+    ("订单数", "orders"),
+    ("员工数", "employees"),
+    ("用户数", "users"),
+    ("产品数", "products"),
+])
+def test_entity_counter_suffix_is_count(text, table):
+    result = generate(text, single_table_context(table, ["id"]))
+    assert result.success
+    assert f"FROM {table}" in result.sql
+    assert "COUNT(*) AS count" in result.sql
+
+
+@pytest.mark.parametrize("text", [
+    "显示用户数据", "查看用户数据", "用户数据", "数据库", "数字", "数组", "参数", "函数", "分数",
+])
+def test_data_words_do_not_trigger_schema_count(text):
+    result = generate(text, context())
+    assert "COUNT(*) AS count" not in (result.sql or "")
+
+
+def test_qualified_measure_tables_use_basename():
+    inventory = SchemaContext.from_mapping({
+        "tables": [{"name": "public.inventory", "columns": [{"name": "quantity"}]}],
+        "relationships": [],
+    })
+    orders = SchemaContext.from_mapping({
+        "tables": [{"name": "public.orders", "columns": [{"name": "quantity"}]}],
+        "relationships": [],
+    })
+    inventory_result = generate("统计库存数量", inventory)
+    orders_result = generate("统计购买数量", orders)
+    assert inventory_result.success and "SUM(quantity)" in inventory_result.sql
+    assert orders_result.success and "SUM(quantity)" in orders_result.sql
 
 
 def test_inventory_quantity_is_sum_measure():
@@ -129,6 +172,13 @@ def test_no_schema_count_outputs_remain_current(text):
     assert first.success == second.success
     assert first.sql == second.sql
     assert first.schema_used is False
+
+
+def test_no_schema_order_count_keeps_legacy_quantity_grouping():
+    result = generate("统计订单数量", None)
+    assert result.success
+    assert "COUNT(*) AS count" in result.sql
+    assert "GROUP BY quantity" in result.sql
 
 
 def test_count_results_are_deterministic():
