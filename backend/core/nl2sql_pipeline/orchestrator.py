@@ -722,12 +722,15 @@ class PipelineNL2SQLGenerator:
             if schema.canonical_column(table, "date") is None:
                 created_at = schema.canonical_column(table, "created_at")
                 if created_at is not None:
-                    rewritten = re.sub(
-                        r"(?<![\w$])date(?![\w$])",
-                        created_at,
-                        rewritten,
-                        flags=re.IGNORECASE,
-                    )
+                    segments = re.split(r"('(?:''|[^'])*')", rewritten)
+                    for index in range(0, len(segments), 2):
+                        segments[index] = re.sub(
+                            r"(?<![\w$])date(?![\w$])",
+                            created_at,
+                            segments[index],
+                            flags=re.IGNORECASE,
+                        )
+                    rewritten = "".join(segments)
             resolved.append(rewritten)
         return resolved
 

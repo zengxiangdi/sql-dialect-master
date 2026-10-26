@@ -407,6 +407,20 @@ def test_schema_unknown_unqualified_column_fails_closed():
         )
 
 
+def test_schema_date_rewrite_skips_single_quoted_literals():
+    context = SchemaContext.from_mapping(
+        {"tables": [{"name": "users", "columns": [{"name": "status"}, {"name": "created_at"}]}]}
+    )
+    generator = NL2SQLGenerator()
+    table = context.tables[0]
+    assert generator._schema_resolve_conditions(
+        "status = 'date'",
+        ["status = 'date'"],
+        table,
+        context,
+    ) == ["status = 'date'"]
+
+
 def test_schema_relationships_generate_not_exists_and_physical_join():
     generator = NL2SQLGenerator()
     negative = generator.generate(
