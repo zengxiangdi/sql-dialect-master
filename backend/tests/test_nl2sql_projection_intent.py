@@ -56,6 +56,35 @@ def test_schema_projection_uses_text_order_and_case_insensitive_columns(text, co
     assert f"SELECT {', '.join(columns)}" in result.sql
 
 
+@pytest.mark.parametrize(
+    "text,columns",
+    [
+        ("Show user 姓名 and nickname", ["name", "nickname"]),
+        ("显示用户姓名和邮箱，附加 nickname", ["name", "email", "nickname"]),
+        ("Show user emails and email", ["email"]),
+        ("Show user names and name", ["name"]),
+    ],
+)
+def test_schema_projection_merges_aliases_and_deduplicates(text, columns):
+    result = generate(text)
+    assert result.success
+    assert f"SELECT {', '.join(columns)}" in result.sql
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "show users where name = 'status'",
+        "show users where name = 'users.email'",
+    ],
+)
+def test_schema_projection_ignores_columns_inside_literals(text):
+    result = generate(text)
+    assert result.success
+    assert "SELECT name" in result.sql
+    assert "email" not in result.sql.split("FROM", 1)[0]
+
+
 def test_schema_projection_supports_qualified_column():
     qualified = SchemaContext.from_mapping({
         "tables": [{"name": "public.users", "columns": [{"name": "email"}]}]
@@ -108,6 +137,25 @@ def test_schema_explicit_ordering_is_preserved(text, order):
     assert order in result.sql
 
 
+def test_schema_ordering_uses_target_column_after_projection_text():
+    result = generate("Show users with name ordered by created_at")
+    assert result.success
+    assert "SELECT name" in result.sql
+    assert "ORDER BY created_at ASC" in result.sql
+
+
+def test_schema_unknown_ordering_column_fails_closed():
+    result = generate("Show users ordered by missing_col")
+    assert result.success is False
+    assert result.sql is None
+
+
+def test_schema_multiple_ordering_columns_fail_closed_until_batch_two():
+    result = generate("Show users ordered by name and email")
+    assert result.success is False
+    assert result.sql is None
+
+
 def test_schema_plain_select_and_exists_are_unchanged():
     plain = generate("Show users")
     exists = generate("users who have orders")
@@ -146,4 +194,14 @@ def test_no_schema_projection_outputs_remain_current(text):
     assert first.success == second.success
     assert first.sql == second.sql
     assert first.schema_used is False
+
+
+def test_no_schema_projection_and_ordering_outputs_remain_current():
+    assert "SELECT *" in generate("Show user names and emails", schema=False).sql
+    order_amounts = generate("Show all order amounts", schema=False)
+    assert "ORDER BY" not in order_amounts.sql
+    distinct = generate("Find distinct user emails", schema=False)
+    assert "SELECT *" in distinct.sql
+    ordered = generate("Show users ordered by created_at ascending", schema=False)
+    assert "ORDER BY" not in ordered.sql
 

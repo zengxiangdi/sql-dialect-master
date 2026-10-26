@@ -689,6 +689,7 @@ class PipelineNL2SQLGenerator:
                 )
             return resolved
 
+        projection_text = mask_non_executable(self._schema_projection_text(text))
         candidates: list[tuple[int, int, str]] = []
         column_names = list(table.columns)
         for column in column_names:
@@ -699,11 +700,28 @@ class PipelineNL2SQLGenerator:
                 pattern = re.escape(variant)
                 if not re.search(r"[\u4e00-\u9fff]", variant):
                     pattern = rf"(?<![\w$]){pattern}(?![\w$])"
-                for match in re.finditer(pattern, text, re.IGNORECASE):
+                for match in re.finditer(pattern, projection_text, re.IGNORECASE):
                     candidates.append((match.start(), match.end(), column))
                 qualified = re.escape(table.name) + r"\." + re.escape(variant)
-                for match in re.finditer(qualified, text, re.IGNORECASE):
+                for match in re.finditer(qualified, projection_text, re.IGNORECASE):
                     candidates.append((match.start(), match.end(), column))
+
+        mapped_columns = self._extract_columns(projection_text)
+        if mapped_columns != ["*"]:
+            for mapped_column in mapped_columns:
+                canonical = schema.canonical_column(table, mapped_column)
+                if canonical is None:
+                    raise SchemaValidationError("mapped projection column is outside the schema")
+                aliases = [
+                    alias for alias, value in self.COLUMN_PATTERNS.items()
+                    if value.casefold() == mapped_column.casefold()
+                ] + [canonical]
+                for alias in aliases:
+                    pattern = re.escape(alias)
+                    if not re.search(r"[\u4e00-\u9fff]", alias):
+                        pattern = rf"(?<![\w$]){pattern}(?![\w$])"
+                    for match in re.finditer(pattern, projection_text, re.IGNORECASE):
+                        candidates.append((match.start(), match.end(), canonical))
 
         selected: list[tuple[int, int, str]] = []
         for candidate in sorted(candidates, key=lambda item: (item[0], -(item[1] - item[0]))):
@@ -711,11 +729,6 @@ class PipelineNL2SQLGenerator:
                 continue
             selected.append(candidate)
         if selected:
-            mapped_columns = self._extract_columns(text)
-            if mapped_columns != ["*"]:
-                for mapped_column in mapped_columns:
-                    if schema.canonical_column(table, mapped_column) is None:
-                        raise SchemaValidationError("mapped projection column is outside the schema")
             return [column for _, _, column in selected]
 
         columns = self._extract_columns(text)
@@ -737,6 +750,57 @@ class PipelineNL2SQLGenerator:
                 raise SchemaValidationError("column is outside the schema")
             resolved.append(canonical)
         return resolved
+
+    @staticmethod
+    def _schema_projection_text(text: str) -> str:
+        """Mask explicit ordering clauses so their columns are not projected."""
+        match = re.search(
+            r"\b(?:order(?:ed)?|sort(?:ed)?)\s+by\b",
+            text,
+            re.IGNORECASE,
+        )
+        if match is None:
+            return text
+        return text[:match.start()] + " " * (len(text) - match.start())
+
+    def _schema_resolve_ordering(
+        self,
+        text: str,
+        table: SchemaTableContext,
+        schema: SchemaContext,
+    ) -> Optional[Tuple[str, str]]:
+        """Resolve one explicit schema-aware ORDER BY target."""
+        match = re.search(
+            r"\b(?:order(?:ed)?|sort(?:ed)?)\s+by\s+"
+            r"([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)"
+            r"(.*)$",
+            text,
+            re.IGNORECASE,
+        )
+        if match is None:
+            return self._extract_ordering(text)
+        raw_column, tail = match.groups()
+        direction = "ASC"
+        direction_match = re.match(
+            r"\s+(ascending|descending|asc|desc|升序|降序)\b",
+            tail,
+            re.IGNORECASE,
+        )
+        if direction_match:
+            direction = "DESC" if direction_match.group(1).casefold() in {"descending", "desc", "降序"} else "ASC"
+            tail = tail[direction_match.end():]
+        if tail.strip(" \t\r\n,.;，。；"):
+            raise SchemaValidationError("multiple schema-aware ordering columns are unsupported")
+        parts = raw_column.split(".")
+        column_name = parts[-1]
+        if len(parts) > 1:
+            candidates = schema.table_candidates(".".join(parts[:-1]))
+            if len(candidates) != 1 or candidates[0].key != table.key:
+                raise SchemaValidationError("ordering column table is not the selected schema table")
+        canonical = schema.canonical_column(table, column_name)
+        if canonical is None:
+            raise SchemaValidationError("ordering column is outside the schema")
+        return canonical, direction
 
     @staticmethod
     def _schema_has_explicit_ordering(text: str) -> bool:
@@ -936,9 +1000,7 @@ class PipelineNL2SQLGenerator:
             aggregations = self._extract_aggregations(text_lower)
             group_by = self._extract_group_by(text_lower)
             ordering = (
-                self._extract_ordering(
-                    re.sub(r"\bordered\s+by\b", "order by", text_lower)
-                )
+                self._schema_resolve_ordering(text_lower, table_context, schema)
                 if self._schema_has_explicit_ordering(text_lower)
                 else None
             )
