@@ -811,6 +811,64 @@ class PipelineNL2SQLGenerator:
         return canonical, direction
 
     @staticmethod
+    def _schema_extract_aggregations(text: str) -> list[str]:
+        if any(
+            re.search(pattern, text, re.IGNORECASE)
+            for pattern in (
+                r"\bnumber\s+of\b",
+                r"\bcount\s+of\b",
+                r"\bcount\b",
+                r"\bhow\s+many\b",
+            )
+        ):
+            return ["COUNT(*) AS count"]
+        return []
+
+    def _schema_resolve_group_by(
+        self,
+        text: str,
+        table: SchemaTableContext,
+        schema: SchemaContext,
+        aggregations: list[str],
+    ) -> list[str]:
+        lowered = text.lower()
+        match = re.search(
+            r"\b(?:group\s+by|grouped\s+by)\s+"
+            r"([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)(.*)$",
+            lowered,
+            re.IGNORECASE,
+        )
+        match_kind = "group"
+        if match is None and aggregations:
+            if not re.search(r"\b(?:ordered|sorted|order|sort)\s+by\b", lowered):
+                match = re.search(
+                    r"\b(?:per|each|by)\s+"
+                    r"([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)(.*)$",
+                    lowered,
+                    re.IGNORECASE,
+                )
+                match_kind = "aggregation-group"
+        chinese_group_intent = bool(re.search(r"每个|各个|分组|汇总|统计|数量", text))
+        if match is None:
+            if chinese_group_intent:
+                raise SchemaValidationError("schema group column is not explicitly resolvable")
+            return []
+        raw_column, tail = match.groups()
+        if tail.strip(" \t\r\n,.;，。；"):
+            raise SchemaValidationError("multiple schema group columns are unsupported")
+        parts = raw_column.split(".")
+        if len(parts) > 1:
+            candidates = schema.table_candidates(".".join(parts[:-1]))
+            if len(candidates) != 1 or candidates[0].key != table.key:
+                raise SchemaValidationError("group column table is not the selected schema table")
+        canonical = schema.canonical_column(table, parts[-1])
+        if canonical is None:
+            if not table.has_column_metadata and match_kind == "group":
+                return [parts[-1]]
+            raise SchemaValidationError("group column is outside the schema")
+        return [canonical]
+
+    @staticmethod
     def _schema_has_explicit_ordering(text: str) -> bool:
         lowered = text.lower()
         phrases = (
@@ -1005,8 +1063,10 @@ class PipelineNL2SQLGenerator:
             parsed = self._parse_text(text_lower, text)
             parsed.update(analysis)
             operation = self._detect_operation(text_lower)
-            aggregations = self._extract_aggregations(text_lower)
-            group_by = self._extract_group_by(text_lower)
+            aggregations = self._schema_extract_aggregations(text_lower)
+            group_by = self._schema_resolve_group_by(
+                text_lower, table_context, schema, aggregations
+            )
             ordering = (
                 self._schema_resolve_ordering(text_lower, table_context, schema)
                 if self._schema_has_explicit_ordering(text_lower)
