@@ -729,7 +729,15 @@ class PipelineNL2SQLGenerator:
                 continue
             selected.append(candidate)
         if selected:
-            return [column for _, _, column in selected]
+            deduplicated: list[str] = []
+            seen_columns: set[str] = set()
+            for _, _, column in selected:
+                key = column.casefold()
+                if key in seen_columns:
+                    continue
+                seen_columns.add(key)
+                deduplicated.append(column)
+            return deduplicated
 
         columns = self._extract_columns(text)
         if columns == ["*"]:

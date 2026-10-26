@@ -72,6 +72,30 @@ def test_schema_projection_merges_aliases_and_deduplicates(text, columns):
 
 
 @pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("Show user emails and email", "SELECT email\nFROM users"),
+        ("Show user email and emails", "SELECT email\nFROM users"),
+        ("Show user names and emails and name", "SELECT name, email\nFROM users"),
+        ("Show user name and 姓名", "SELECT name\nFROM users"),
+    ],
+)
+def test_schema_projection_deduplicates_canonical_columns(text, expected):
+    result = generate(text)
+    assert result.success
+    assert expected in result.sql
+    projection = result.sql.split("FROM", 1)[0]
+    assert projection.count("email") <= 1
+    assert projection.count("name") <= 1
+
+
+def test_schema_projection_deduplication_keeps_alias_merge_behavior():
+    result = generate("Show user 姓名 and nickname")
+    assert result.success
+    assert "SELECT name, nickname" in result.sql
+
+
+@pytest.mark.parametrize(
     "text",
     [
         "show users where name = 'status'",
