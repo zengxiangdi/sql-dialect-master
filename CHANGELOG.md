@@ -2,6 +2,27 @@
 
 All notable changes to SQL Dialect Master are documented here.
 
+## [1.4.1] - 2026-10-27
+
+### Fixed
+
+- Corrected deterministic NL2SQL status predicates: `inactive`, `not active`,
+  `!=`, `<>`, and Chinese `不是/非` now produce the intended comparison.
+- Preserved negative numeric thresholds and quoted string/date literals in
+  predicates.
+- Prevented text values such as `contains "active"` from injecting unrelated
+  status predicates.
+- Treat deleted-state phrases such as `已删除`, `未删除`, and `没有删除` as
+  read-only predicates instead of DELETE operations.
+- Replaced the quoted-predicate regular expression with linear scanning to
+  remove a CodeQL high-severity ReDoS risk.
+
+### Notes
+
+- No API changes.
+- No schema format changes.
+- No dependency or lockfile dependency changes.
+
 ## [1.4.0] - 2026-10-26
 
 ### New
