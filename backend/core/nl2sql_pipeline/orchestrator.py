@@ -689,6 +689,35 @@ class PipelineNL2SQLGenerator:
                 )
             return resolved
 
+        candidates: list[tuple[int, int, str]] = []
+        column_names = list(table.columns)
+        for column in column_names:
+            variants = [column]
+            if not column.casefold().endswith("s"):
+                variants.append(column + "s")
+            for variant in variants:
+                pattern = re.escape(variant)
+                if not re.search(r"[\u4e00-\u9fff]", variant):
+                    pattern = rf"(?<![\w$]){pattern}(?![\w$])"
+                for match in re.finditer(pattern, text, re.IGNORECASE):
+                    candidates.append((match.start(), match.end(), column))
+                qualified = re.escape(table.name) + r"\." + re.escape(variant)
+                for match in re.finditer(qualified, text, re.IGNORECASE):
+                    candidates.append((match.start(), match.end(), column))
+
+        selected: list[tuple[int, int, str]] = []
+        for candidate in sorted(candidates, key=lambda item: (item[0], -(item[1] - item[0]))):
+            if any(candidate[0] < existing[1] and existing[0] < candidate[1] for existing in selected):
+                continue
+            selected.append(candidate)
+        if selected:
+            mapped_columns = self._extract_columns(text)
+            if mapped_columns != ["*"]:
+                for mapped_column in mapped_columns:
+                    if schema.canonical_column(table, mapped_column) is None:
+                        raise SchemaValidationError("mapped projection column is outside the schema")
+            return [column for _, _, column in selected]
+
         columns = self._extract_columns(text)
         if columns == ["*"]:
             for candidate in table.columns:
@@ -708,6 +737,23 @@ class PipelineNL2SQLGenerator:
                 raise SchemaValidationError("column is outside the schema")
             resolved.append(canonical)
         return resolved
+
+    @staticmethod
+    def _schema_has_explicit_ordering(text: str) -> bool:
+        lowered = text.lower()
+        phrases = (
+            "order by", "ordered by", "sort by", "sorted by",
+            "ascending", "descending", "asc", "desc", "sort", "sorted",
+            "top", "highest", "lowest", "max", "min",
+            "升序", "降序", "排序", "最大", "最小", "最多", "最少",
+        )
+        for phrase in phrases:
+            if phrase.isascii():
+                if re.search(r"(?<![\w$])" + re.escape(phrase) + r"(?![\w$])", lowered):
+                    return True
+            elif phrase in text:
+                return True
+        return False
 
     def _schema_resolve_conditions(
         self,
@@ -889,7 +935,13 @@ class PipelineNL2SQLGenerator:
             operation = self._detect_operation(text_lower)
             aggregations = self._extract_aggregations(text_lower)
             group_by = self._extract_group_by(text_lower)
-            ordering = self._extract_ordering(text_lower)
+            ordering = (
+                self._extract_ordering(
+                    re.sub(r"\bordered\s+by\b", "order by", text_lower)
+                )
+                if self._schema_has_explicit_ordering(text_lower)
+                else None
+            )
             limit = self._extract_limit(text_lower)
             distinct = self._check_distinct(text_lower)
             sql, explanation, confidence, evidence = self._build_sql_enhanced(
