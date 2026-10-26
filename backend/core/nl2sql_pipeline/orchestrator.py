@@ -623,6 +623,23 @@ class PipelineNL2SQLGenerator:
                 found.setdefault(table.key, (match.start(), table))
         return [table for _, table in sorted(found.values(), key=lambda item: item[0])]
 
+    def _schema_unknown_table_patterns(
+        self, text: str, schema: SchemaContext
+    ) -> list[str]:
+        """Return mapped table names mentioned by the request but absent in schema."""
+        unknown: list[str] = []
+        for pattern, mapped in self.TABLE_PATTERNS.items():
+            if pattern == "order" and re.search(r"\border\b\s+by\b", text, re.IGNORECASE):
+                continue
+            if not self._schema_text_match(text, pattern):
+                continue
+            if schema.table_candidates(mapped):
+                continue
+            if mapped in {"table", "data"}:
+                continue
+            unknown.append(mapped)
+        return sorted(set(unknown))
+
     def _schema_resolve_table(
         self,
         text: str,
@@ -814,6 +831,13 @@ class PipelineNL2SQLGenerator:
     ) -> NL2SQLResult:
         """Generate through the enhanced path with strict schema resolution."""
         try:
+            unknown_tables = self._schema_unknown_table_patterns(text, schema)
+            if unknown_tables:
+                return self._schema_failure(
+                    text,
+                    dialect,
+                    "The request references tables outside the provided schema.",
+                )
             table_context, joins = self._schema_resolve_joins(text, table_hint, schema)
             columns = self._schema_resolve_columns(
                 text_lower, table_context, column_hints, schema

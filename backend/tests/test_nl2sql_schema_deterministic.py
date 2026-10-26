@@ -241,6 +241,60 @@ def test_deterministic_schema_hints_are_checked_before_generation():
     assert result.sql is None
 
 
+@pytest.mark.parametrize(
+    "prompt",
+    ["show orders", "list products", "show payments where id = 1"],
+)
+def test_schema_unknown_table_aliases_fail_closed(prompt):
+    result = NL2SQLGenerator().generate(
+        prompt, "postgres", schema=SINGLE_TABLE_SCHEMA
+    )
+    assert result.success is False
+    assert result.sql is None
+    assert result.schema_used is False
+
+
+def test_schema_unknown_table_fails_with_unrestricted_table_metadata():
+    context = SchemaContext.from_mapping(
+        {"tables": [{"name": "events", "columns": []}]}
+    )
+    result = NL2SQLGenerator().generate("show orders", "postgres", schema=context)
+    assert result.success is False
+    assert result.sql is None
+    assert result.schema_used is False
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "show users and payments",
+        "show users with payments",
+        "find users who have orders and payments",
+    ],
+)
+def test_schema_unknown_multi_table_alias_fails_closed(prompt):
+    result = NL2SQLGenerator().generate(
+        prompt, "postgres", schema=RELATION_SCHEMA
+    )
+    assert result.success is False
+    assert result.sql is None
+    assert result.schema_used is False
+
+
+def test_schema_generic_data_word_and_implicit_single_table_still_work():
+    generator = NL2SQLGenerator()
+    assert generator.generate("show users", "postgres", schema=SINGLE_TABLE_SCHEMA).success
+    assert generator.generate("show user data", "postgres", schema=SINGLE_TABLE_SCHEMA).success
+    assert generator.generate("last 7 days", "postgres", schema=SINGLE_TABLE_SCHEMA).success
+    assert generator.generate("count everything", "postgres", schema=SINGLE_TABLE_SCHEMA).success
+
+
+def test_no_schema_unknown_table_behavior_is_unchanged():
+    result = NL2SQLGenerator().generate("show orders", "postgres")
+    assert result.success is True
+    assert "FROM orders" in result.sql
+
+
 def test_deterministic_schema_empty_columns_allow_qualified_columns():
     context = SchemaContext.from_mapping({"tables": [{"name": "events", "columns": []}]})
     result = NL2SQLGenerator().generate(
