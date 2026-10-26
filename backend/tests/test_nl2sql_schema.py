@@ -91,7 +91,9 @@ def test_schema_success_passes_structured_schema_and_marks_response(client, monk
 
 
 @pytest.mark.parametrize("enabled,text", [(False, "show users"), (True, "insert users"), (True, "update users"), (True, "delete users")])
-def test_schema_does_not_reach_or_change_deterministic_generation(client, monkeypatch, enabled, text):
+def test_schema_reaches_deterministic_generation_without_changing_no_schema_baseline(
+    client, monkeypatch, enabled, text
+):
     monkeypatch.setattr(settings, "nl2sql_llm_enabled", enabled)
     generate = stub_llm(monkeypatch)
     worker = AsyncMock(wraps=main._run_cpu_bound)
@@ -103,13 +105,14 @@ def test_schema_does_not_reach_or_change_deterministic_generation(client, monkey
     response = client.post("/api/nl2sql", json={**payload, "schema": SCHEMA})
 
     assert response.status_code == baseline.status_code == 200
-    actual, expected = response.json(), baseline.json()
-    for data in (actual, expected):
-        data.pop("timestamp", None)
-    assert actual == expected
-    assert actual["schema_used"] is False
+    actual = response.json()
+    assert baseline.json()["provider"] == "deterministic"
+    assert actual["schema_used"] is True
     assert actual["provider"] == "deterministic"
-    worker.assert_awaited_once_with(main.nl2sql_generator.generate, text, "postgres", None, None)
+    assert actual["success"] is True
+    call = worker.await_args
+    assert call.args[:5] == (main.nl2sql_generator.generate, text, "postgres", None, None)
+    assert call.args[5].tables[0].name == "users"
     generate.assert_not_awaited()
 
 
@@ -128,7 +131,7 @@ def test_unknown_schema_tables_and_columns_use_existing_fallback(client, monkeyp
     data = response.json()
     assert data["provider"] == "deterministic"
     assert data["fallback_reason"] == "invalid_sql"
-    assert data["schema_used"] is False
+    assert data["schema_used"] is True
     assert "password" not in response.text
     assert "private_users" not in response.text
 
@@ -332,3 +335,51 @@ def test_schema_model_list_defaults_are_independent():
     assert second_schema.tables == []
     assert second_schema.relationships == []
     assert second_table.columns == []
+
+
+def test_relationship_endpoint_missing_table_is_rejected_at_api_boundary(client, monkeypatch):
+    generate = stub_llm(monkeypatch)
+    response = client.post(
+        "/api/nl2sql",
+        json={
+            "text": "show users",
+            "dialect": "postgres",
+            "schema": {
+                "tables": [{"name": "users", "columns": [{"name": "id"}]}],
+                "relationships": [{
+                    "from_table": "orders",
+                    "from_column": "user_id",
+                    "to_table": "users",
+                    "to_column": "id",
+                }],
+            },
+        },
+    )
+    assert_invalid_schema(response)
+    generate.assert_not_awaited()
+
+
+def test_schema_relationship_limit_rejects_201_entries(client, monkeypatch):
+    generate = stub_llm(monkeypatch)
+    relationship = {
+        "from_table": "orders",
+        "from_column": "user_id",
+        "to_table": "users",
+        "to_column": "id",
+    }
+    response = client.post(
+        "/api/nl2sql",
+        json={
+            "text": "show users",
+            "dialect": "postgres",
+            "schema": {
+                "tables": [
+                    {"name": "users", "columns": [{"name": "id"}]},
+                    {"name": "orders", "columns": [{"name": "user_id"}]},
+                ],
+                "relationships": [relationship for _ in range(201)],
+            },
+        },
+    )
+    assert_invalid_schema(response)
+    generate.assert_not_awaited()
