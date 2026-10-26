@@ -111,7 +111,6 @@ def test_schema_total_amount_count_has_no_implicit_grouping():
     "Show number of orders per unknown",
     "Show number of orders per user",
     "统计每个部门员工数量",
-    "统计订单数量",
     "Count orders per user_id and status",
 ])
 def test_schema_unresolved_or_multiple_group_columns_fail_closed(text):

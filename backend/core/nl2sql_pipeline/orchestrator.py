@@ -668,6 +668,7 @@ class PipelineNL2SQLGenerator:
         table: SchemaTableContext,
         column_hints: Optional[List[str]],
         schema: SchemaContext,
+        suppress_quantity_token: bool = False,
     ) -> list[str]:
         if column_hints:
             resolved: list[str] = []
@@ -689,7 +690,10 @@ class PipelineNL2SQLGenerator:
                 )
             return resolved
 
-        projection_text = mask_non_executable(self._schema_projection_text(text))
+        projection_source = text
+        if suppress_quantity_token:
+            projection_source = re.sub(r"数量", " " * len("数量"), projection_source)
+        projection_text = mask_non_executable(self._schema_projection_text(projection_source))
         candidates: list[tuple[int, int, str]] = []
         column_names = list(table.columns)
         for column in column_names:
@@ -739,10 +743,10 @@ class PipelineNL2SQLGenerator:
                 deduplicated.append(column)
             return deduplicated
 
-        columns = self._extract_columns(text)
+        columns = self._extract_columns(projection_text)
         if columns == ["*"]:
             for candidate in table.columns:
-                if self._schema_text_match(text, candidate):
+                if self._schema_text_match(projection_text, candidate):
                     columns.append(candidate)
             if len(columns) > 1:
                 columns.remove("*")
@@ -810,23 +814,46 @@ class PipelineNL2SQLGenerator:
             raise SchemaValidationError("ordering column is outside the schema")
         return canonical, direction
 
+    def _schema_resolve_count_metric(
+        self,
+        text: str,
+        table: SchemaTableContext,
+        schema: SchemaContext,
+    ) -> tuple[str, str | None] | None:
+        count_intent = bool(
+            re.search(
+                r"统计|数量|多少|几个|数(?:量)?|\bnumber\s+of\b|\bcount(?:\s+of)?\b|\bhow\s+many\b",
+                text,
+                re.IGNORECASE,
+            )
+        )
+        measure_table: str | None = None
+        if "库存数量" in text:
+            measure_table = "inventory"
+        elif "购买数量" in text:
+            measure_table = "orders"
+        if measure_table is not None:
+            if table.key != measure_table:
+                raise SchemaValidationError("quantity measure table is not selected")
+            quantity = schema.canonical_column(table, "quantity")
+            if quantity is None:
+                raise SchemaValidationError("quantity measure is outside the schema")
+            return "sum", quantity
+        if count_intent:
+            return "count", None
+        return None
+
     def _schema_extract_aggregations(
         self,
         text: str,
         table: SchemaTableContext | None = None,
         schema: SchemaContext | None = None,
+        count_metric: tuple[str, str | None] | None = None,
     ) -> list[str]:
         existing = self._extract_aggregations(text)
-        has_count_intent = any(
-            re.search(pattern, text, re.IGNORECASE)
-            for pattern in (
-                r"\bnumber\s+of\b",
-                r"\bcount\s+of\b",
-                r"\bcount\b",
-                r"\bhow\s+many\b",
-            )
-        )
-        if has_count_intent and not any(
+        if count_metric is not None and count_metric[0] == "sum":
+            return [f"SUM({count_metric[1]})"]
+        if count_metric is not None and count_metric[0] == "count" and not any(
             aggregation.upper().startswith("COUNT(") for aggregation in existing
         ):
             existing = [*existing, "COUNT(*) AS count"]
@@ -875,7 +902,7 @@ class PipelineNL2SQLGenerator:
                     re.IGNORECASE,
                 )
                 match_kind = "aggregation-group"
-        chinese_group_intent = bool(re.search(r"每个|各个|分组|汇总|统计|数量", text))
+        chinese_group_intent = bool(re.search(r"每个|各个|每位|分组|汇总|按[^\s,，。；]+(?:分组|汇总|统计)", text))
         if match is None:
             if chinese_group_intent:
                 raise SchemaValidationError("schema group column is not explicitly resolvable")
@@ -1078,8 +1105,15 @@ class PipelineNL2SQLGenerator:
                     "The request references tables outside the provided schema.",
                 )
             table_context, joins = self._schema_resolve_joins(text, table_hint, schema)
+            count_metric = self._schema_resolve_count_metric(
+                text_lower, table_context, schema
+            )
             columns = self._schema_resolve_columns(
-                text_lower, table_context, column_hints, schema
+                text_lower,
+                table_context,
+                column_hints,
+                schema,
+                suppress_quantity_token=count_metric is not None,
             )
             conditions = self._schema_resolve_conditions(
                 text_lower,
@@ -1091,7 +1125,7 @@ class PipelineNL2SQLGenerator:
             parsed.update(analysis)
             operation = self._detect_operation(text_lower)
             aggregations = self._schema_extract_aggregations(
-                text_lower, table_context, schema
+                text_lower, table_context, schema, count_metric
             )
             group_by = self._schema_resolve_group_by(
                 text_lower, table_context, schema, aggregations
