@@ -349,6 +349,41 @@ def validate_schema_references(
         output_cache[scope_id] = columns
         return columns
 
+    def projection_aliases(scope: Scope) -> set[str]:
+        aliases: set[str] = set()
+        for projection in cast(exp.Query, scope.expression).selects:
+            if not projection.is_star and projection.alias:
+                aliases.add(projection.alias.casefold())
+        return aliases
+
+    def validate_unqualified_column(scope: Scope, name: str) -> None:
+        current: Scope | None = scope
+        while current is not None:
+            owners = 0
+            unconstrained = 0
+            seen_sources: set[int] = set()
+            for source in sources_by_scope.get(id(current), {}).values():
+                source_id = id(source)
+                if source_id in seen_sources:
+                    continue
+                seen_sources.add(source_id)
+                columns = source_columns(source)
+                if columns is None:
+                    unconstrained += 1
+                elif name in columns:
+                    owners += 1
+            total = owners + unconstrained
+            if total > 1:
+                raise SchemaValidationError("ambiguous SQL column")
+            if total == 1:
+                return
+            if not current.can_be_correlated:
+                break
+            current = current.parent
+        if name in projection_aliases(scope):
+            return
+        raise SchemaValidationError("unknown SQL column")
+
     for scope in scopes:
         for column in scope.find_all(exp.Column):
             if column.table:
@@ -361,11 +396,8 @@ def validate_schema_references(
                     and column.name.casefold() not in columns
                 ):
                     raise SchemaValidationError("unknown SQL column")
+            elif reject_ambiguous_unqualified:
+                validate_unqualified_column(scope, column.name.casefold())
             elif all_columns and column.name.casefold() not in all_columns:
                 raise SchemaValidationError("unknown SQL column")
-            elif (
-                reject_ambiguous_unqualified
-                and len(context.column_owners(column.name)) > 1
-            ):
-                raise SchemaValidationError("ambiguous SQL column")
 

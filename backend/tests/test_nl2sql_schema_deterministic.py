@@ -342,6 +342,71 @@ def test_schema_relationships_generate_forward_and_reverse_exists():
     assert "orders.user_id = users.id" in reverse.sql
 
 
+SCOPE_SCHEMA = SchemaContext.from_mapping(
+    {
+        "tables": [
+            {"name": "users", "columns": [{"name": "id"}, {"name": "name"}, {"name": "price"}]},
+            {"name": "orders", "columns": [{"name": "id"}, {"name": "user_id"}, {"name": "total"}]},
+        ],
+        "relationships": [
+            {
+                "from_table": "orders",
+                "from_column": "user_id",
+                "to_table": "users",
+                "to_column": "id",
+            }
+        ],
+    }
+)
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    ["find users with id = 1", "find orders with id = 2", "count users by id"],
+)
+def test_schema_unqualified_columns_resolve_in_current_scope(prompt):
+    result = NL2SQLGenerator().generate(prompt, "postgres", schema=SCOPE_SCHEMA)
+    assert result.success is True
+    assert result.schema_used is True
+
+
+def test_schema_unqualified_column_is_ambiguous_across_join_sources():
+    with pytest.raises(SchemaValidationError, match="ambiguous"):
+        validate_schema_references(
+            parse("SELECT id FROM users JOIN orders ON users.id = orders.user_id"),
+            SCOPE_SCHEMA,
+            reject_ambiguous_unqualified=True,
+        )
+
+
+def test_schema_correlated_exists_uses_inner_and_outer_qualified_sources():
+    validate_schema_references(
+        parse(
+            "SELECT * FROM users WHERE EXISTS "
+            "(SELECT 1 FROM orders WHERE orders.id = users.id)"
+        ),
+        SCOPE_SCHEMA,
+        reject_ambiguous_unqualified=True,
+    )
+
+
+def test_schema_projection_alias_is_allowed_in_order_by():
+    validate_schema_references(
+        parse("SELECT price * 2 AS doubled FROM users ORDER BY doubled"),
+        SCOPE_SCHEMA,
+        reject_ambiguous_unqualified=True,
+    )
+
+
+def test_schema_unknown_unqualified_column_fails_closed():
+    with pytest.raises(SchemaValidationError, match="unknown"):
+        validate_schema_references(
+            parse("SELECT unknown FROM users"),
+            SCOPE_SCHEMA,
+            reject_ambiguous_unqualified=True,
+        )
+
+
 def test_schema_relationships_generate_not_exists_and_physical_join():
     generator = NL2SQLGenerator()
     negative = generator.generate(
