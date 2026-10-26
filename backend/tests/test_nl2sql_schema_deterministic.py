@@ -423,6 +423,37 @@ def test_schema_relationships_generate_not_exists_and_physical_join():
     assert "users.id = orders.user_id" in physical.sql
 
 
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "show users full join orders",
+        "show users outer join orders",
+        "show users cross join orders",
+    ],
+)
+def test_schema_unsupported_join_types_fail_closed(prompt):
+    result = NL2SQLGenerator().generate(prompt, "postgres", schema=RELATION_SCHEMA)
+    assert result.success is False
+    assert result.sql is None
+    assert result.schema_used is False
+
+
+@pytest.mark.parametrize(
+    "prompt,join_type",
+    [
+        ("show users left join orders", "LEFT JOIN"),
+        ("show users right join orders", "RIGHT JOIN"),
+        ("show users inner join orders", "INNER JOIN"),
+        ("show users left outer join orders", "LEFT JOIN"),
+        ("show users right outer join orders", "RIGHT JOIN"),
+    ],
+)
+def test_schema_supported_join_types_render_expected_kind(prompt, join_type):
+    result = NL2SQLGenerator().generate(prompt, "postgres", schema=RELATION_SCHEMA)
+    assert result.success is True
+    assert join_type in result.sql
+
+
 def test_schema_missing_relationship_fails_closed():
     context = SchemaContext.from_mapping(
         {

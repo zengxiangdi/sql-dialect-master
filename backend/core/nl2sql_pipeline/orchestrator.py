@@ -28,7 +28,7 @@ from ..nl2sql_components.mappings import (
     KEYWORDS as MAPPING_KEYWORDS,
     TABLE_PATTERNS as MAPPING_TABLE_PATTERNS,
 )
-from ..nl2sql_components.relations import parse_join_spec
+from ..nl2sql_components.relations import JoinSpec, parse_join_spec
 from ..nl2sql_components.templates import DEFAULT_QUERY_TEMPLATES, QueryTemplate
 from ..nl2sql_components.tokenizer import Tokenizer
 from ..p1_sql_scanner import mask_non_executable
@@ -761,6 +761,18 @@ class PipelineNL2SQLGenerator:
                 subject = mentions[0]
 
         relational = self._has_relational_keyword(text.lower())
+        lowered = text.lower()
+        unsupported_outer = (
+            re.search(r"\bouter\s+join\b", lowered)
+            and not re.search(r"\b(?:left|right)\s+outer\s+join\b", lowered)
+        )
+        if (
+            re.search(r"\bfull(?:\s+outer)?\s+join\b", lowered)
+            or unsupported_outer
+            or re.search(r"\bcross\s+join\b", lowered)
+            or any(phrase in text for phrase in ("全连接", "交叉连接"))
+        ):
+            raise SchemaValidationError("unsupported schema-aware join type")
         join_spec = parse_join_spec(text)
         if not relational and join_spec is None:
             raise SchemaValidationError("multiple tables lack explicit relationship intent")
@@ -773,7 +785,16 @@ class PipelineNL2SQLGenerator:
             else:
                 join_type = "EXISTS"
         else:
-            join_type = "INNER" if join_spec.kind == "JOIN" else join_spec.kind
+            if re.search(r"\bleft\s+outer\s+join\b", lowered):
+                join_type = "LEFT"
+                join_spec = JoinSpec(kind="LEFT", matched_text="left outer join")
+            elif re.search(r"\bright\s+outer\s+join\b", lowered):
+                join_type = "RIGHT"
+                join_spec = JoinSpec(kind="RIGHT", matched_text="right outer join")
+            else:
+                if join_spec.kind not in {"JOIN", "INNER", "LEFT", "RIGHT"}:
+                    raise SchemaValidationError("unsupported schema-aware join type")
+                join_type = "INNER" if join_spec.kind == "JOIN" else join_spec.kind
 
         joins: list[dict] = []
         for related in mentions:
