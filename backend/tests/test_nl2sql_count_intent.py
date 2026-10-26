@@ -83,6 +83,31 @@ def test_data_words_do_not_trigger_schema_count(text):
     assert "COUNT(*) AS count" not in (result.sql or "")
 
 
+@pytest.mark.parametrize("text", ["显示用户数据", "查看用户数据", "用户数据"])
+def test_user_data_words_are_not_count_intent(text):
+    result = generate(text, single_table_context("users", ["id", "name", "data"]))
+    assert result.success
+    assert "COUNT(*) AS count" not in result.sql
+
+
+@pytest.mark.parametrize("text", ["用户数据库", "用户数字", "用户数组"])
+def test_user_compound_data_words_are_not_entity_counters(text):
+    result = generate(text, single_table_context("users", ["id", "name", "data"]))
+    assert "COUNT(*) AS count" not in (result.sql or "")
+
+
+@pytest.mark.parametrize("text,table", [
+    ("用户数", "users"), ("用户数量", "users"),
+    ("订单数据", "orders"), ("员工数据", "employees"),
+])
+def test_entity_counter_and_data_suffixes_are_distinct(text, table):
+    result = generate(text, single_table_context(table, ["id", "name", "data"]))
+    if text.endswith("数") or text.endswith("数量"):
+        assert result.success and "COUNT(*) AS count" in result.sql
+    else:
+        assert "COUNT(*) AS count" not in (result.sql or "")
+
+
 def test_qualified_measure_tables_use_basename():
     inventory = SchemaContext.from_mapping({
         "tables": [{"name": "public.inventory", "columns": [{"name": "quantity"}]}],

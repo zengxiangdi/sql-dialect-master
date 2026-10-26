@@ -828,7 +828,7 @@ class PipelineNL2SQLGenerator:
         ))
         if not count_intent:
             for pattern, mapped in self.TABLE_PATTERNS.items():
-                if not re.search(re.escape(pattern) + r"数", text, re.IGNORECASE):
+                if not re.search(re.escape(pattern) + r"数(?!据|字|组)", text, re.IGNORECASE):
                     continue
                 candidates = schema.table_candidates(mapped)
                 if len(candidates) == 1 and candidates[0].key == table.key:
