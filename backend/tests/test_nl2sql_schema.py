@@ -357,3 +357,29 @@ def test_relationship_endpoint_missing_table_is_rejected_at_api_boundary(client,
     )
     assert_invalid_schema(response)
     generate.assert_not_awaited()
+
+
+def test_schema_relationship_limit_rejects_201_entries(client, monkeypatch):
+    generate = stub_llm(monkeypatch)
+    relationship = {
+        "from_table": "orders",
+        "from_column": "user_id",
+        "to_table": "users",
+        "to_column": "id",
+    }
+    response = client.post(
+        "/api/nl2sql",
+        json={
+            "text": "show users",
+            "dialect": "postgres",
+            "schema": {
+                "tables": [
+                    {"name": "users", "columns": [{"name": "id"}]},
+                    {"name": "orders", "columns": [{"name": "user_id"}]},
+                ],
+                "relationships": [relationship for _ in range(201)],
+            },
+        },
+    )
+    assert_invalid_schema(response)
+    generate.assert_not_awaited()

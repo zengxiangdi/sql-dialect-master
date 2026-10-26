@@ -469,7 +469,7 @@ class SchemaRelationship(BaseModel):
 
 class SchemaDefinition(BaseModel):
     tables: List[SchemaTable] = Field(default_factory=list, max_length=50)
-    relationships: List[SchemaRelationship] = Field(default_factory=list)
+    relationships: List[SchemaRelationship] = Field(default_factory=list, max_length=200)
 
     @model_validator(mode="after")
     def validate_total_columns(self):
