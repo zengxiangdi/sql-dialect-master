@@ -421,6 +421,30 @@ def test_schema_date_rewrite_skips_single_quoted_literals():
     ) == ["status = 'date'"]
 
 
+def test_schema_finalize_does_not_swallow_unexpected_errors(monkeypatch):
+    import backend.core.nl2sql_pipeline.orchestrator as pipeline_orchestrator
+    from backend.core.nl2sql_pipeline.models import NL2SQLResult
+
+    context = SchemaContext.from_mapping(
+        {"tables": [{"name": "users", "columns": [{"name": "id"}]}]}
+    )
+    result = NL2SQLResult(
+        success=True,
+        input_text="show users",
+        sql="SELECT * FROM users",
+        dialect="postgres",
+    )
+
+    def unexpected_error(*_args, **_kwargs):
+        raise RuntimeError("unexpected validator failure")
+
+    monkeypatch.setattr(
+        pipeline_orchestrator, "validate_schema_references", unexpected_error
+    )
+    with pytest.raises(RuntimeError, match="unexpected validator failure"):
+        NL2SQLGenerator()._schema_finalize(result, context)
+
+
 def test_schema_relationships_generate_not_exists_and_physical_join():
     generator = NL2SQLGenerator()
     negative = generator.generate(

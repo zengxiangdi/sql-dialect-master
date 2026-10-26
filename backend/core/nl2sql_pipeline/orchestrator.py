@@ -20,6 +20,8 @@ import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+import sqlglot
+
 from ..column_hint_validation import validate_column_hints
 from ..nl2sql_components.boolean_conditions import extract_boolean_conditions
 from ..nl2sql_components.evidence import GenerationEvidence
@@ -834,7 +836,7 @@ class PipelineNL2SQLGenerator:
                 schema,
                 reject_ambiguous_unqualified=True,
             )
-        except Exception:
+        except (SchemaValidationError, sqlglot.errors.SqlglotError, ValueError):
             return self._schema_failure(
                 result.input_text,
                 result.dialect,
