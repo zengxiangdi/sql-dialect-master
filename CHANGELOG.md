@@ -2,6 +2,44 @@
 
 All notable changes to SQL Dialect Master are documented here.
 
+## [1.4.0] - 2026-10-26
+
+### New
+
+- Deterministic NL2SQL now grounds generation in an optional request
+  schema. Tables, columns, hints, and explicit relationships are resolved
+  before rendering, and generated SQL is validated against the schema.
+- Added schema-driven EXISTS/NOT EXISTS and INNER/LEFT/RIGHT join
+  generation, including reverse relationship traversal.
+- Shared SQLGlot table, alias, CTE, and column validation between the
+  deterministic and LLM generation paths.
+
+### Changed
+
+- Requests with a schema use the schema-aware enhanced path instead of
+  templates.
+- Relationship endpoint validation and a 200-relationship cap are
+  enforced at the API boundary.
+- `schema_used` is true when a successful deterministic or LLM result was
+  validated against the supplied schema.
+
+### Fixed
+
+- Single-table queries are no longer falsely rejected when another schema
+  table shares an unqualified column name.
+- Date fallback rewriting preserves single-quoted literals.
+- Unknown mapped tables, ambiguous columns, missing relationships, and
+  unsupported join forms now fail closed instead of producing SQL.
+- Unexpected schema validation errors are no longer swallowed.
+
+### Notes
+
+- Without a schema, deterministic behavior is unchanged.
+- Empty `columns` metadata means the table's columns are unrestricted.
+- Natural-language column names outside the deterministic mapping may be
+  ignored; use `column_hints` or the LLM path.
+- No breaking API changes; all schema fields remain optional.
+
 ## [1.3.0] - 2026-10-25
 
 ### New
