@@ -302,6 +302,11 @@ def _status_matches(text: str) -> List[Tuple[int, int, str]]:
             matches.append((match.start(), match.end(), f"status {operator} '{canonical}'"))
 
     occupied = [(start, end) for start, end, _ in matches]
+    text_spans = [
+        (match.start(), match.end())
+        for pattern in (_TEXT_PATTERN, _CN_TEXT_PATTERN)
+        for match in pattern.finditer(executable)
+    ]
     for raw_value, canonical in sorted(_STATUS_VALUES.items(), key=lambda item: -len(item[0])):
         if raw_value.isascii():
             pattern = re.compile(rf"(?<![\w$]){re.escape(raw_value)}(?![\w$])", re.IGNORECASE)
@@ -310,11 +315,22 @@ def _status_matches(text: str) -> List[Tuple[int, int, str]]:
         for match in pattern.finditer(executable):
             if any(start <= match.start() < end or match.start() <= start < match.end() for start, end in occupied):
                 continue
-            matches.append((match.start(), match.end(), f"status = '{canonical}'"))
+            if any(start <= match.start() < end for start, end in text_spans):
+                continue
+            prefix = executable[:match.start()]
+            negative = bool(
+                re.search(r"(?:\b(?:not|except|excluding)\s*)$", prefix, re.IGNORECASE)
+                or re.search(r"(?:不是|不为|非)\s*$", prefix)
+            )
+            operator = "!=" if negative else "="
+            matches.append((match.start(), match.end(), f"status {operator} '{canonical}'"))
             occupied.append((match.start(), match.end()))
 
     deleted_patterns = [
-        (re.compile(r"(?:未删除|\bnot\s+deleted\b)", re.IGNORECASE), "is_deleted = 0"),
+        (
+            re.compile(r"(?:未删除|没有删除|不是删除|非删除|\bnot\s+deleted\b)", re.IGNORECASE),
+            "is_deleted = 0",
+        ),
         (re.compile(r"(?:已删除|\bdeleted\b|\bremoved\b)", re.IGNORECASE), "is_deleted = 1"),
     ]
     for pattern, condition in deleted_patterns:

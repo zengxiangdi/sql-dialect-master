@@ -38,6 +38,15 @@ def detect_operation(text: str, keywords: Dict[str, str]) -> str:
     Defaults to SELECT.
     """
     intent_text = mask_non_executable(text)
+    # Deletion-state phrases describe a SELECT predicate. Mask only the
+    # phrase so an independent leading "删除" in e.g. "删除已删除用户"
+    # remains a genuine DELETE intent.
+    intent_text = re.sub(
+        r"(?:已删除|未删除|没有删除|不是删除|非删除|already\s+deleted|not\s+deleted)",
+        lambda match: " " * len(match.group(0)),
+        intent_text,
+        flags=re.IGNORECASE,
+    )
     for keyword, op in keywords.items():
         if _pattern_match(intent_text, keyword) and op in ["SELECT", "INSERT", "UPDATE", "DELETE"]:
             return op

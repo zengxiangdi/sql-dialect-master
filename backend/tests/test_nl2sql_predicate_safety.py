@@ -20,6 +20,8 @@ SCHEMA = SchemaContext.from_mapping(
                     {"name": "created_at"},
                     {"name": "description"},
                     {"name": "name"},
+                    {"name": "title"},
+                    {"name": "is_deleted"},
                 ],
             },
             {
@@ -148,3 +150,91 @@ def test_predicate_results_are_deterministic():
     second = generate("show users where status is not active and price < -10", schema=True)
     assert first.success and second.success
     assert first.sql == second.sql
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("show users not active", "status != 'active'"),
+        ("show users not inactive", "status != 'inactive'"),
+        ("show users not paid", "status != 'paid'"),
+        ("show users not valid", "status != 'active'"),
+        ("show users except active", "status != 'active'"),
+        ("show users excluding active", "status != 'active'"),
+        ("show users where status not 'active'", "status != 'active'"),
+        ("不是有效用户", "status != 'active'"),
+        ("非有效用户", "status != 'active'"),
+    ],
+)
+@pytest.mark.parametrize("schema", [False, True])
+def test_standalone_status_negation(text, expected, schema):
+    result = generate(text, schema=schema)
+    assert result.success
+    assert expected in result.sql
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("description contains active", "description LIKE '%active%'"),
+        ('description contains "active"', "description LIKE '%active%'"),
+        ("name contains valid", "name LIKE '%valid%'"),
+        ("title includes pending", "title LIKE '%pending%'")
+    ],
+)
+@pytest.mark.parametrize("schema", [False, True])
+def test_text_values_do_not_inject_status(text, expected, schema):
+    if schema:
+        text = f"show users where {text}"
+    result = generate(text, schema=schema)
+    assert result.success
+    assert expected in result.sql
+    assert "status =" not in result.sql
+    assert "status !=" not in result.sql
+
+
+@pytest.mark.parametrize("text", [
+    "description contains active and price > 10",
+    'description contains "active" and price > 10',
+])
+def test_text_and_numeric_conditions_are_preserved(text):
+    result = generate(f"show users where {text}", schema=True)
+    assert result.success
+    assert "description LIKE '%active%'" in result.sql
+    assert "price > 10" in result.sql
+    assert "status =" not in result.sql
+    assert "status !=" not in result.sql
+
+
+@pytest.mark.parametrize(
+    "text,expected_prefix,expected_condition",
+    [
+        ("已删除用户", "SELECT", "is_deleted = 1"),
+        ("未删除用户", "SELECT", "is_deleted = 0"),
+        ("没有删除的用户", "SELECT", "is_deleted = 0"),
+        ("不是删除的用户", "SELECT", "is_deleted = 0"),
+        ("删除用户", "DELETE", "DELETE FROM users"),
+        ("delete users", "DELETE", "DELETE FROM users"),
+        ("删除已删除用户", "DELETE", "is_deleted = 1"),
+        ("show deleted users", "SELECT", "is_deleted = 1"),
+    ],
+)
+@pytest.mark.parametrize("schema", [False, True])
+def test_deleted_state_phrases_keep_operation_and_predicate(text, expected_prefix, expected_condition, schema):
+    result = generate(text, schema=schema)
+    assert result.success
+    assert result.sql.lstrip().splitlines()[1].startswith(expected_prefix)
+    assert expected_condition in result.sql
+
+
+@pytest.mark.parametrize("dialect", ["postgres", "mysql"])
+def test_remaining_status_and_text_cases_parse(dialect):
+    for text in (
+        "show users not active",
+        "show users where status not 'active'",
+        "show users where description contains active",
+        "show users where price < -10",
+    ):
+        result = NL2SQLGenerator().generate(text, dialect, schema=SCHEMA)
+        assert result.success
+        assert sqlglot.parse_one(result.sql, read=dialect) is not None

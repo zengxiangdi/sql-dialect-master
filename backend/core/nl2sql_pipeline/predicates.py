@@ -34,7 +34,7 @@ def _quoted_comparisons(
     quoted = []
     pattern = re.compile(
         r"(?<![\w$])([A-Za-z_][A-Za-z0-9_$]*)\s*"
-        r"(is\s+not|isn't|is|<>|!=|>=|<=|=|>|<)\s*(['\"])((?:\\.|(?!\3).)*)\3",
+        r"(is\s+not|isn't|not|is|<>|!=|>=|<=|=|>|<)\s*(['\"])((?:\\.|(?!\3).)*)\3",
         re.IGNORECASE,
     )
     known_columns = {value.casefold(): value for value in column_patterns.values()}
@@ -49,6 +49,7 @@ def _quoted_comparisons(
             "is": "=",
             "isn't": "!=",
             "is not": "!=",
+            "not": "!=",
             "<>": "!=",
         }.get(operator.casefold(), operator)
         quoted.append(f"{column} {normalized_operator} {literal}")
@@ -197,8 +198,32 @@ def extract_conditions(
             conditions.append(f"{col} BETWEEN {numbers[0]} AND {numbers[1]}")
 
     if any(keyword in executable_text for keyword in ["包含", "含有", "contains", "like", "includes"]):
+        text_match = re.search(
+            r"(?<![\w$])([A-Za-z_][A-Za-z0-9_$]*)\s+"
+            r"(?:contains|containing|includes|including)\s+"
+            r"(?:the\s+)?([^,;，。；]+?)(?=\s+(?:and|or)\b|[,;，。；]|$)",
+            original,
+            re.IGNORECASE,
+        )
+        cn_text_match = re.search(
+            r"(名称|名字|标题|描述|分类|品牌)\s*(?:包含|含有|包括)\s*([^且并或者和，,。；]+)",
+            original,
+        )
         match = re.search(r"[\"']([^\"']+)[\"']", original)
-        if match:
+        if text_match:
+            raw_column, raw_value = text_match.groups()
+            column = next(
+                (value for value in column_patterns.values() if value.casefold() == raw_column.casefold()),
+                raw_column,
+            )
+            value = raw_value.strip().strip("'\"")
+            if value:
+                conditions.append(f"{column} LIKE '%{value.replace(chr(39), chr(39) * 2)}%'")
+        elif cn_text_match:
+            raw_column, raw_value = cn_text_match.groups()
+            aliases = {"名称": "name", "名字": "name", "标题": "title", "描述": "description", "分类": "category", "品牌": "brand"}
+            conditions.append(f"{aliases[raw_column]} LIKE '%{raw_value.strip().replace(chr(39), chr(39) * 2)}%'")
+        elif match:
             col = condition_column or "column"
             conditions.append(f"{col} LIKE '%{match.group(1)}%'")
 
