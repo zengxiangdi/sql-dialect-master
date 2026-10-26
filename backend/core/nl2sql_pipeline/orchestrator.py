@@ -1103,10 +1103,11 @@ class PipelineNL2SQLGenerator:
             )
             limit = self._extract_limit(text_lower)
             distinct = self._check_distinct(text_lower)
+            render_columns = ["*"] if aggregations and not group_by else columns
             sql, explanation, confidence, evidence = self._build_sql_enhanced(
                 operation,
                 table_context.name,
-                columns,
+                render_columns,
                 conditions,
                 aggregations,
                 group_by,

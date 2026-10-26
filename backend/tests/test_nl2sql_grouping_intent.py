@@ -75,6 +75,7 @@ def test_schema_non_count_aggregations_are_preserved(text, aggregate):
     assert result.success
     assert aggregate in result.sql
     assert "SELECT amount" not in result.sql
+    assert "GROUP BY" not in result.sql
 
 
 @pytest.mark.parametrize(
@@ -96,6 +97,14 @@ def test_schema_mixed_count_and_average_does_not_duplicate_count():
     assert result.success
     assert result.sql.count("COUNT(*) AS count") == 1
     assert "AVG(amount)" in result.sql
+    assert "GROUP BY" not in result.sql
+
+
+def test_schema_total_amount_count_has_no_implicit_grouping():
+    result = generate("Show total amount of orders")
+    assert result.success
+    assert "COUNT(*) AS count" in result.sql
+    assert "GROUP BY" not in result.sql
 
 
 @pytest.mark.parametrize("text", [
