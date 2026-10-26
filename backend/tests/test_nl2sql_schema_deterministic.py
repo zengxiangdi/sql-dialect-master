@@ -467,6 +467,10 @@ def test_schema_relationships_generate_not_exists_and_physical_join():
         "show users full join orders",
         "show users outer join orders",
         "show users cross join orders",
+        "show users natural join orders",
+        "show users left semi join orders",
+        "show users lateral join orders",
+        "show users natural left join orders",
     ],
 )
 def test_schema_unsupported_join_types_fail_closed(prompt):
@@ -474,6 +478,20 @@ def test_schema_unsupported_join_types_fail_closed(prompt):
     assert result.success is False
     assert result.sql is None
     assert result.schema_used is False
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "show users natural join orders",
+        "show users left semi join orders",
+        "show users lateral join orders",
+    ],
+)
+def test_unsupported_schema_join_qualifiers_do_not_change_no_schema_behavior(prompt):
+    result = NL2SQLGenerator().generate(prompt, "postgres")
+    assert result.success is True
+    assert "JOIN orders" in result.sql
 
 
 @pytest.mark.parametrize(

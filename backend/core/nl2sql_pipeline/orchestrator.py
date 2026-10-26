@@ -771,10 +771,20 @@ class PipelineNL2SQLGenerator:
             re.search(r"\bouter\s+join\b", lowered)
             and not re.search(r"\b(?:left|right)\s+outer\s+join\b", lowered)
         )
+        unsupported_qualifier = (
+            re.search(
+                r"\bnatural\s+(?:(?:left|right|inner|outer)\s+){0,2}join\b",
+                lowered,
+            )
+            or re.search(r"\b(?:left|right|inner)?\s*(?:semi|anti)\s+join\b", lowered)
+            or re.search(r"\blateral\s+join\b", lowered)
+            or any(phrase in text for phrase in ("自然连接", "半连接", "反连接", "横向连接"))
+        )
         if (
             re.search(r"\bfull(?:\s+outer)?\s+join\b", lowered)
             or unsupported_outer
             or re.search(r"\bcross\s+join\b", lowered)
+            or unsupported_qualifier
             or any(phrase in text for phrase in ("全连接", "交叉连接"))
         ):
             raise SchemaValidationError("unsupported schema-aware join type")
