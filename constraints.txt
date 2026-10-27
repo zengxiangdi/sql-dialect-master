@@ -6,3 +6,5 @@ pydantic==2.13.5
 pydantic-settings==2.15.0
 httpx==0.28.1
 certifi==2026.10.19
+# Fix CVE-2026-114613 in pip-audit's transitive msgpack dependency.
+msgpack==1.2.3
