@@ -2,6 +2,46 @@
 
 All notable changes to SQL Dialect Master are documented here.
 
+## [1.5.0] - 2026-10-28
+
+### New
+
+- Added schema-aware projection and DISTINCT resolution with text-order
+  columns, case-insensitive and qualified names, safe plural forms, and
+  deduplication.
+- Added single-column ORDER BY resolution, including ordered by and sorted
+  by phrasing; multi-column ordering remains unsupported and fails closed.
+- Added schema-aware GROUP BY and COUNT while preserving AVG, SUM, MAX, and
+  MIN aggregates.
+- Disambiguated entity counts from quantity measures such as inventory or
+  purchase quantity.
+- Added English `per`/`each` and Chinese `每个`/`各个`/`每位` group labels,
+  resolved through explicit columns, forward relationships, and
+  label-matching foreign keys.
+- Added subject-table selection so group labels are not treated as extra
+  joins.
+
+### Fixed
+
+- Prevented implicit GROUP BY for aggregate-only schema requests.
+- Preserved non-count aggregates in the schema-aware path.
+- Rejected reverse-only relationships and non-matching foreign keys for
+  group labels.
+- Prevented data words such as 数据, 数据库, and 数字 from becoming COUNT.
+- Prevented quoted values from being projected as columns.
+- Deduplicated repeated projection columns.
+
+### Security
+
+- Pinned msgpack 1.2.3 for CVE-2026-114613.
+
+### Notes
+
+- Without a schema, existing behavior is unchanged.
+- Multi-column ORDER BY, `whose`, and explicit `joined on/with` remain
+  outside this release; unsupported forms keep their current behavior.
+- No API shape changes and no frontend code changes.
+
 ## [1.4.1] - 2026-10-27
 
 ### Fixed
