@@ -98,6 +98,18 @@ _DATE_INTERVAL = re.compile(
     re.IGNORECASE,
 )
 MAX_NL2SQL_DATE_INTERVAL_DAYS = 36525
+_SCHEMA_GROUP_LABEL_COLUMNS = {
+    "部门": ("department", "dept"),
+    "状态": ("status",),
+    "类型": ("type",),
+    "分类": ("category",),
+    "日期": ("date",),
+    "地区": ("region",),
+    "区域": ("region",),
+    "品牌": ("brand",),
+    "级别": ("level",),
+    "优先级": ("priority",),
+}
 
 
 class PipelineNL2SQLGenerator:
@@ -626,14 +638,20 @@ class PipelineNL2SQLGenerator:
         return [table for _, table in sorted(found.values(), key=lambda item: item[0])]
 
     def _schema_unknown_table_patterns(
-        self, text: str, schema: SchemaContext
+        self,
+        text: str,
+        schema: SchemaContext,
+        ignored_spans: tuple[tuple[int, int], ...] = (),
     ) -> list[str]:
         """Return mapped table names mentioned by the request but absent in schema."""
+        for start, end in ignored_spans:
+            text = text[:start] + " " * (end - start) + text[end:]
         unknown: list[str] = []
         for pattern, mapped in self.TABLE_PATTERNS.items():
             if pattern == "order" and re.search(r"\border\b\s+by\b", text, re.IGNORECASE):
                 continue
-            if not self._schema_text_match(text, pattern):
+            match = self._schema_text_match(text, pattern)
+            if not match:
                 continue
             if schema.table_candidates(mapped):
                 continue
@@ -641,6 +659,152 @@ class PipelineNL2SQLGenerator:
                 continue
             unknown.append(mapped)
         return sorted(set(unknown))
+
+    def _schema_entity_counter_tables(self, text: str) -> set[str]:
+        """Find entity counters without treating data words as counts."""
+        return {
+            mapped for pattern, mapped in self.TABLE_PATTERNS.items()
+            if re.search(re.escape(pattern) + r"数(?!据|字|组)", text, re.IGNORECASE)
+        }
+
+    def _schema_aggregation_intent(self, text: str) -> bool:
+        return bool(re.search(
+            r"\b(?:number\s+of|count(?:\s+of)?|how\s+many|sum|average|avg|maximum|minimum|max|min)\b|"
+            r"统计|数量|多少|几个|总数|个数|条数|件数|行数|人数|记录数|"
+            r"平均|总和|汇总|最大|最小|最多|最少",
+            text,
+            re.IGNORECASE,
+        )) or bool(self._schema_entity_counter_tables(text))
+
+    def _schema_resolve_english_group_label(
+        self, text: str, schema: SchemaContext
+    ) -> tuple[SchemaTableContext, str, tuple[int, int]] | None:
+        if not self._schema_aggregation_intent(text):
+            return None
+        match = re.search(
+            r"\b(?:per|each)\s+([A-Za-z_][A-Za-z0-9_$]*)\b",
+            text,
+            re.IGNORECASE,
+        )
+        if match is None:
+            return None
+        label = match.group(1)
+        if text[match.end():].strip(" \t\r\n,.;，。；"):
+            raise SchemaValidationError("multiple schema group labels are unsupported")
+        return self._schema_resolve_group_label(
+            text, label, (match.start(), match.end()), schema
+        )
+
+    def _schema_resolve_chinese_group_label(
+        self, text: str, schema: SchemaContext
+    ) -> tuple[SchemaTableContext, str, tuple[int, int]] | None:
+        if not self._schema_aggregation_intent(text):
+            return None
+        match = re.search(
+            r"(?:每个|各个|每位)\s*([\u4e00-\u9fff]{1,8}?)"
+            r"(?=的|员工|订单|产品|客户|交易|支付|日志|记录|数量|用户|$)",
+            text,
+        )
+        if match is None:
+            return None
+        if re.search(r"每个|各个|每位", text[match.end():]):
+            raise SchemaValidationError("multiple schema group labels are unsupported")
+        return self._schema_resolve_group_label(
+            text, match.group(1), (match.start(), match.end()), schema
+        )
+
+    def _schema_resolve_group_label(
+        self,
+        text: str,
+        label: str,
+        span: tuple[int, int],
+        schema: SchemaContext,
+    ) -> tuple[SchemaTableContext, str, tuple[int, int]]:
+        """Resolve one consumed label without treating its table as a JOIN."""
+        masked = text[:span[0]] + " " * (span[1] - span[0]) + text[span[1]:]
+        mentioned = self._schema_table_mentions(masked, schema)
+        if len(mentioned) != 1:
+            raise SchemaValidationError("schema group label subject is ambiguous")
+        data_table = mentioned[0]
+        column_names = (label, *_SCHEMA_GROUP_LABEL_COLUMNS.get(label, ()))
+        column_keys = {name.casefold() for name in column_names}
+        direct_columns = {
+            column for column in data_table.columns
+            if column.casefold() in column_keys
+        }
+        if len(direct_columns) > 1:
+            raise SchemaValidationError("schema group label column is ambiguous")
+        if direct_columns:
+            return data_table, direct_columns.pop(), span
+
+        label_tables = schema.table_candidates(label)
+        if not label_tables:
+            mapped_labels = [
+                mapped for pattern, mapped in self.TABLE_PATTERNS.items()
+                if pattern.casefold() == label.casefold()
+            ]
+            candidates = [
+                candidate
+                for mapped in mapped_labels
+                for candidate in schema.table_candidates(mapped)
+            ]
+            label_tables = tuple({candidate.key: candidate for candidate in candidates}.values())
+        if len(label_tables) != 1:
+            raise SchemaValidationError("schema group label is not a unique table")
+        label_table = label_tables[0]
+        if label_table.key == data_table.key:
+            raise SchemaValidationError("schema group label cannot be the subject table")
+
+        # Only an explicitly declared data-table -> label-table relationship
+        # proves that the data table carries the grouping foreign key.  The
+        # relationship index also exposes synthetic reverse entries for join
+        # resolution, which must not be used here: accepting one would make a
+        # request such as "users per order" group users by their primary key.
+        relationships = tuple(
+            relationship
+            for relationship in schema.relationships
+            if relationship.from_table.casefold() == data_table.key
+            and relationship.to_table.casefold() == label_table.key
+        )
+        if len(relationships) == 1:
+            label_singular = (
+                label[:-1] if label.casefold().endswith("s") else label
+            )
+            table_basename = label_table.name.rsplit(".", 1)[-1]
+            table_singular = (
+                table_basename[:-1]
+                if table_basename.casefold().endswith("s")
+                else table_basename
+            )
+            allowed_foreign_keys = {
+                f"{label_singular}_id".casefold(),
+                f"{table_singular}_id".casefold(),
+                f"{table_basename}_id".casefold(),
+            }
+            from_column = relationships[0].from_column
+            if from_column.casefold() not in allowed_foreign_keys:
+                raise SchemaValidationError(
+                    "schema group label relationship has an unsupported foreign key"
+                )
+            return data_table, from_column, span
+        if len(relationships) > 1:
+            raise SchemaValidationError("schema group label relationship is ambiguous")
+
+        table_basename = label_table.name.rsplit(".", 1)[-1]
+        singular = (
+            table_basename[:-1]
+            if table_basename.casefold().endswith("s")
+            else table_basename
+        )
+        foreign_keys = [
+            column for column in data_table.columns
+            if column.casefold() == (singular + "_id").casefold()
+        ]
+        if len(foreign_keys) > 1:
+            raise SchemaValidationError("schema group label foreign key is ambiguous")
+        if foreign_keys:
+            return data_table, foreign_keys[0], span
+        raise SchemaValidationError("schema group label relationship is missing")
 
     def _schema_resolve_table(
         self,
@@ -668,6 +832,7 @@ class PipelineNL2SQLGenerator:
         table: SchemaTableContext,
         column_hints: Optional[List[str]],
         schema: SchemaContext,
+        suppress_quantity_token: bool = False,
     ) -> list[str]:
         if column_hints:
             resolved: list[str] = []
@@ -689,10 +854,63 @@ class PipelineNL2SQLGenerator:
                 )
             return resolved
 
-        columns = self._extract_columns(text)
+        projection_source = text
+        if suppress_quantity_token:
+            projection_source = re.sub(r"数量", " " * len("数量"), projection_source)
+        projection_text = mask_non_executable(self._schema_projection_text(projection_source))
+        candidates: list[tuple[int, int, str]] = []
+        column_names = list(table.columns)
+        for column in column_names:
+            variants = [column]
+            if not column.casefold().endswith("s"):
+                variants.append(column + "s")
+            for variant in variants:
+                pattern = re.escape(variant)
+                if not re.search(r"[\u4e00-\u9fff]", variant):
+                    pattern = rf"(?<![\w$]){pattern}(?![\w$])"
+                for match in re.finditer(pattern, projection_text, re.IGNORECASE):
+                    candidates.append((match.start(), match.end(), column))
+                qualified = re.escape(table.name) + r"\." + re.escape(variant)
+                for match in re.finditer(qualified, projection_text, re.IGNORECASE):
+                    candidates.append((match.start(), match.end(), column))
+
+        mapped_columns = self._extract_columns(projection_text)
+        if mapped_columns != ["*"]:
+            for mapped_column in mapped_columns:
+                canonical = schema.canonical_column(table, mapped_column)
+                if canonical is None:
+                    raise SchemaValidationError("mapped projection column is outside the schema")
+                aliases = [
+                    alias for alias, value in self.COLUMN_PATTERNS.items()
+                    if value.casefold() == mapped_column.casefold()
+                ] + [canonical]
+                for alias in aliases:
+                    pattern = re.escape(alias)
+                    if not re.search(r"[\u4e00-\u9fff]", alias):
+                        pattern = rf"(?<![\w$]){pattern}(?![\w$])"
+                    for match in re.finditer(pattern, projection_text, re.IGNORECASE):
+                        candidates.append((match.start(), match.end(), canonical))
+
+        selected: list[tuple[int, int, str]] = []
+        for candidate in sorted(candidates, key=lambda item: (item[0], -(item[1] - item[0]))):
+            if any(candidate[0] < existing[1] and existing[0] < candidate[1] for existing in selected):
+                continue
+            selected.append(candidate)
+        if selected:
+            deduplicated: list[str] = []
+            seen_columns: set[str] = set()
+            for _, _, column in selected:
+                key = column.casefold()
+                if key in seen_columns:
+                    continue
+                seen_columns.add(key)
+                deduplicated.append(column)
+            return deduplicated
+
+        columns = self._extract_columns(projection_text)
         if columns == ["*"]:
             for candidate in table.columns:
-                if self._schema_text_match(text, candidate):
+                if self._schema_text_match(projection_text, candidate):
                     columns.append(candidate)
             if len(columns) > 1:
                 columns.remove("*")
@@ -708,6 +926,187 @@ class PipelineNL2SQLGenerator:
                 raise SchemaValidationError("column is outside the schema")
             resolved.append(canonical)
         return resolved
+
+    @staticmethod
+    def _schema_projection_text(text: str) -> str:
+        """Mask explicit ordering clauses so their columns are not projected."""
+        match = re.search(
+            r"\b(?:order(?:ed)?|sort(?:ed)?)\s+by\b",
+            text,
+            re.IGNORECASE,
+        )
+        if match is None:
+            return text
+        return text[:match.start()] + " " * (len(text) - match.start())
+
+    def _schema_resolve_ordering(
+        self,
+        text: str,
+        table: SchemaTableContext,
+        schema: SchemaContext,
+    ) -> Optional[Tuple[str, str]]:
+        """Resolve one explicit schema-aware ORDER BY target."""
+        match = re.search(
+            r"\b(?:order(?:ed)?|sort(?:ed)?)\s+by\s+"
+            r"([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)"
+            r"(.*)$",
+            text,
+            re.IGNORECASE,
+        )
+        if match is None:
+            return self._extract_ordering(text)
+        raw_column, tail = match.groups()
+        direction = "ASC"
+        direction_match = re.match(
+            r"\s+(ascending|descending|asc|desc|升序|降序)\b",
+            tail,
+            re.IGNORECASE,
+        )
+        if direction_match:
+            direction = "DESC" if direction_match.group(1).casefold() in {"descending", "desc", "降序"} else "ASC"
+            tail = tail[direction_match.end():]
+        if tail.strip(" \t\r\n,.;，。；"):
+            raise SchemaValidationError("multiple schema-aware ordering columns are unsupported")
+        parts = raw_column.split(".")
+        column_name = parts[-1]
+        if len(parts) > 1:
+            candidates = schema.table_candidates(".".join(parts[:-1]))
+            if len(candidates) != 1 or candidates[0].key != table.key:
+                raise SchemaValidationError("ordering column table is not the selected schema table")
+        canonical = schema.canonical_column(table, column_name)
+        if canonical is None:
+            raise SchemaValidationError("ordering column is outside the schema")
+        return canonical, direction
+
+    def _schema_resolve_count_metric(
+        self,
+        text: str,
+        table: SchemaTableContext,
+        schema: SchemaContext,
+    ) -> tuple[str, str | None] | None:
+        count_intent = bool(re.search(
+            r"统计|数量|多少|几个|总数|个数|条数|件数|行数|人数|记录数|"
+            r"\bnumber\s+of\b|\bcount(?:\s+of)?\b|\bhow\s+many\b",
+            text,
+            re.IGNORECASE,
+        ))
+        if not count_intent:
+            for mapped in self._schema_entity_counter_tables(text):
+                candidates = schema.table_candidates(mapped)
+                if len(candidates) == 1 and candidates[0].key == table.key:
+                    count_intent = True
+                    break
+        measure_table: str | None = None
+        if "库存数量" in text:
+            measure_table = "inventory"
+        elif "购买数量" in text:
+            measure_table = "orders"
+        if measure_table is not None:
+            if table.name.rsplit(".", 1)[-1].casefold() != measure_table:
+                raise SchemaValidationError("quantity measure table is not selected")
+            quantity = schema.canonical_column(table, "quantity")
+            if quantity is None:
+                raise SchemaValidationError("quantity measure is outside the schema")
+            return "sum", quantity
+        if count_intent:
+            return "count", None
+        return None
+
+    def _schema_extract_aggregations(
+        self,
+        text: str,
+        table: SchemaTableContext | None = None,
+        schema: SchemaContext | None = None,
+        count_metric: tuple[str, str | None] | None = None,
+    ) -> list[str]:
+        existing = self._extract_aggregations(text)
+        if count_metric is not None and count_metric[0] == "sum":
+            return [f"SUM({count_metric[1]})"]
+        if count_metric is not None and count_metric[0] == "count" and not any(
+            aggregation.upper().startswith("COUNT(") for aggregation in existing
+        ):
+            existing = [*existing, "COUNT(*) AS count"]
+        if table is None or schema is None or not table.has_column_metadata:
+            return existing
+
+        group_match = re.search(r"\b(?:group(?:ed)?\s+by|per|each|by)\b", text, re.IGNORECASE)
+        metric_text = text if group_match is None else text[:group_match.start()]
+        metric_candidates: list[tuple[int, str]] = []
+        for column in table.columns:
+            pattern = rf"(?<![\w$]){re.escape(column)}(?![\w$])"
+            match = re.search(pattern, metric_text, re.IGNORECASE)
+            if match:
+                metric_candidates.append((match.start(), column))
+        if metric_candidates:
+            metric = min(metric_candidates, key=lambda item: item[0])[1]
+            existing = [
+                re.sub(r"^(AVG|SUM|MAX|MIN)\([^)]*\)$", lambda m: f"{m.group(1)}({metric})", aggregation, flags=re.IGNORECASE)
+                if re.match(r"^(AVG|SUM|MAX|MIN)\(", aggregation, re.IGNORECASE)
+                else aggregation
+                for aggregation in existing
+            ]
+        return existing
+
+    def _schema_resolve_group_by(
+        self,
+        text: str,
+        table: SchemaTableContext,
+        schema: SchemaContext,
+        aggregations: list[str],
+    ) -> list[str]:
+        lowered = text.lower()
+        match = re.search(
+            r"\b(?:group\s+by|grouped\s+by)\s+"
+            r"([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)(.*)$",
+            lowered,
+            re.IGNORECASE,
+        )
+        match_kind = "group"
+        if match is None and aggregations:
+            if not re.search(r"\b(?:ordered|sorted|order|sort)\s+by\b", lowered):
+                match = re.search(
+                    r"\b(?:per|each|by)\s+"
+                    r"([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)(.*)$",
+                    lowered,
+                    re.IGNORECASE,
+                )
+                match_kind = "aggregation-group"
+        chinese_group_intent = bool(re.search(r"每个|各个|每位|分组|汇总|按[^\s,，。；]+(?:分组|汇总|统计)", text))
+        if match is None:
+            if chinese_group_intent:
+                raise SchemaValidationError("schema group column is not explicitly resolvable")
+            return []
+        raw_column, tail = match.groups()
+        if tail.strip(" \t\r\n,.;，。；"):
+            raise SchemaValidationError("multiple schema group columns are unsupported")
+        parts = raw_column.split(".")
+        if len(parts) > 1:
+            candidates = schema.table_candidates(".".join(parts[:-1]))
+            if len(candidates) != 1 or candidates[0].key != table.key:
+                raise SchemaValidationError("group column table is not the selected schema table")
+        canonical = schema.canonical_column(table, parts[-1])
+        if canonical is None:
+            if not table.has_column_metadata and match_kind == "group":
+                return [parts[-1]]
+            raise SchemaValidationError("group column is outside the schema")
+        return [canonical]
+
+    @staticmethod
+    def _schema_has_explicit_ordering(text: str) -> bool:
+        lowered = text.lower()
+        phrases = (
+            "order by", "ordered by", "sort by", "sorted by",
+            "ascending", "descending", "asc", "desc", "sort", "sorted",
+            "top", "highest", "lowest", "max", "min",
+            "升序", "降序", "排序", "最大", "最小", "最多", "最少",
+        )
+        for phrase in phrases:
+            if phrase.isascii():
+                if re.search(r"(?<![\w$])" + re.escape(phrase) + r"(?![\w$])", lowered):
+                    return True
+            elif phrase in text:
+                return True
+        return False
 
     def _schema_resolve_conditions(
         self,
@@ -867,16 +1266,38 @@ class PipelineNL2SQLGenerator:
     ) -> NL2SQLResult:
         """Generate through the enhanced path with strict schema resolution."""
         try:
-            unknown_tables = self._schema_unknown_table_patterns(text, schema)
+            executable_text = mask_non_executable(text)
+            label_resolution = self._schema_resolve_english_group_label(executable_text, schema)
+            if label_resolution is None:
+                label_resolution = self._schema_resolve_chinese_group_label(executable_text, schema)
+            ignored_label_spans = (label_resolution[2],) if label_resolution else ()
+            unknown_tables = self._schema_unknown_table_patterns(
+                text, schema, ignored_spans=ignored_label_spans
+            )
             if unknown_tables:
                 return self._schema_failure(
                     text,
                     dialect,
                     "The request references tables outside the provided schema.",
                 )
-            table_context, joins = self._schema_resolve_joins(text, table_hint, schema)
+            if label_resolution is not None:
+                table_context = label_resolution[0]
+                label_group_column = label_resolution[1]
+                joins = []
+                start, end = label_resolution[2]
+                metric_text = text_lower[:start] + " " * (end - start) + text_lower[end:]
+            else:
+                table_context, joins = self._schema_resolve_joins(text, table_hint, schema)
+                metric_text = text_lower
+            count_metric = self._schema_resolve_count_metric(
+                text_lower, table_context, schema
+            )
             columns = self._schema_resolve_columns(
-                text_lower, table_context, column_hints, schema
+                metric_text,
+                table_context,
+                column_hints,
+                schema,
+                suppress_quantity_token=count_metric is not None,
             )
             conditions = self._schema_resolve_conditions(
                 text_lower,
@@ -887,15 +1308,28 @@ class PipelineNL2SQLGenerator:
             parsed = self._parse_text(text_lower, text)
             parsed.update(analysis)
             operation = self._detect_operation(text_lower)
-            aggregations = self._extract_aggregations(text_lower)
-            group_by = self._extract_group_by(text_lower)
-            ordering = self._extract_ordering(text_lower)
+            aggregations = self._schema_extract_aggregations(
+                metric_text, table_context, schema, count_metric
+            )
+            group_by = (
+                [label_group_column]
+                if label_resolution is not None
+                else self._schema_resolve_group_by(
+                    text_lower, table_context, schema, aggregations
+                )
+            )
+            ordering = (
+                self._schema_resolve_ordering(text_lower, table_context, schema)
+                if self._schema_has_explicit_ordering(text_lower)
+                else None
+            )
             limit = self._extract_limit(text_lower)
             distinct = self._check_distinct(text_lower)
+            render_columns = ["*"] if aggregations and not group_by else columns
             sql, explanation, confidence, evidence = self._build_sql_enhanced(
                 operation,
                 table_context.name,
-                columns,
+                render_columns,
                 conditions,
                 aggregations,
                 group_by,

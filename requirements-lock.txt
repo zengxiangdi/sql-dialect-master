@@ -98,7 +98,7 @@ more-itertools==11.2.1 ; platform_machine != 'ppc64le' and platform_machine != '
     # via
     #   jaraco-classes
     #   jaraco-functools
-msgpack==1.2.2
+msgpack==1.2.3
     # via cachecontrol
 mypy==1.20.2
     # via -r requirements.in
