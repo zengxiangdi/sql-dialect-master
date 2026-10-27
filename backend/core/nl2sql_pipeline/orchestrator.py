@@ -698,15 +698,19 @@ class PipelineNL2SQLGenerator:
         if label_table.key == data_table.key:
             raise SchemaValidationError("schema group label cannot be the subject table")
 
-        relationships = schema.relationship_candidates(data_table.name, label_table.name)
+        # Only an explicitly declared data-table -> label-table relationship
+        # proves that the data table carries the grouping foreign key.  The
+        # relationship index also exposes synthetic reverse entries for join
+        # resolution, which must not be used here: accepting one would make a
+        # request such as "users per order" group users by their primary key.
+        relationships = tuple(
+            relationship
+            for relationship in schema.relationships
+            if relationship.from_table.casefold() == data_table.key
+            and relationship.to_table.casefold() == label_table.key
+        )
         if len(relationships) == 1:
-            relationship = relationships[0]
-            group_column = (
-                relationship.from_column
-                if relationship.from_table.casefold() == data_table.key
-                else relationship.to_column
-            )
-            return data_table, group_column, (match.start(), match.end())
+            return data_table, relationships[0].from_column, (match.start(), match.end())
         if len(relationships) > 1:
             raise SchemaValidationError("schema group label relationship is ambiguous")
 

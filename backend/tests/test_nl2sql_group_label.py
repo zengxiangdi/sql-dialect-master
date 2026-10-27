@@ -52,6 +52,39 @@ def test_orders_per_user_allows_unique_fk_without_relationship():
     assert "GROUP BY user_id" in result.sql
 
 
+def test_orders_per_user_uses_fk_when_relationship_is_declared_in_reverse():
+    schema = SchemaContext.from_mapping({
+        "tables": [
+            {"name": "orders", "columns": [{"name": "id"}, {"name": "user_id"}]},
+            {"name": "users", "columns": [{"name": "id"}]},
+        ],
+        "relationships": [
+            {
+                "from_table": "users",
+                "from_column": "id",
+                "to_table": "orders",
+                "to_column": "user_id",
+            },
+        ],
+    })
+    result = generate("How many orders per user", schema)
+    assert result.success
+    assert "SELECT user_id, COUNT(*) AS count" in result.sql
+    assert "FROM orders" in result.sql
+    assert "GROUP BY user_id" in result.sql
+
+
+@pytest.mark.parametrize("text", [
+    "How many users per order",
+    "Count users per order",
+    "Show number of users per order",
+])
+def test_reverse_group_label_relationship_fails_closed(text):
+    result = generate(text, schema_context())
+    assert result.success is False
+    assert result.sql is None
+
+
 def test_employees_per_department_uses_subject_column():
     result = generate("Count employees per department", schema_context())
     assert result.success
