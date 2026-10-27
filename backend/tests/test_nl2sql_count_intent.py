@@ -75,6 +75,22 @@ def test_entity_counter_suffix_is_count(text, table):
     assert "COUNT(*) AS count" in result.sql
 
 
+@pytest.mark.parametrize("text,table", [
+    ("显示用户数据", "users"),
+    ("用户数据", "users"),
+    ("员工数据", "employees"),
+    ("订单数据", "orders"),
+    ("用户数据库", "users"),
+    ("用户数字", "users"),
+    ("用户数组", "users"),
+])
+def test_entity_data_words_remain_select_without_count(text, table):
+    result = generate(text, single_table_context(table, ["id", "name", "data"]))
+    assert result.success
+    assert f"FROM {table}" in result.sql
+    assert "COUNT(" not in result.sql
+
+
 @pytest.mark.parametrize("text", [
     "显示用户数据", "查看用户数据", "用户数据", "数据库", "数字", "数组", "参数", "函数", "分数",
 ])

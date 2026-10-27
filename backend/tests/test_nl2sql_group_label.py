@@ -228,6 +228,9 @@ def test_count_only_and_ordering_do_not_gain_grouping():
     "每个部门的员工数量",
     "统计每个部门的员工数量",
     "统计各个部门员工数量",
+    "每个部门的员工数",
+    "统计每个部门的员工数",
+    "每个部门的员工人数",
 ])
 def test_chinese_department_group_uses_employee_column(text):
     result = generate(text, schema_context())
@@ -244,6 +247,8 @@ def test_chinese_department_group_uses_employee_column(text):
     "每个用户订单数量",
     "各个用户的订单数量",
     "统计每位用户的订单数量",
+    "每个用户的订单数",
+    "统计每个用户的订单数",
 ])
 def test_chinese_user_group_uses_orders_fk(text):
     result = generate(text, schema_context())
@@ -344,6 +349,20 @@ def test_chinese_user_group_allows_unique_direct_fk(schema):
 ])
 def test_chinese_user_group_without_label_table_or_fk_fails_closed(schema):
     result = generate("统计每个用户订单数量", schema)
+    assert result.success is False
+    assert result.sql is None
+
+
+@pytest.mark.parametrize("text", ["每个部门的员工数", "统计每个部门的员工数"])
+def test_chinese_employee_entity_counter_without_department_fails_closed(text):
+    result = generate(text, schema_context(employees_department=False))
+    assert result.success is False
+    assert result.sql is None
+
+
+@pytest.mark.parametrize("text", ["每个用户的订单数", "统计每个用户的订单数"])
+def test_chinese_order_entity_counter_without_fk_or_relationship_fails_closed(text):
+    result = generate(text, schema_context(orders_user_id=False))
     assert result.success is False
     assert result.sql is None
 
@@ -466,12 +485,37 @@ def test_no_schema_outputs_remain_current(text):
         "INNER JOIN employees ON departments.id = employees.dept_id GROUP BY department",
     ),
     (
+        "每个部门的员工数",
+        "SELECT * FROM departments "
+        "INNER JOIN employees ON departments.id = employees.dept_id GROUP BY department",
+    ),
+    (
+        "统计每个部门的员工数",
+        "SELECT department, COUNT(*) AS count FROM departments "
+        "INNER JOIN employees ON departments.id = employees.dept_id GROUP BY department",
+    ),
+    (
+        "每个部门的员工人数",
+        "SELECT * FROM departments "
+        "INNER JOIN employees ON departments.id = employees.dept_id GROUP BY department",
+    ),
+    (
         "统计每个用户订单数量",
         "SELECT COUNT(*) AS count FROM users "
         "INNER JOIN orders ON users.id = orders.user_id GROUP BY quantity",
     ),
     (
         "每个用户的订单数量",
+        "SELECT user_id, COUNT(*) AS count FROM users "
+        "INNER JOIN orders ON users.id = orders.user_id GROUP BY user_id",
+    ),
+    (
+        "每个用户的订单数",
+        "SELECT * FROM users "
+        "INNER JOIN orders ON users.id = orders.user_id GROUP BY user_id",
+    ),
+    (
+        "统计每个用户的订单数",
         "SELECT user_id, COUNT(*) AS count FROM users "
         "INNER JOIN orders ON users.id = orders.user_id GROUP BY user_id",
     ),
@@ -509,6 +553,8 @@ def test_chinese_group_label_no_schema_outputs_match_existing_sql(text, expected
     "How many orders per user",
     "统计每个部门员工数量",
     "每个用户的订单数量",
+    "每个部门的员工数",
+    "每个用户的订单数",
 ])
 def test_group_label_sql_parses_in_all_dialects(dialect, text):
     result = NL2SQLGenerator().generate(text, dialect, schema=schema_context())

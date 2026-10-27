@@ -660,15 +660,21 @@ class PipelineNL2SQLGenerator:
             unknown.append(mapped)
         return sorted(set(unknown))
 
-    @staticmethod
-    def _schema_aggregation_intent(text: str) -> bool:
+    def _schema_entity_counter_tables(self, text: str) -> set[str]:
+        """Find entity counters without treating data words as counts."""
+        return {
+            mapped for pattern, mapped in self.TABLE_PATTERNS.items()
+            if re.search(re.escape(pattern) + r"数(?!据|字|组)", text, re.IGNORECASE)
+        }
+
+    def _schema_aggregation_intent(self, text: str) -> bool:
         return bool(re.search(
             r"\b(?:number\s+of|count(?:\s+of)?|how\s+many|sum|average|avg|maximum|minimum|max|min)\b|"
             r"统计|数量|多少|几个|总数|个数|条数|件数|行数|人数|记录数|"
             r"平均|总和|汇总|最大|最小|最多|最少",
             text,
             re.IGNORECASE,
-        ))
+        )) or bool(self._schema_entity_counter_tables(text))
 
     def _schema_resolve_english_group_label(
         self, text: str, schema: SchemaContext
@@ -985,9 +991,7 @@ class PipelineNL2SQLGenerator:
             re.IGNORECASE,
         ))
         if not count_intent:
-            for pattern, mapped in self.TABLE_PATTERNS.items():
-                if not re.search(re.escape(pattern) + r"数(?!据|字|组)", text, re.IGNORECASE):
-                    continue
+            for mapped in self._schema_entity_counter_tables(text):
                 candidates = schema.table_candidates(mapped)
                 if len(candidates) == 1 and candidates[0].key == table.key:
                     count_intent = True
