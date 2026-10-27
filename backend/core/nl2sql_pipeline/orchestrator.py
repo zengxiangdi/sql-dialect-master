@@ -710,7 +710,26 @@ class PipelineNL2SQLGenerator:
             and relationship.to_table.casefold() == label_table.key
         )
         if len(relationships) == 1:
-            return data_table, relationships[0].from_column, (match.start(), match.end())
+            label_singular = (
+                label[:-1] if label.casefold().endswith("s") else label
+            )
+            table_basename = label_table.name.rsplit(".", 1)[-1]
+            table_singular = (
+                table_basename[:-1]
+                if table_basename.casefold().endswith("s")
+                else table_basename
+            )
+            allowed_foreign_keys = {
+                f"{label_singular}_id".casefold(),
+                f"{table_singular}_id".casefold(),
+                f"{table_basename}_id".casefold(),
+            }
+            from_column = relationships[0].from_column
+            if from_column.casefold() not in allowed_foreign_keys:
+                raise SchemaValidationError(
+                    "schema group label relationship has an unsupported foreign key"
+                )
+            return data_table, from_column, (match.start(), match.end())
         if len(relationships) > 1:
             raise SchemaValidationError("schema group label relationship is ambiguous")
 

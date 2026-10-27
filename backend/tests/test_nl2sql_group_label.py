@@ -74,6 +74,54 @@ def test_orders_per_user_uses_fk_when_relationship_is_declared_in_reverse():
     assert "GROUP BY user_id" in result.sql
 
 
+def reverse_relationship_schema():
+    return SchemaContext.from_mapping({
+        "tables": [
+            {"name": "users", "columns": [{"name": "id"}]},
+            {"name": "orders", "columns": [{"name": "id"}, {"name": "user_id"}]},
+        ],
+        "relationships": [
+            {
+                "from_table": "users",
+                "from_column": "id",
+                "to_table": "orders",
+                "to_column": "user_id",
+            },
+        ],
+    })
+
+
+@pytest.mark.parametrize("text", [
+    "How many users per order",
+    "Count users per order",
+    "Show number of users per order",
+])
+def test_reverse_declared_relationship_rejects_users_per_order(text):
+    result = generate(text, reverse_relationship_schema())
+    assert result.success is False
+    assert result.sql is None
+
+
+def test_nonstandard_forward_fk_rejects_group_label():
+    schema = SchemaContext.from_mapping({
+        "tables": [
+            {"name": "orders", "columns": [{"name": "id"}, {"name": "buyer_id"}]},
+            {"name": "users", "columns": [{"name": "id"}]},
+        ],
+        "relationships": [
+            {
+                "from_table": "orders",
+                "from_column": "buyer_id",
+                "to_table": "users",
+                "to_column": "id",
+            },
+        ],
+    })
+    result = generate("How many orders per user", schema)
+    assert result.success is False
+    assert result.sql is None
+
+
 @pytest.mark.parametrize("text", [
     "How many users per order",
     "Count users per order",
