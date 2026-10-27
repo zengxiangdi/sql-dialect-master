@@ -626,14 +626,20 @@ class PipelineNL2SQLGenerator:
         return [table for _, table in sorted(found.values(), key=lambda item: item[0])]
 
     def _schema_unknown_table_patterns(
-        self, text: str, schema: SchemaContext
+        self,
+        text: str,
+        schema: SchemaContext,
+        ignored_spans: tuple[tuple[int, int], ...] = (),
     ) -> list[str]:
         """Return mapped table names mentioned by the request but absent in schema."""
         unknown: list[str] = []
         for pattern, mapped in self.TABLE_PATTERNS.items():
             if pattern == "order" and re.search(r"\border\b\s+by\b", text, re.IGNORECASE):
                 continue
-            if not self._schema_text_match(text, pattern):
+            match = self._schema_text_match(text, pattern)
+            if not match:
+                continue
+            if any(start < match.end() and match.start() < end for start, end in ignored_spans):
                 continue
             if schema.table_candidates(mapped):
                 continue
@@ -641,6 +647,74 @@ class PipelineNL2SQLGenerator:
                 continue
             unknown.append(mapped)
         return sorted(set(unknown))
+
+    @staticmethod
+    def _schema_aggregation_intent(text: str) -> bool:
+        return bool(re.search(
+            r"\b(?:number\s+of|count(?:\s+of)?|how\s+many|sum|average|avg|maximum|minimum|max|min)\b",
+            text,
+            re.IGNORECASE,
+        ))
+
+    def _schema_resolve_english_group_label(
+        self, text: str, schema: SchemaContext
+    ) -> tuple[SchemaTableContext, str, tuple[int, int]] | None:
+        if not self._schema_aggregation_intent(text):
+            return None
+        match = re.search(
+            r"\b(?:per|each)\s+([A-Za-z_][A-Za-z0-9_$]*)\b",
+            text,
+            re.IGNORECASE,
+        )
+        if match is None:
+            return None
+        label = match.group(1)
+        if text[match.end():].strip(" \t\r\n,.;，。；"):
+            raise SchemaValidationError("multiple schema group labels are unsupported")
+        masked = text[:match.start(1)] + " " * (match.end(1) - match.start(1)) + text[match.end(1):]
+        mentioned = self._schema_table_mentions(masked, schema)
+        if len(mentioned) != 1:
+            raise SchemaValidationError("schema group label subject is ambiguous")
+        data_table = mentioned[0]
+        direct_column = schema.canonical_column(data_table, label)
+        if direct_column is not None:
+            return data_table, direct_column, (match.start(), match.end())
+
+        label_tables = schema.table_candidates(label)
+        if not label_tables:
+            mapped_labels = [
+                mapped for pattern, mapped in self.TABLE_PATTERNS.items()
+                if pattern.casefold() == label.casefold()
+            ]
+            candidates = [
+                candidate
+                for mapped in mapped_labels
+                for candidate in schema.table_candidates(mapped)
+            ]
+            label_tables = tuple({candidate.key: candidate for candidate in candidates}.values())
+        if len(label_tables) != 1:
+            raise SchemaValidationError("schema group label is not a unique table")
+        label_table = label_tables[0]
+        if label_table.key == data_table.key:
+            raise SchemaValidationError("schema group label cannot be the subject table")
+
+        relationships = schema.relationship_candidates(data_table.name, label_table.name)
+        if len(relationships) == 1:
+            relationship = relationships[0]
+            group_column = (
+                relationship.from_column
+                if relationship.from_table.casefold() == data_table.key
+                else relationship.to_column
+            )
+            return data_table, group_column, (match.start(), match.end())
+        if len(relationships) > 1:
+            raise SchemaValidationError("schema group label relationship is ambiguous")
+
+        singular = label[:-1] if label.casefold().endswith("s") else label
+        foreign_key = schema.canonical_column(data_table, singular + "_id")
+        if foreign_key is not None:
+            return data_table, foreign_key, (match.start(), match.end())
+        raise SchemaValidationError("schema group label relationship is missing")
 
     def _schema_resolve_table(
         self,
@@ -1104,14 +1178,23 @@ class PipelineNL2SQLGenerator:
     ) -> NL2SQLResult:
         """Generate through the enhanced path with strict schema resolution."""
         try:
-            unknown_tables = self._schema_unknown_table_patterns(text, schema)
+            label_resolution = self._schema_resolve_english_group_label(text, schema)
+            ignored_label_spans = (label_resolution[2],) if label_resolution else ()
+            unknown_tables = self._schema_unknown_table_patterns(
+                text, schema, ignored_spans=ignored_label_spans
+            )
             if unknown_tables:
                 return self._schema_failure(
                     text,
                     dialect,
                     "The request references tables outside the provided schema.",
                 )
-            table_context, joins = self._schema_resolve_joins(text, table_hint, schema)
+            if label_resolution is not None:
+                table_context = label_resolution[0]
+                label_group_column = label_resolution[1]
+                joins = []
+            else:
+                table_context, joins = self._schema_resolve_joins(text, table_hint, schema)
             count_metric = self._schema_resolve_count_metric(
                 text_lower, table_context, schema
             )
@@ -1134,8 +1217,12 @@ class PipelineNL2SQLGenerator:
             aggregations = self._schema_extract_aggregations(
                 text_lower, table_context, schema, count_metric
             )
-            group_by = self._schema_resolve_group_by(
-                text_lower, table_context, schema, aggregations
+            group_by = (
+                [label_group_column]
+                if label_resolution is not None
+                else self._schema_resolve_group_by(
+                    text_lower, table_context, schema, aggregations
+                )
             )
             ordering = (
                 self._schema_resolve_ordering(text_lower, table_context, schema)

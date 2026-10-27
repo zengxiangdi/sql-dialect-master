@@ -109,7 +109,6 @@ def test_schema_total_amount_count_has_no_implicit_grouping():
 
 @pytest.mark.parametrize("text", [
     "Show number of orders per unknown",
-    "Show number of orders per user",
     "统计每个部门员工数量",
     "Count orders per user_id and status",
 ])
