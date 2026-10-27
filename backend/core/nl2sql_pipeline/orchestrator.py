@@ -98,6 +98,18 @@ _DATE_INTERVAL = re.compile(
     re.IGNORECASE,
 )
 MAX_NL2SQL_DATE_INTERVAL_DAYS = 36525
+_SCHEMA_GROUP_LABEL_COLUMNS = {
+    "部门": ("department", "dept"),
+    "状态": ("status",),
+    "类型": ("type",),
+    "分类": ("category",),
+    "日期": ("date",),
+    "地区": ("region",),
+    "区域": ("region",),
+    "品牌": ("brand",),
+    "级别": ("level",),
+    "优先级": ("priority",),
+}
 
 
 class PipelineNL2SQLGenerator:
@@ -632,14 +644,14 @@ class PipelineNL2SQLGenerator:
         ignored_spans: tuple[tuple[int, int], ...] = (),
     ) -> list[str]:
         """Return mapped table names mentioned by the request but absent in schema."""
+        for start, end in ignored_spans:
+            text = text[:start] + " " * (end - start) + text[end:]
         unknown: list[str] = []
         for pattern, mapped in self.TABLE_PATTERNS.items():
             if pattern == "order" and re.search(r"\border\b\s+by\b", text, re.IGNORECASE):
                 continue
             match = self._schema_text_match(text, pattern)
             if not match:
-                continue
-            if any(start < match.end() and match.start() < end for start, end in ignored_spans):
                 continue
             if schema.table_candidates(mapped):
                 continue
@@ -651,7 +663,9 @@ class PipelineNL2SQLGenerator:
     @staticmethod
     def _schema_aggregation_intent(text: str) -> bool:
         return bool(re.search(
-            r"\b(?:number\s+of|count(?:\s+of)?|how\s+many|sum|average|avg|maximum|minimum|max|min)\b",
+            r"\b(?:number\s+of|count(?:\s+of)?|how\s+many|sum|average|avg|maximum|minimum|max|min)\b|"
+            r"统计|数量|多少|几个|总数|个数|条数|件数|行数|人数|记录数|"
+            r"平均|总和|汇总|最大|最小|最多|最少",
             text,
             re.IGNORECASE,
         ))
@@ -671,14 +685,51 @@ class PipelineNL2SQLGenerator:
         label = match.group(1)
         if text[match.end():].strip(" \t\r\n,.;，。；"):
             raise SchemaValidationError("multiple schema group labels are unsupported")
-        masked = text[:match.start(1)] + " " * (match.end(1) - match.start(1)) + text[match.end(1):]
+        return self._schema_resolve_group_label(
+            text, label, (match.start(), match.end()), schema
+        )
+
+    def _schema_resolve_chinese_group_label(
+        self, text: str, schema: SchemaContext
+    ) -> tuple[SchemaTableContext, str, tuple[int, int]] | None:
+        if not self._schema_aggregation_intent(text):
+            return None
+        match = re.search(
+            r"(?:每个|各个|每位)\s*([\u4e00-\u9fff]{1,8}?)"
+            r"(?=的|员工|订单|产品|客户|交易|支付|日志|记录|数量|用户|$)",
+            text,
+        )
+        if match is None:
+            return None
+        if re.search(r"每个|各个|每位", text[match.end():]):
+            raise SchemaValidationError("multiple schema group labels are unsupported")
+        return self._schema_resolve_group_label(
+            text, match.group(1), (match.start(), match.end()), schema
+        )
+
+    def _schema_resolve_group_label(
+        self,
+        text: str,
+        label: str,
+        span: tuple[int, int],
+        schema: SchemaContext,
+    ) -> tuple[SchemaTableContext, str, tuple[int, int]]:
+        """Resolve one consumed label without treating its table as a JOIN."""
+        masked = text[:span[0]] + " " * (span[1] - span[0]) + text[span[1]:]
         mentioned = self._schema_table_mentions(masked, schema)
         if len(mentioned) != 1:
             raise SchemaValidationError("schema group label subject is ambiguous")
         data_table = mentioned[0]
-        direct_column = schema.canonical_column(data_table, label)
-        if direct_column is not None:
-            return data_table, direct_column, (match.start(), match.end())
+        column_names = (label, *_SCHEMA_GROUP_LABEL_COLUMNS.get(label, ()))
+        column_keys = {name.casefold() for name in column_names}
+        direct_columns = {
+            column for column in data_table.columns
+            if column.casefold() in column_keys
+        }
+        if len(direct_columns) > 1:
+            raise SchemaValidationError("schema group label column is ambiguous")
+        if direct_columns:
+            return data_table, direct_columns.pop(), span
 
         label_tables = schema.table_candidates(label)
         if not label_tables:
@@ -729,14 +780,24 @@ class PipelineNL2SQLGenerator:
                 raise SchemaValidationError(
                     "schema group label relationship has an unsupported foreign key"
                 )
-            return data_table, from_column, (match.start(), match.end())
+            return data_table, from_column, span
         if len(relationships) > 1:
             raise SchemaValidationError("schema group label relationship is ambiguous")
 
-        singular = label[:-1] if label.casefold().endswith("s") else label
-        foreign_key = schema.canonical_column(data_table, singular + "_id")
-        if foreign_key is not None:
-            return data_table, foreign_key, (match.start(), match.end())
+        table_basename = label_table.name.rsplit(".", 1)[-1]
+        singular = (
+            table_basename[:-1]
+            if table_basename.casefold().endswith("s")
+            else table_basename
+        )
+        foreign_keys = [
+            column for column in data_table.columns
+            if column.casefold() == (singular + "_id").casefold()
+        ]
+        if len(foreign_keys) > 1:
+            raise SchemaValidationError("schema group label foreign key is ambiguous")
+        if foreign_keys:
+            return data_table, foreign_keys[0], span
         raise SchemaValidationError("schema group label relationship is missing")
 
     def _schema_resolve_table(
@@ -1201,7 +1262,10 @@ class PipelineNL2SQLGenerator:
     ) -> NL2SQLResult:
         """Generate through the enhanced path with strict schema resolution."""
         try:
-            label_resolution = self._schema_resolve_english_group_label(text, schema)
+            executable_text = mask_non_executable(text)
+            label_resolution = self._schema_resolve_english_group_label(executable_text, schema)
+            if label_resolution is None:
+                label_resolution = self._schema_resolve_chinese_group_label(executable_text, schema)
             ignored_label_spans = (label_resolution[2],) if label_resolution else ()
             unknown_tables = self._schema_unknown_table_patterns(
                 text, schema, ignored_spans=ignored_label_spans
@@ -1216,13 +1280,16 @@ class PipelineNL2SQLGenerator:
                 table_context = label_resolution[0]
                 label_group_column = label_resolution[1]
                 joins = []
+                start, end = label_resolution[2]
+                metric_text = text_lower[:start] + " " * (end - start) + text_lower[end:]
             else:
                 table_context, joins = self._schema_resolve_joins(text, table_hint, schema)
+                metric_text = text_lower
             count_metric = self._schema_resolve_count_metric(
                 text_lower, table_context, schema
             )
             columns = self._schema_resolve_columns(
-                text_lower,
+                metric_text,
                 table_context,
                 column_hints,
                 schema,
@@ -1238,7 +1305,7 @@ class PipelineNL2SQLGenerator:
             parsed.update(analysis)
             operation = self._detect_operation(text_lower)
             aggregations = self._schema_extract_aggregations(
-                text_lower, table_context, schema, count_metric
+                metric_text, table_context, schema, count_metric
             )
             group_by = (
                 [label_group_column]
