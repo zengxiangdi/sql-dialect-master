@@ -1,6 +1,6 @@
 # Core runtime versions retained for the engineering baseline.
 sqlglot==30.18.0
-fastapi==0.141.1
+fastapi==0.162.0
 uvicorn==0.52.4
 pydantic==2.13.5
 pydantic-settings==2.15.0
