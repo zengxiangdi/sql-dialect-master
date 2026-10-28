@@ -3,7 +3,7 @@ sqlglot==30.18.0
 fastapi==0.141.1
 uvicorn==0.52.4
 pydantic==2.13.5
-pydantic-settings==2.15.0
+pydantic-settings==2.16.1
 httpx==0.28.1
 certifi==2026.10.19
 # Fix CVE-2026-114613 in pip-audit's transitive msgpack dependency.
