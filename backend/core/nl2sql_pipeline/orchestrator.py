@@ -120,6 +120,11 @@ _SCHEMA_JOINED_ON_OPERAND = re.compile(
     r"[A-Za-z_][A-Za-z0-9_$]*\.[A-Za-z_][A-Za-z0-9_$]*"
     r"(?:\.[A-Za-z_][A-Za-z0-9_$]*)?"
 )
+_SCHEMA_JOINED_WITH_PREFIX = re.compile(
+    r"\b(?:(inner|left|right)\s+)?joined\s+with\s+"
+    r"([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)\b",
+    re.IGNORECASE,
+)
 _SCHEMA_GROUP_LABEL_COLUMNS = {
     "部门": ("department", "dept"),
     "状态": ("status",),
@@ -1293,6 +1298,8 @@ class PipelineNL2SQLGenerator:
         prefixes = list(_SCHEMA_JOINED_ON_PREFIX.finditer(executable))
         if not prefixes:
             return None
+        if re.search(r"\bjoined\s+with\b", executable, re.IGNORECASE):
+            raise SchemaValidationError("mixed joined-on and joined-with clauses are unsupported")
         if len(prefixes) != 1:
             raise SchemaValidationError("multiple joined-on clauses are unsupported")
         if re.search(r"\b(?:per|each)\b|每个|各个|每位", executable, re.IGNORECASE):
@@ -1396,6 +1403,82 @@ class PipelineNL2SQLGenerator:
             "condition": condition,
             "relational": False,
             "join_spec": JoinSpec(kind=kind, matched_text="joined on"),
+        }], span
+
+    def _schema_resolve_joined_with(
+        self,
+        text: str,
+        table_hint: Optional[str],
+        schema: SchemaContext,
+    ) -> tuple[SchemaTableContext, list[dict], tuple[int, int]] | None:
+        """Resolve one relationship-backed physical ``joined with`` clause."""
+        executable = mask_non_executable(text)
+        matches = list(_SCHEMA_JOINED_WITH_PREFIX.finditer(executable))
+        if not matches:
+            return None
+        if len(matches) != 1 or re.search(r"\bjoined\s+on\b", executable, re.IGNORECASE):
+            raise SchemaValidationError("multiple or mixed joined clauses are unsupported")
+        match = matches[0]
+        original_match = _SCHEMA_JOINED_WITH_PREFIX.match(text, match.start())
+        if original_match is None:
+            raise SchemaValidationError("joined-with clause is not executable")
+        match = original_match
+        if re.search(
+            r"\b(?:per|each|group\s+by|grouped\s+by)\b|每个|各个|每位",
+            executable,
+            re.IGNORECASE,
+        ):
+            raise SchemaValidationError("joined-with grouping is unsupported")
+
+        kind = (match.group(1) or "inner").upper()
+        target_name = match.group(2)
+        target_candidates = schema.table_candidates(target_name)
+        if len(target_candidates) != 1:
+            raise SchemaValidationError("joined-with target is not unique")
+        target = target_candidates[0]
+        before_mentions = self._schema_table_mentions(text[:match.start()], schema)
+        if table_hint:
+            subject_candidates = schema.table_candidates(table_hint)
+            if len(subject_candidates) != 1:
+                raise SchemaValidationError("joined-with subject hint is ambiguous")
+            subject = subject_candidates[0]
+        elif before_mentions:
+            subject = before_mentions[0]
+        else:
+            raise SchemaValidationError("joined-with subject is missing")
+        if self._schema_text_match(text[:match.start()], target_name):
+            raise SchemaValidationError("joined-with target is repeated before the clause")
+        before_keys = {table.key for table in before_mentions}
+        if before_keys - {subject.key, target.key}:
+            raise SchemaValidationError("joined-with contains an extra table")
+        if subject.key == target.key:
+            raise SchemaValidationError("self joined-with is unsupported")
+
+        tail = executable[match.end():]
+        stripped_tail = tail.strip()
+        if stripped_tail and not re.match(r"^(?:where|whose)\b", stripped_tail, re.IGNORECASE):
+            raise SchemaValidationError("unexpected text after joined-with target")
+        relationships = [
+            relationship for relationship in schema.relationships
+            if {
+                relationship.from_table.casefold(), relationship.to_table.casefold()
+            } == {subject.key, target.key}
+        ]
+        if len(relationships) != 1:
+            raise SchemaValidationError("joined-with relationship is not unique")
+        relationship = relationships[0]
+        condition = (
+            f"{relationship.from_table}.{relationship.from_column} = "
+            f"{relationship.to_table}.{relationship.to_column}"
+        )
+        span = (match.start(), match.end())
+        return subject, [{
+            "type": kind,
+            "table": target.name,
+            "subject": subject.name,
+            "condition": condition,
+            "relational": False,
+            "join_spec": JoinSpec(kind=kind, matched_text="joined with"),
         }], span
 
     def _schema_resolve_joins(
@@ -1533,8 +1616,13 @@ class PipelineNL2SQLGenerator:
             joined_on_resolution = self._schema_resolve_joined_on(
                 text, table_hint, schema
             )
-            label_resolution = None
+            joined_with_resolution = None
             if joined_on_resolution is None:
+                joined_with_resolution = self._schema_resolve_joined_with(
+                    text, table_hint, schema
+                )
+            label_resolution = None
+            if joined_on_resolution is None and joined_with_resolution is None:
                 label_resolution = self._schema_resolve_english_group_label(executable_text, schema)
                 if label_resolution is None:
                     label_resolution = self._schema_resolve_chinese_group_label(executable_text, schema)
@@ -1549,9 +1637,13 @@ class PipelineNL2SQLGenerator:
                     "The request references tables outside the provided schema.",
                 )
             joined_on_span = None
+            joined_with_span = None
             if joined_on_resolution is not None:
                 table_context, joins, joined_on_span = joined_on_resolution
                 metric_text = self._schema_mask_span(text_lower, joined_on_span)
+            elif joined_with_resolution is not None:
+                table_context, joins, joined_with_span = joined_with_resolution
+                metric_text = self._schema_mask_span(text_lower, joined_with_span)
             elif label_resolution is not None:
                 table_context = label_resolution[0]
                 label_group_column = label_resolution[1]
@@ -1568,11 +1660,14 @@ class PipelineNL2SQLGenerator:
             if joined_on_span is not None:
                 condition_text = self._schema_mask_span(condition_text, joined_on_span)
                 condition_original = self._schema_mask_span(condition_original, joined_on_span)
+            elif joined_with_span is not None:
+                condition_text = self._schema_mask_span(condition_text, joined_with_span)
+                condition_original = self._schema_mask_span(condition_original, joined_with_span)
             if whose_resolution is not None:
                 whose_condition, whose_span = whose_resolution
                 metric_text = self._schema_mask_span(metric_text, whose_span)
-                condition_text = self._schema_mask_span(text_lower, whose_span)
-                condition_original = self._schema_mask_span(text, whose_span)
+                condition_text = self._schema_mask_span(condition_text, whose_span)
+                condition_original = self._schema_mask_span(condition_original, whose_span)
             count_metric = self._schema_resolve_count_metric(
                 text_lower, table_context, schema
             )

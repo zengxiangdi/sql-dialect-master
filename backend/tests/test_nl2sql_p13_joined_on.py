@@ -134,7 +134,7 @@ def test_preexisting_join_and_exists_paths_remain(text):
     assert result.success
     body = sql_body(result)
     if "joined with" in text:
-        assert "WHERE EXISTS" in body
+        assert "INNER JOIN orders ON orders.user_id = users.id" in body
     elif "left join" in text:
         assert "LEFT JOIN orders ON users.id = orders.user_id" in body
     else:
