@@ -111,6 +111,7 @@ _SCHEMA_WHOSE_REJECTED_VALUES = {
     "select", "from", "where", "group", "order", "by", "limit",
     "current_date", "current_timestamp", "now",
 }
+_SCHEMA_WHOSE_CJK_CONNECTORS = {"和", "或", "且", "并", "与", "跟", "及"}
 _SCHEMA_GROUP_LABEL_COLUMNS = {
     "部门": ("department", "dept"),
     "状态": ("status",),
@@ -1231,17 +1232,25 @@ class PipelineNL2SQLGenerator:
                     literal = "NULL"
                     value_end = position + null_match.end()
                 else:
-                    token = re.match(r"[A-Za-z_][A-Za-z0-9_$]*(?![\w$])", text[position:])
-                    if token is None:
-                        raise SchemaValidationError("whose value is not a supported literal")
-                    value = token.group(0)
-                    if value.casefold() in _SCHEMA_WHOSE_REJECTED_VALUES:
-                        raise SchemaValidationError("whose value is a reserved word")
-                    after_token = text[position + token.end():].lstrip()
-                    if after_token.startswith("("):
-                        raise SchemaValidationError("whose function values are unsupported")
-                    literal = "'" + value.replace("'", "''") + "'"
-                    value_end = position + token.end()
+                    cjk_token = re.match(r"[\u4e00-\u9fff]+", text[position:])
+                    if cjk_token is not None:
+                        value = cjk_token.group(0)
+                        if any(connector in value for connector in _SCHEMA_WHOSE_CJK_CONNECTORS):
+                            raise SchemaValidationError("whose CJK value contains a connector")
+                        literal = "'" + value.replace("'", "''") + "'"
+                        value_end = position + cjk_token.end()
+                    else:
+                        token = re.match(r"[A-Za-z_][A-Za-z0-9_$]*(?![\w$])", text[position:])
+                        if token is None:
+                            raise SchemaValidationError("whose value is not a supported literal")
+                        value = token.group(0)
+                        if value.casefold() in _SCHEMA_WHOSE_REJECTED_VALUES:
+                            raise SchemaValidationError("whose value is a reserved word")
+                        after_token = text[position + token.end():].lstrip()
+                        if after_token.startswith("("):
+                            raise SchemaValidationError("whose function values are unsupported")
+                        literal = "'" + value.replace("'", "''") + "'"
+                        value_end = position + token.end()
 
         operator = raw_operator.casefold()
         if literal == "NULL":

@@ -41,6 +41,9 @@ def sql_body(result):
     ("find users whose created_at >= '2024-01-01'", "created_at >= '2024-01-01'"),
     ("find users whose nickname is 'bob'", "nickname = 'bob'"),
     ("find users whose nickname is \"bob\"", "nickname = 'bob'"),
+    ("find users whose nickname is 张三", "nickname = '张三'"),
+    ("find users whose nickname is '张三'", "nickname = '张三'"),
+    ("find users whose users.nickname is 张三", "nickname = '张三'"),
     ("find users whose price >= -10", "price >= -10"),
     ("find users whose price < 10.5", "price < 10.5"),
 ])
@@ -68,6 +71,9 @@ def test_whose_combines_with_other_predicates(text, fragment):
 
 @pytest.mark.parametrize("text", [
     "find users whose nickname is New York",
+    "find users whose nickname is 张三 李四",
+    "find users whose nickname is 张三和李四",
+    "find users whose nickname is 张三，李四",
     "find users whose unknown_col is 1",
     "find users whose email = null",
     "find users whose email != null",
@@ -137,6 +143,7 @@ def test_whose_allows_unrestricted_schema_columns():
     "find users whose email is null",
     "find users whose created_at >= '2024-01-01'",
     "show user names whose nickname is bob",
+    "find users whose nickname is 张三",
 ])
 def test_no_schema_behavior_remains_unchanged(text):
     current = generate(text, None)
@@ -146,6 +153,7 @@ def test_no_schema_behavior_remains_unchanged(text):
         "find users whose email is null": "SELECT email FROM users WHERE email IS NULL",
         "find users whose created_at >= '2024-01-01'": "SELECT * FROM users WHERE created_at >= '2024-01-01'",
         "show user names whose nickname is bob": "SELECT * FROM users",
+        "find users whose nickname is 张三": "SELECT * FROM users",
     }[text]
     assert current.schema_used is False
     assert sql_body(current) == baseline
@@ -169,6 +177,7 @@ def test_whose_sql_parses_in_all_dialects(dialect):
     generator = NL2SQLGenerator()
     for text in [
         "find users whose nickname is bob",
+        "find users whose nickname is 张三",
         "find users whose created_at >= '2024-01-01'",
         "show user names whose nickname is bob",
     ]:
