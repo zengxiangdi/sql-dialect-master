@@ -98,6 +98,19 @@ _DATE_INTERVAL = re.compile(
     re.IGNORECASE,
 )
 MAX_NL2SQL_DATE_INTERVAL_DAYS = 36525
+_SCHEMA_WHOSE_PREFIX = re.compile(
+    r"\bwhose\s+"
+    r"([A-Za-z_][A-Za-z0-9_$]*|"
+    r"[A-Za-z_][A-Za-z0-9_$]*\.[A-Za-z_][A-Za-z0-9_$]*|"
+    r"[A-Za-z_][A-Za-z0-9_$]*\.[A-Za-z_][A-Za-z0-9_$]*\.[A-Za-z_][A-Za-z0-9_$]*)\s+"
+    r"(is\s+not|isn't|is|equals|<>|!=|>=|<=|=|>|<)\s*",
+    re.IGNORECASE,
+)
+_SCHEMA_WHOSE_REJECTED_VALUES = {
+    "and", "or", "not", "is", "null", "true", "false", "unknown",
+    "select", "from", "where", "group", "order", "by", "limit",
+    "current_date", "current_timestamp", "now",
+}
 _SCHEMA_GROUP_LABEL_COLUMNS = {
     "部门": ("department", "dept"),
     "状态": ("status",),
@@ -1135,6 +1148,123 @@ class PipelineNL2SQLGenerator:
             resolved.append(rewritten)
         return resolved
 
+    @staticmethod
+    def _schema_mask_span(
+        text: str, span: tuple[int, int]
+    ) -> str:
+        start, end = span
+        return text[:start] + " " * (end - start) + text[end:]
+
+    def _schema_resolve_whose(
+        self,
+        text: str,
+        table: SchemaTableContext,
+        schema: SchemaContext,
+    ) -> tuple[str, tuple[int, int]] | None:
+        """Resolve one schema-aware ``whose`` predicate in linear time."""
+        executable = mask_non_executable(text)
+        match = _SCHEMA_WHOSE_PREFIX.search(executable)
+        if match is None:
+            return None
+        whose_matches = list(_SCHEMA_WHOSE_PREFIX.finditer(executable))
+        if len(whose_matches) != 1:
+            raise SchemaValidationError("multiple whose predicates are unsupported")
+        original_match = _SCHEMA_WHOSE_PREFIX.match(text, match.start())
+        if original_match is None:
+            raise SchemaValidationError("whose predicate is not executable")
+        match = original_match
+
+        raw_column, raw_operator = match.groups()
+        parts = raw_column.split(".")
+        column_name = parts[-1]
+        if len(parts) > 1:
+            candidates = schema.table_candidates(".".join(parts[:-1]))
+            if len(candidates) != 1 or candidates[0].key != table.key:
+                raise SchemaValidationError("whose column table is not the selected table")
+        canonical = schema.canonical_column(table, column_name)
+        if canonical is None:
+            if table.has_column_metadata:
+                raise SchemaValidationError("whose column is outside the schema")
+            canonical = column_name
+
+        position = match.end()
+        if position >= len(text):
+            raise SchemaValidationError("whose predicate value is missing")
+        quote = text[position] if text[position] in "'\"" else None
+        value_end = position
+        if quote is not None:
+            position += 1
+            value_chars: list[str] = []
+            closed = False
+            while position < len(text):
+                character = text[position]
+                if character == "\\" and position + 1 < len(text):
+                    value_chars.extend((character, text[position + 1]))
+                    position += 2
+                    continue
+                if character == quote:
+                    if position + 1 < len(text) and text[position + 1] == quote:
+                        value_chars.append(quote)
+                        position += 2
+                        continue
+                    closed = True
+                    position += 1
+                    break
+                value_chars.append(character)
+                position += 1
+            if not closed:
+                raise SchemaValidationError("whose quoted value is not closed")
+            value = "".join(value_chars)
+            literal = "'" + value.replace("'", "''") + "'"
+            value_end = position
+        else:
+            numeric = re.match(
+                r"-?(?:\d+(?:\.\d*)?|\.\d+)(?![\w$])",
+                text[position:],
+            )
+            if numeric is not None:
+                literal = numeric.group(0)
+                value_end = position + numeric.end()
+            else:
+                null_match = re.match(r"null(?![\w$])", text[position:], re.IGNORECASE)
+                if null_match is not None:
+                    literal = "NULL"
+                    value_end = position + null_match.end()
+                else:
+                    token = re.match(r"[A-Za-z_][A-Za-z0-9_$]*(?![\w$])", text[position:])
+                    if token is None:
+                        raise SchemaValidationError("whose value is not a supported literal")
+                    value = token.group(0)
+                    if value.casefold() in _SCHEMA_WHOSE_REJECTED_VALUES:
+                        raise SchemaValidationError("whose value is a reserved word")
+                    after_token = text[position + token.end():].lstrip()
+                    if after_token.startswith("("):
+                        raise SchemaValidationError("whose function values are unsupported")
+                    literal = "'" + value.replace("'", "''") + "'"
+                    value_end = position + token.end()
+
+        operator = raw_operator.casefold()
+        if literal == "NULL":
+            if operator in {"is", "is not", "isn't"}:
+                predicate = f"{canonical} IS {'NOT ' if operator != 'is' else ''}NULL"
+            else:
+                raise SchemaValidationError("comparison with NULL is unsupported")
+        else:
+            normalized = {
+                "is": "=", "equals": "=", "is not": "!=", "isn't": "!=",
+                "<>": "!=",
+            }.get(operator, raw_operator)
+            predicate = f"{canonical} {normalized} {literal}"
+
+        tail = executable[value_end:]
+        if re.search(r"\bor\b|\bwhose\b|[()]", tail, re.IGNORECASE):
+            raise SchemaValidationError("complex whose predicates are unsupported")
+        stripped_tail = tail.strip()
+        if stripped_tail and not re.match(r"^and\b", stripped_tail, re.IGNORECASE):
+            raise SchemaValidationError("unexpected text after whose predicate")
+        span = (match.start(), value_end)
+        return predicate, span
+
     def _schema_resolve_joins(
         self,
         text: str,
@@ -1289,6 +1419,15 @@ class PipelineNL2SQLGenerator:
             else:
                 table_context, joins = self._schema_resolve_joins(text, table_hint, schema)
                 metric_text = text_lower
+            whose_resolution = self._schema_resolve_whose(text, table_context, schema)
+            whose_condition = None
+            condition_text = text_lower
+            condition_original = text
+            if whose_resolution is not None:
+                whose_condition, whose_span = whose_resolution
+                metric_text = self._schema_mask_span(metric_text, whose_span)
+                condition_text = self._schema_mask_span(text_lower, whose_span)
+                condition_original = self._schema_mask_span(text, whose_span)
             count_metric = self._schema_resolve_count_metric(
                 text_lower, table_context, schema
             )
@@ -1300,11 +1439,13 @@ class PipelineNL2SQLGenerator:
                 suppress_quantity_token=count_metric is not None,
             )
             conditions = self._schema_resolve_conditions(
-                text_lower,
-                self._extract_conditions_enhanced(text_lower, text),
+                condition_text,
+                self._extract_conditions_enhanced(condition_text, condition_original),
                 table_context,
                 schema,
             )
+            if whose_condition is not None:
+                conditions = [*conditions, whose_condition]
             parsed = self._parse_text(text_lower, text)
             parsed.update(analysis)
             operation = self._detect_operation(text_lower)
