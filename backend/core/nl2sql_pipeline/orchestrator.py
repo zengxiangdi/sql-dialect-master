@@ -98,6 +98,33 @@ _DATE_INTERVAL = re.compile(
     re.IGNORECASE,
 )
 MAX_NL2SQL_DATE_INTERVAL_DAYS = 36525
+_SCHEMA_WHOSE_PREFIX = re.compile(
+    r"\bwhose\s+"
+    r"([A-Za-z_][A-Za-z0-9_$]*|"
+    r"[A-Za-z_][A-Za-z0-9_$]*\.[A-Za-z_][A-Za-z0-9_$]*|"
+    r"[A-Za-z_][A-Za-z0-9_$]*\.[A-Za-z_][A-Za-z0-9_$]*\.[A-Za-z_][A-Za-z0-9_$]*)\s+"
+    r"(is\s+not|isn't|is|equals|<>|!=|>=|<=|=|>|<)\s*",
+    re.IGNORECASE,
+)
+_SCHEMA_WHOSE_REJECTED_VALUES = {
+    "and", "or", "not", "is", "null", "true", "false", "unknown",
+    "select", "from", "where", "group", "order", "by", "limit",
+    "current_date", "current_timestamp", "now",
+}
+_SCHEMA_WHOSE_CJK_CONNECTORS = {"和", "或", "且", "并", "与", "跟", "及"}
+_SCHEMA_JOINED_ON_PREFIX = re.compile(
+    r"\b(?:(inner|left|right)\s+)?joined\s+on\b",
+    re.IGNORECASE,
+)
+_SCHEMA_JOINED_ON_OPERAND = re.compile(
+    r"[A-Za-z_][A-Za-z0-9_$]*\.[A-Za-z_][A-Za-z0-9_$]*"
+    r"(?:\.[A-Za-z_][A-Za-z0-9_$]*)?"
+)
+_SCHEMA_JOINED_WITH_PREFIX = re.compile(
+    r"\b(?:(inner|left|right)\s+)?joined\s+with\s+"
+    r"([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)\b",
+    re.IGNORECASE,
+)
 _SCHEMA_GROUP_LABEL_COLUMNS = {
     "部门": ("department", "dept"),
     "状态": ("status",),
@@ -1135,6 +1162,325 @@ class PipelineNL2SQLGenerator:
             resolved.append(rewritten)
         return resolved
 
+    @staticmethod
+    def _schema_mask_span(
+        text: str, span: tuple[int, int]
+    ) -> str:
+        start, end = span
+        return text[:start] + " " * (end - start) + text[end:]
+
+    def _schema_resolve_whose(
+        self,
+        text: str,
+        table: SchemaTableContext,
+        schema: SchemaContext,
+    ) -> tuple[str, tuple[int, int]] | None:
+        """Resolve one schema-aware ``whose`` predicate in linear time."""
+        executable = mask_non_executable(text)
+        match = _SCHEMA_WHOSE_PREFIX.search(executable)
+        if match is None:
+            return None
+        whose_matches = list(_SCHEMA_WHOSE_PREFIX.finditer(executable))
+        if len(whose_matches) != 1:
+            raise SchemaValidationError("multiple whose predicates are unsupported")
+        original_match = _SCHEMA_WHOSE_PREFIX.match(text, match.start())
+        if original_match is None:
+            raise SchemaValidationError("whose predicate is not executable")
+        match = original_match
+
+        raw_column, raw_operator = match.groups()
+        parts = raw_column.split(".")
+        column_name = parts[-1]
+        if len(parts) > 1:
+            candidates = schema.table_candidates(".".join(parts[:-1]))
+            if len(candidates) != 1 or candidates[0].key != table.key:
+                raise SchemaValidationError("whose column table is not the selected table")
+        canonical = schema.canonical_column(table, column_name)
+        if canonical is None:
+            if table.has_column_metadata:
+                raise SchemaValidationError("whose column is outside the schema")
+            canonical = column_name
+
+        position = match.end()
+        if position >= len(text):
+            raise SchemaValidationError("whose predicate value is missing")
+        quote = text[position] if text[position] in "'\"" else None
+        value_end = position
+        if quote is not None:
+            position += 1
+            value_chars: list[str] = []
+            closed = False
+            while position < len(text):
+                character = text[position]
+                if character == "\\" and position + 1 < len(text):
+                    value_chars.extend((character, text[position + 1]))
+                    position += 2
+                    continue
+                if character == quote:
+                    if position + 1 < len(text) and text[position + 1] == quote:
+                        value_chars.append(quote)
+                        position += 2
+                        continue
+                    closed = True
+                    position += 1
+                    break
+                value_chars.append(character)
+                position += 1
+            if not closed:
+                raise SchemaValidationError("whose quoted value is not closed")
+            value = "".join(value_chars)
+            literal = "'" + value.replace("'", "''") + "'"
+            value_end = position
+        else:
+            numeric = re.match(
+                r"-?(?:\d+(?:\.\d*)?|\.\d+)(?![\w$])",
+                text[position:],
+            )
+            if numeric is not None:
+                literal = numeric.group(0)
+                value_end = position + numeric.end()
+            else:
+                null_match = re.match(r"null(?![\w$])", text[position:], re.IGNORECASE)
+                if null_match is not None:
+                    literal = "NULL"
+                    value_end = position + null_match.end()
+                else:
+                    cjk_token = re.match(r"[\u4e00-\u9fff]+", text[position:])
+                    if cjk_token is not None:
+                        value = cjk_token.group(0)
+                        if any(connector in value for connector in _SCHEMA_WHOSE_CJK_CONNECTORS):
+                            raise SchemaValidationError("whose CJK value contains a connector")
+                        literal = "'" + value.replace("'", "''") + "'"
+                        value_end = position + cjk_token.end()
+                    else:
+                        token = re.match(r"[A-Za-z_][A-Za-z0-9_$]*(?![\w$])", text[position:])
+                        if token is None:
+                            raise SchemaValidationError("whose value is not a supported literal")
+                        value = token.group(0)
+                        if value.casefold() in _SCHEMA_WHOSE_REJECTED_VALUES:
+                            raise SchemaValidationError("whose value is a reserved word")
+                        after_token = text[position + token.end():].lstrip()
+                        if after_token.startswith("("):
+                            raise SchemaValidationError("whose function values are unsupported")
+                        literal = "'" + value.replace("'", "''") + "'"
+                        value_end = position + token.end()
+
+        operator = raw_operator.casefold()
+        if literal == "NULL":
+            if operator in {"is", "is not", "isn't"}:
+                predicate = f"{canonical} IS {'NOT ' if operator != 'is' else ''}NULL"
+            else:
+                raise SchemaValidationError("comparison with NULL is unsupported")
+        else:
+            normalized = {
+                "is": "=", "equals": "=", "is not": "!=", "isn't": "!=",
+                "<>": "!=",
+            }.get(operator, raw_operator)
+            predicate = f"{canonical} {normalized} {literal}"
+
+        tail = executable[value_end:]
+        if re.search(r"\bor\b|\bwhose\b|[()]", tail, re.IGNORECASE):
+            raise SchemaValidationError("complex whose predicates are unsupported")
+        stripped_tail = tail.strip()
+        if stripped_tail and not re.match(r"^and\b", stripped_tail, re.IGNORECASE):
+            raise SchemaValidationError("unexpected text after whose predicate")
+        span = (match.start(), value_end)
+        return predicate, span
+
+    def _schema_resolve_joined_on(
+        self,
+        text: str,
+        table_hint: Optional[str],
+        schema: SchemaContext,
+    ) -> tuple[SchemaTableContext, list[dict], tuple[int, int]] | None:
+        """Resolve one schema-aware qualified equality after ``joined on``."""
+        executable = mask_non_executable(text)
+        prefixes = list(_SCHEMA_JOINED_ON_PREFIX.finditer(executable))
+        if not prefixes:
+            return None
+        if re.search(r"\bjoined\s+with\b", executable, re.IGNORECASE):
+            raise SchemaValidationError("mixed joined-on and joined-with clauses are unsupported")
+        if len(prefixes) != 1:
+            raise SchemaValidationError("multiple joined-on clauses are unsupported")
+        if re.search(r"\b(?:per|each)\b|每个|各个|每位", executable, re.IGNORECASE):
+            raise SchemaValidationError("joined-on with group labels is unsupported")
+        prefix = prefixes[0]
+        original_prefix = _SCHEMA_JOINED_ON_PREFIX.match(text, prefix.start())
+        if original_prefix is None:
+            raise SchemaValidationError("joined-on clause is not executable")
+        prefix = original_prefix
+        kind = (prefix.group(1) or "inner").upper()
+        before_mentions = self._schema_table_mentions(text[:prefix.start()], schema)
+        if table_hint:
+            subject_candidates = schema.table_candidates(table_hint)
+            if len(subject_candidates) != 1:
+                raise SchemaValidationError("joined-on subject hint is ambiguous")
+            subject = subject_candidates[0]
+        elif before_mentions:
+            subject = before_mentions[0]
+        else:
+            raise SchemaValidationError("joined-on subject is missing")
+
+        remainder = executable[prefix.end():]
+        left_match = _SCHEMA_JOINED_ON_OPERAND.match(remainder.lstrip())
+        if left_match is None:
+            raise SchemaValidationError("joined-on left endpoint is invalid")
+        left_start = prefix.end() + (len(remainder) - len(remainder.lstrip()))
+        left_raw = left_match.group(0)
+        after_left = remainder.lstrip()[left_match.end():]
+        equals = re.match(r"\s*=\s*", after_left)
+        if equals is None:
+            raise SchemaValidationError("joined-on requires one equality")
+        right_offset = left_start + left_match.end() + equals.end()
+        right_match = _SCHEMA_JOINED_ON_OPERAND.match(executable[right_offset:])
+        if right_match is None:
+            raise SchemaValidationError("joined-on right endpoint is invalid")
+        right_raw = right_match.group(0)
+        value_end = right_offset + right_match.end()
+
+        tail = executable[value_end:]
+        stripped_tail = tail.strip()
+        if stripped_tail and not re.match(r"^(?:where|whose)\b", stripped_tail, re.IGNORECASE):
+            raise SchemaValidationError("unexpected text after joined-on equality")
+
+        def resolve_endpoint(raw: str) -> tuple[SchemaTableContext, str]:
+            parts = raw.split(".")
+            table_name = ".".join(parts[:-1])
+            candidates = schema.table_candidates(table_name)
+            if len(candidates) != 1:
+                raise SchemaValidationError("joined-on table is not unique")
+            table = candidates[0]
+            column = schema.canonical_column(table, parts[-1])
+            if column is None:
+                raise SchemaValidationError("joined-on column is outside the schema")
+            return table, column
+
+        left_table, left_column = resolve_endpoint(left_raw)
+        right_table, right_column = resolve_endpoint(right_raw)
+        if left_table.key == right_table.key:
+            raise SchemaValidationError("self joined-on is unsupported")
+        endpoint_tables = {left_table.key, right_table.key}
+        if subject.key not in endpoint_tables:
+            raise SchemaValidationError("joined-on subject is not an endpoint")
+        target_keys = endpoint_tables - {subject.key}
+        if len(target_keys) != 1:
+            raise SchemaValidationError("joined-on target is ambiguous")
+        target = right_table if right_table.key in target_keys else left_table
+        mentions = self._schema_table_mentions(text, schema)
+        if {table.key for table in mentions} - endpoint_tables:
+            raise SchemaValidationError("joined-on contains an extra table")
+
+        raw_relationships = [
+            relationship for relationship in schema.relationships
+            if {
+                relationship.from_table.casefold(), relationship.to_table.casefold()
+            } == endpoint_tables
+        ]
+        if raw_relationships:
+            def matches_relationship(relationship) -> bool:
+                declared = {
+                    (relationship.from_table.casefold(), relationship.from_column.casefold()),
+                    (relationship.to_table.casefold(), relationship.to_column.casefold()),
+                }
+                supplied = {
+                    (left_table.key, left_column.casefold()),
+                    (right_table.key, right_column.casefold()),
+                }
+                return declared == supplied
+
+            if sum(matches_relationship(item) for item in raw_relationships) != 1:
+                raise SchemaValidationError("joined-on does not match a unique relationship")
+
+        condition = (
+            f"{left_table.name}.{left_column} = "
+            f"{right_table.name}.{right_column}"
+        )
+        span = (prefix.start(), value_end)
+        return subject, [{
+            "type": kind,
+            "table": target.name,
+            "subject": subject.name,
+            "condition": condition,
+            "relational": False,
+            "join_spec": JoinSpec(kind=kind, matched_text="joined on"),
+        }], span
+
+    def _schema_resolve_joined_with(
+        self,
+        text: str,
+        table_hint: Optional[str],
+        schema: SchemaContext,
+    ) -> tuple[SchemaTableContext, list[dict], tuple[int, int]] | None:
+        """Resolve one relationship-backed physical ``joined with`` clause."""
+        executable = mask_non_executable(text)
+        matches = list(_SCHEMA_JOINED_WITH_PREFIX.finditer(executable))
+        if not matches:
+            return None
+        if len(matches) != 1 or re.search(r"\bjoined\s+on\b", executable, re.IGNORECASE):
+            raise SchemaValidationError("multiple or mixed joined clauses are unsupported")
+        match = matches[0]
+        original_match = _SCHEMA_JOINED_WITH_PREFIX.match(text, match.start())
+        if original_match is None:
+            raise SchemaValidationError("joined-with clause is not executable")
+        match = original_match
+        if re.search(
+            r"\b(?:per|each|group\s+by|grouped\s+by)\b|每个|各个|每位",
+            executable,
+            re.IGNORECASE,
+        ):
+            raise SchemaValidationError("joined-with grouping is unsupported")
+
+        kind = (match.group(1) or "inner").upper()
+        target_name = match.group(2)
+        target_candidates = schema.table_candidates(target_name)
+        if len(target_candidates) != 1:
+            raise SchemaValidationError("joined-with target is not unique")
+        target = target_candidates[0]
+        before_mentions = self._schema_table_mentions(text[:match.start()], schema)
+        if table_hint:
+            subject_candidates = schema.table_candidates(table_hint)
+            if len(subject_candidates) != 1:
+                raise SchemaValidationError("joined-with subject hint is ambiguous")
+            subject = subject_candidates[0]
+        elif before_mentions:
+            subject = before_mentions[0]
+        else:
+            raise SchemaValidationError("joined-with subject is missing")
+        if self._schema_text_match(text[:match.start()], target_name):
+            raise SchemaValidationError("joined-with target is repeated before the clause")
+        before_keys = {table.key for table in before_mentions}
+        if before_keys - {subject.key, target.key}:
+            raise SchemaValidationError("joined-with contains an extra table")
+        if subject.key == target.key:
+            raise SchemaValidationError("self joined-with is unsupported")
+
+        tail = executable[match.end():]
+        stripped_tail = tail.strip()
+        if stripped_tail and not re.match(r"^(?:where|whose)\b", stripped_tail, re.IGNORECASE):
+            raise SchemaValidationError("unexpected text after joined-with target")
+        relationships = [
+            relationship for relationship in schema.relationships
+            if {
+                relationship.from_table.casefold(), relationship.to_table.casefold()
+            } == {subject.key, target.key}
+        ]
+        if len(relationships) != 1:
+            raise SchemaValidationError("joined-with relationship is not unique")
+        relationship = relationships[0]
+        condition = (
+            f"{relationship.from_table}.{relationship.from_column} = "
+            f"{relationship.to_table}.{relationship.to_column}"
+        )
+        span = (match.start(), match.end())
+        return subject, [{
+            "type": kind,
+            "table": target.name,
+            "subject": subject.name,
+            "condition": condition,
+            "relational": False,
+            "join_spec": JoinSpec(kind=kind, matched_text="joined with"),
+        }], span
+
     def _schema_resolve_joins(
         self,
         text: str,
@@ -1267,9 +1613,19 @@ class PipelineNL2SQLGenerator:
         """Generate through the enhanced path with strict schema resolution."""
         try:
             executable_text = mask_non_executable(text)
-            label_resolution = self._schema_resolve_english_group_label(executable_text, schema)
-            if label_resolution is None:
-                label_resolution = self._schema_resolve_chinese_group_label(executable_text, schema)
+            joined_on_resolution = self._schema_resolve_joined_on(
+                text, table_hint, schema
+            )
+            joined_with_resolution = None
+            if joined_on_resolution is None:
+                joined_with_resolution = self._schema_resolve_joined_with(
+                    text, table_hint, schema
+                )
+            label_resolution = None
+            if joined_on_resolution is None and joined_with_resolution is None:
+                label_resolution = self._schema_resolve_english_group_label(executable_text, schema)
+                if label_resolution is None:
+                    label_resolution = self._schema_resolve_chinese_group_label(executable_text, schema)
             ignored_label_spans = (label_resolution[2],) if label_resolution else ()
             unknown_tables = self._schema_unknown_table_patterns(
                 text, schema, ignored_spans=ignored_label_spans
@@ -1280,7 +1636,15 @@ class PipelineNL2SQLGenerator:
                     dialect,
                     "The request references tables outside the provided schema.",
                 )
-            if label_resolution is not None:
+            joined_on_span = None
+            joined_with_span = None
+            if joined_on_resolution is not None:
+                table_context, joins, joined_on_span = joined_on_resolution
+                metric_text = self._schema_mask_span(text_lower, joined_on_span)
+            elif joined_with_resolution is not None:
+                table_context, joins, joined_with_span = joined_with_resolution
+                metric_text = self._schema_mask_span(text_lower, joined_with_span)
+            elif label_resolution is not None:
                 table_context = label_resolution[0]
                 label_group_column = label_resolution[1]
                 joins = []
@@ -1289,6 +1653,21 @@ class PipelineNL2SQLGenerator:
             else:
                 table_context, joins = self._schema_resolve_joins(text, table_hint, schema)
                 metric_text = text_lower
+            whose_resolution = self._schema_resolve_whose(text, table_context, schema)
+            whose_condition = None
+            condition_text = text_lower
+            condition_original = text
+            if joined_on_span is not None:
+                condition_text = self._schema_mask_span(condition_text, joined_on_span)
+                condition_original = self._schema_mask_span(condition_original, joined_on_span)
+            elif joined_with_span is not None:
+                condition_text = self._schema_mask_span(condition_text, joined_with_span)
+                condition_original = self._schema_mask_span(condition_original, joined_with_span)
+            if whose_resolution is not None:
+                whose_condition, whose_span = whose_resolution
+                metric_text = self._schema_mask_span(metric_text, whose_span)
+                condition_text = self._schema_mask_span(condition_text, whose_span)
+                condition_original = self._schema_mask_span(condition_original, whose_span)
             count_metric = self._schema_resolve_count_metric(
                 text_lower, table_context, schema
             )
@@ -1300,11 +1679,13 @@ class PipelineNL2SQLGenerator:
                 suppress_quantity_token=count_metric is not None,
             )
             conditions = self._schema_resolve_conditions(
-                text_lower,
-                self._extract_conditions_enhanced(text_lower, text),
+                condition_text,
+                self._extract_conditions_enhanced(condition_text, condition_original),
                 table_context,
                 schema,
             )
+            if whose_condition is not None:
+                conditions = [*conditions, whose_condition]
             parsed = self._parse_text(text_lower, text)
             parsed.update(analysis)
             operation = self._detect_operation(text_lower)
