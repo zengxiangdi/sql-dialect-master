@@ -2,6 +2,33 @@
 
 All notable changes to SQL Dialect Master are documented here.
 
+## [1.6.0] - 2026-11-03
+
+### New
+
+- Added schema-aware `whose` predicates for quoted strings, signed numbers,
+  NULL, date literals, and single-token CJK values.
+- Added explicit `joined on` support for qualified equality conditions with
+  INNER/LEFT/RIGHT joins, relationship consistency checks, and a controlled
+  no-relationship path.
+- Added relationship-backed `joined with` physical joins while preserving bare
+  `with` EXISTS semantics.
+- Masked explicit predicate and join clauses from projection resolution so
+  predicate and ON columns are not auto-selected.
+
+### Fixed
+
+- Kept unknown tables and columns, aliases, complex ON/whose forms, multiple
+  relationships, self-joins, and group-plus-join combinations fail closed.
+
+### Notes
+
+- Without a schema, existing behavior is unchanged.
+- Diagnostics for unmapped natural-language columns and multi-column ORDER BY
+  remain outside this release.
+- No API shape changes and no frontend code changes.
+- No dependency or lockfile changes.
+
 ## [1.5.0] - 2026-10-28
 
 ### New
