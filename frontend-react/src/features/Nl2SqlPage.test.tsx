@@ -125,6 +125,27 @@ describe("natural language query form", () => {
     });
   });
 
+  it("renders successful suggestions and keeps the empty case hidden", async () => {
+    const result = {
+      ...generatedResult,
+      suggestions: ["Possible unmapped column reference: \"password\"."],
+    };
+    const fetchMock = vi.fn().mockResolvedValue(response(result));
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderPage();
+    await user.type(screen.getByRole("textbox", { name: "Natural language" }), result.input_text);
+    await user.click(screen.getByRole("button", { name: "Generate SQL" }));
+    expect(await screen.findByText(result.suggestions[0])).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveAttribute("aria-live", "polite");
+
+    const emptyFetch = vi.fn().mockResolvedValue(response({ ...result, suggestions: [] }));
+    vi.stubGlobal("fetch", emptyFetch);
+    await user.click(screen.getByRole("button", { name: "Regenerate" }));
+    expect(await screen.findByRole("textbox", { name: "Generated SQL" })).toBeInTheDocument();
+    expect(screen.queryByText(result.suggestions[0])).not.toBeInTheDocument();
+  });
+
   it.each([
     { metadata: { provider: "llm", model: "openai/gpt-4.1-mini" }, label: "LLM · openai/gpt-4.1-mini" },
     { metadata: { provider: "deterministic", model: null }, label: "Deterministic" },
