@@ -2,6 +2,30 @@
 
 All notable changes to SQL Dialect Master are documented here.
 
+## [1.7.0] - 2026-11-04
+
+### New
+
+- Added schema-aware diagnostics suggestions for high-confidence unmapped
+  references on successful deterministic generation.
+- Covered `with <token>`, explicit projection conjunctions, and `by <token>`
+  contexts, excluding schema tables and columns, known values, SQL keywords,
+  quoted text, and ordinary prose.
+- Successful NL2SQL results in the React workspace now display non-empty
+  suggestions in an accessible status region.
+
+### Changed
+
+- Diagnostics are deduplicated, text-ordered, and capped at three messages.
+- SQL, success, schema_used, explanation, failure suggestions, and the
+  no-schema path remain unchanged.
+
+### Notes
+
+- Structured diagnostics API fields, Chinese free-word scanning, metrics-only
+  diagnostics, and multi-column ORDER BY remain outside this release.
+- No API field changes and no dependency or lockfile changes.
+
 ## [1.6.0] - 2026-11-03
 
 ### New
