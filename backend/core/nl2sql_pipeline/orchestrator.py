@@ -125,6 +125,15 @@ _SCHEMA_JOINED_WITH_PREFIX = re.compile(
     r"([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)\b",
     re.IGNORECASE,
 )
+_SCHEMA_DIAGNOSTIC_VALUES = {
+    "active", "inactive", "enabled", "disabled", "valid", "invalid",
+    "completed", "pending", "paid", "unpaid", "done", "true", "false",
+}
+_SCHEMA_DIAGNOSTIC_KEYWORDS = {
+    "and", "or", "not", "is", "where", "with", "by", "group", "grouped",
+    "order", "ordered", "sort", "sorted", "asc", "desc", "ascending",
+    "descending", "users", "user", "show", "list", "find", "display",
+}
 _SCHEMA_GROUP_LABEL_COLUMNS = {
     "部门": ("department", "dept"),
     "状态": ("status",),
@@ -1481,6 +1490,101 @@ class PipelineNL2SQLGenerator:
             "join_spec": JoinSpec(kind=kind, matched_text="joined with"),
         }], span
 
+    def _schema_diagnostic_suggestions(
+        self,
+        text: str,
+        table: SchemaTableContext,
+        schema: SchemaContext,
+        columns: list[str],
+        existing: list,
+    ) -> list:
+        """Return high-confidence unmapped-column suggestions for schema success."""
+        if not table.has_column_metadata:
+            return list(existing)
+        masked = mask_non_executable(text)
+        schema_tables = {candidate.key for candidate in schema.tables}
+        schema_columns = {column.casefold() for column in table.columns}
+        mapped_aliases = {
+            alias.casefold(): canonical
+            for alias, canonical in self.COLUMN_PATTERNS.items()
+        }
+        warnings: list[tuple[int, str]] = []
+        seen: set[str] = set()
+
+        def add_warning(position: int, token: str, *, projection: bool = False) -> None:
+            key = token.casefold()
+            if key in seen or key in schema_columns:
+                return
+            canonical = mapped_aliases.get(key)
+            if canonical is not None and canonical.casefold() in schema_columns:
+                return
+            message = (
+                f'Possible projection term "{token}" was not resolved against the selected schema table.'
+                if projection else
+                f'Possible unmapped column reference: "{token}". '
+                "Provide it in column_hints if it is a schema column."
+            )
+            seen.add(key)
+            warnings.append((position, message))
+
+        # Strong identifier contexts: `with token` and `by snake_case`.
+        for match in re.finditer(
+            r"\b(?:with|by)\s+([A-Za-z_][A-Za-z0-9_$]*)",
+            masked,
+            re.IGNORECASE,
+        ):
+            token = match.group(1)
+            lowered = token.casefold()
+            if lowered in _SCHEMA_DIAGNOSTIC_KEYWORDS | _SCHEMA_DIAGNOSTIC_VALUES:
+                continue
+            if schema.table_candidates(token) or lowered in schema_tables:
+                continue
+            if schema.canonical_column(table, token) is not None:
+                continue
+            if lowered in mapped_aliases and mapped_aliases[lowered].casefold() in schema_columns:
+                continue
+            if match.group(0).casefold().startswith("by ") and "_" not in token:
+                continue
+            add_warning(match.start(1), token)
+
+        # Explicit projection conjunctions: only mapped aliases after a
+        # show/list/display marker, before any predicate/clause boundary.
+        projection_marker = re.search(r"\b(?:show|list|display|select)\b", masked, re.IGNORECASE)
+        if projection_marker:
+            boundary = re.search(
+                r"\b(?:where|whose|order(?:ed)?\s+by|sort(?:ed)?\s+by|group(?:ed)?\s+by)\b",
+                masked[projection_marker.end():],
+                re.IGNORECASE,
+            )
+            projection_end = (
+                projection_marker.end() + boundary.start()
+                if boundary is not None else len(masked)
+            )
+            for alias, canonical in sorted(self.COLUMN_PATTERNS.items(), key=lambda item: -len(item[0])):
+                if canonical.casefold() in schema_columns:
+                    continue
+                aliases = [alias]
+                if alias.isascii() and not alias.casefold().endswith("s"):
+                    aliases.append(alias + "s")
+                for candidate_alias in aliases:
+                    expression = re.escape(candidate_alias)
+                    if not re.search(r"[\u4e00-\u9fff]", candidate_alias):
+                        expression = rf"(?<![\w$]){expression}(?![\w$])"
+                    for match in re.finditer(expression, masked[projection_marker.end():projection_end], re.IGNORECASE):
+                        add_warning(
+                            projection_marker.end() + match.start(),
+                            alias,
+                            projection=True,
+                        )
+
+        warnings.sort(key=lambda item: item[0])
+        diagnostic_messages = [message for _, message in warnings[:3]]
+        combined: list = []
+        for suggestion in [*existing, *diagnostic_messages]:
+            if suggestion not in combined:
+                combined.append(suggestion)
+        return combined[:3]
+
     def _schema_resolve_joins(
         self,
         text: str,
@@ -1734,7 +1838,16 @@ class PipelineNL2SQLGenerator:
                 ),
                 parsed_elements=parsed,
             ))
-            return self._schema_finalize(result, schema)
+            finalized = self._schema_finalize(result, schema)
+            if finalized.success and finalized.schema_used:
+                finalized.suggestions = self._schema_diagnostic_suggestions(
+                    text,
+                    table_context,
+                    schema,
+                    columns,
+                    list(finalized.suggestions),
+                )
+            return finalized
         except (SchemaValidationError, ValueError):
             return self._schema_failure(
                 text,
