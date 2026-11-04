@@ -223,9 +223,13 @@ def render_sql(ir: QueryIR) -> Tuple[Optional[str], str, float, GenerationEviden
             group_cols = [c for c in columns if c != "*"]
             if group_cols:
                 sql += f"\nGROUP BY {', '.join(group_cols)}"
-        if ordering:
-            sql += f"\nORDER BY {ordering[0]} {ordering[1]}"
-            explanation_parts.append(f"排序: {ordering[0]} {ordering[1]}")
+        active_orderings = ir.orderings or ([ordering] if ordering else [])
+        if active_orderings:
+            ordering_sql = ", ".join(
+                f"{column} {direction}" for column, direction in active_orderings
+            )
+            sql += f"\nORDER BY {ordering_sql}"
+            explanation_parts.append(f"排序: {ordering_sql}")
         if limit is not None:
             sql = add_limit(sql, limit, dialect)
             explanation_parts.append(f"限制: {limit}条")

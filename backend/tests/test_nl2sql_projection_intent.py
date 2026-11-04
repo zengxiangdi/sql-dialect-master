@@ -174,10 +174,10 @@ def test_schema_unknown_ordering_column_fails_closed():
     assert result.sql is None
 
 
-def test_schema_multiple_ordering_columns_fail_closed_until_batch_two():
+def test_schema_multiple_ordering_columns_are_resolved_in_batch_one():
     result = generate("Show users ordered by name and email")
-    assert result.success is False
-    assert result.sql is None
+    assert result.success
+    assert "ORDER BY name ASC, email ASC" in result.sql
 
 
 def test_schema_plain_select_and_exists_are_unchanged():
