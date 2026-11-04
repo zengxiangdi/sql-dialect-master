@@ -84,6 +84,7 @@
 .explanation { display: flex; align-items: flex-start; gap: 10px; margin: 16px 0; padding: 12px; border: 1px solid var(--border-soft); border-radius: 8px; background: var(--surface-2); }
 .explanation > svg { flex-shrink: 0; margin-top: 2px; color: var(--accent); }
 .explanation p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.nl-suggestions { margin: 0; padding-left: 18px; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .nl-result-card summary { color: var(--muted); font-size: 12px; cursor: pointer; }
 .nl-result-card > .card-header { flex-wrap: wrap; }
 .nl-result-meta { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; min-width: 0; max-width: 100%; }
