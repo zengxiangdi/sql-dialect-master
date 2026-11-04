@@ -78,6 +78,44 @@ def test_partial_projection_warns_in_text_order_and_caps_three():
     assert b1_messages(failed) == []
 
 
+def test_projection_token_scan_flags_allowlisted_and_snake_case_terms():
+    missing = schema(["id", "name", "status"])
+    for text, token in [
+        ("show user names and password", "password"),
+        ("show user names and nickname", "nickname"),
+        ("show user names and unknown_col", "unknown_col"),
+    ]:
+        result = generate(text, missing)
+        assert result.success
+        assert any(f'"{token}"' in item for item in b1_messages(result))
+
+    combined = generate("show user emails and password", missing)
+    assert combined.success
+    messages = b1_messages(combined)
+    assert len(messages) == 2
+    assert '"email"' in messages[0]
+    assert '"password"' in messages[1]
+
+
+def test_projection_token_scan_has_no_common_word_false_positives():
+    for text in [
+        "show user names and active",
+        "show user names and orders",
+        "show user names and foo",
+    ]:
+        result = generate(text, schema(["id", "name", "status"], orders=True))
+        assert not b1_messages(result)
+
+
+def test_projection_token_scan_skips_columns_present_in_schema():
+    result = generate(
+        "show user names and password and nickname",
+        schema(["id", "name", "password", "nickname"]),
+    )
+    assert result.success
+    assert b1_messages(result) == []
+
+
 def test_chinese_free_text_is_not_scanned():
     result = generate("查询用户昵称", schema(["id", "name"]))
     assert result.success

@@ -134,6 +134,9 @@ _SCHEMA_DIAGNOSTIC_KEYWORDS = {
     "order", "ordered", "sort", "sorted", "asc", "desc", "ascending",
     "descending", "users", "user", "show", "list", "find", "display",
 }
+_SCHEMA_DIAGNOSTIC_COLUMN_ALLOWLIST = {
+    "password", "nickname", "token", "hash", "bio", "avatar",
+}
 _SCHEMA_GROUP_LABEL_COLUMNS = {
     "部门": ("department", "dept"),
     "状态": ("status",),
@@ -1503,6 +1506,11 @@ class PipelineNL2SQLGenerator:
             return list(existing)
         masked = mask_non_executable(text)
         schema_tables = {candidate.key for candidate in schema.tables}
+        table_aliases = {
+            pattern.casefold() for pattern in self.TABLE_PATTERNS
+        } | {
+            mapped.casefold() for mapped in self.TABLE_PATTERNS.values()
+        }
         schema_columns = {column.casefold() for column in table.columns}
         mapped_aliases = {
             alias.casefold(): canonical
@@ -1538,6 +1546,8 @@ class PipelineNL2SQLGenerator:
             if lowered in _SCHEMA_DIAGNOSTIC_KEYWORDS | _SCHEMA_DIAGNOSTIC_VALUES:
                 continue
             if schema.table_candidates(token) or lowered in schema_tables:
+                continue
+            if lowered in table_aliases:
                 continue
             if schema.canonical_column(table, token) is not None:
                 continue
@@ -1576,6 +1586,32 @@ class PipelineNL2SQLGenerator:
                             alias,
                             projection=True,
                         )
+            projection_slice = masked[projection_marker.end():projection_end]
+            for token_match in re.finditer(
+                r"[A-Za-z_][A-Za-z0-9_$]*", projection_slice
+            ):
+                token = token_match.group(0)
+                lowered = token.casefold()
+                if (
+                    lowered in _SCHEMA_DIAGNOSTIC_KEYWORDS
+                    or lowered in _SCHEMA_DIAGNOSTIC_VALUES
+                    or lowered in table_aliases
+                    or lowered in schema_tables
+                    or lowered in schema_columns
+                ):
+                    continue
+                canonical = mapped_aliases.get(lowered)
+                if canonical is not None and canonical.casefold() in schema_columns:
+                    continue
+                if canonical is None and (
+                    "_" not in token and lowered not in _SCHEMA_DIAGNOSTIC_COLUMN_ALLOWLIST
+                ):
+                    continue
+                add_warning(
+                    projection_marker.end() + token_match.start(),
+                    canonical or token,
+                    projection=True,
+                )
 
         warnings.sort(key=lambda item: item[0])
         diagnostic_messages = [message for _, message in warnings[:3]]
