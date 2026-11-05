@@ -2,6 +2,32 @@
 
 All notable changes to SQL Dialect Master are documented here.
 
+## [1.8.0] - 2026-11-05
+
+### New
+
+- Added schema-aware multi-column ORDER BY with comma and `and` separators,
+  per-column ASC/DESC directions, qualified subject columns, and a
+  five-column limit.
+- Added an optional `orderings` list to `QueryIR` while preserving the legacy
+  single-column tuple used by the no-schema path.
+- Composed multi-column ordering with `whose` and explicit `joined on/with`
+  requests when every ordering column belongs to the subject table.
+- Allowed multi-column ordering with DISTINCT only when every ordering column
+  is present in the explicit projection.
+
+### Fixed
+
+- Kept unknown, duplicate, empty, target-table, function/expression, alias,
+  GROUP/COUNT/aggregate, and group-label ordering combinations fail closed.
+- Kept all no-schema ordering output unchanged.
+
+### Notes
+
+- Ordering by target-table columns, aggregate aliases, GROUP BY/aggregate
+  combinations, and Chinese ordering words remain outside this release.
+- No API, frontend, dependency, or lockfile changes.
+
 ## [1.7.0] - 2026-11-04
 
 ### New
