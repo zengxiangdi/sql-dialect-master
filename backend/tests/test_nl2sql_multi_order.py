@@ -12,7 +12,7 @@ from backend.core.nl2sql_pipeline.renderer import render_sql
 USERS_SCHEMA = SchemaContext.from_mapping({
     "tables": [
         {"name": "users", "columns": [
-            {"name": "id"}, {"name": "name"}, {"name": "email"},
+            {"name": "id"}, {"name": "name"}, {"name": "email"}, {"name": "nickname"},
             {"name": "created_at"}, {"name": "status"}, {"name": "phone"},
             {"name": "age"}, {"name": "price"},
         ]},
@@ -80,11 +80,8 @@ def test_qualified_subject_columns_are_supported():
 
 
 @pytest.mark.parametrize("text", [
-    "users joined with orders ordered by name, email",
     "show users group by name ordered by email, created_at",
     "count orders by user_id ordered by id, amount",
-    "find users whose nickname is bob ordered by name, email",
-    "show distinct users ordered by name, email",
 ])
 def test_multi_ordering_combinations_fail_closed_in_batch_one(text):
     result = generate(text)
@@ -92,19 +89,56 @@ def test_multi_ordering_combinations_fail_closed_in_batch_one(text):
     assert result.sql is None
 
 
+@pytest.mark.parametrize("text,order", [
+    ("find users whose nickname is bob ordered by name, email", "ORDER BY name ASC, email ASC"),
+    ("users joined on orders.user_id = users.id ordered by name, email", "ORDER BY name ASC, email ASC"),
+    ("users joined with orders ordered by name, email", "ORDER BY name ASC, email ASC"),
+])
+def test_multi_ordering_composes_with_subject_whose_and_joins(text, order):
+    result = generate(text)
+    assert result.success, result.explanation
+    assert order in body(result)
+
+
+def test_multi_ordering_rejects_join_target_column():
+    result = generate("users joined with orders ordered by amount, name")
+    assert result.success is False
+    assert result.sql is None
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("find distinct user emails and names ordered by email, name", "ORDER BY email ASC, name ASC"),
+])
+def test_distinct_multi_ordering_requires_all_projected(text, expected):
+    result = generate(text)
+    assert result.success
+    assert expected in body(result)
+
+
+@pytest.mark.parametrize("text", [
+    "find distinct user emails ordered by email, name",
+    "find distinct users ordered by name, email",
+])
+def test_distinct_multi_ordering_rejects_unprojected_columns(text):
+    result = generate(text)
+    assert result.success is False
+    assert result.sql is None
+
+
 def test_multi_ordering_no_schema_outputs_are_unchanged():
     expected = {
-        "show users ordered by name, email": "SELECT email, name",
-        "show users ordered by name and email": "SELECT name, email",
-        "show users sorted by name and email": "ORDER BY name ASC",
+        "show users ordered by name, email": ("name", "email"),
+        "show users ordered by name and email": ("name", "email"),
+        "show users sorted by name and email": ("ORDER BY name ASC",),
     }
     generator = NL2SQLGenerator()
-    for text, fragment in expected.items():
+    for text, fragments in expected.items():
         first = generator.generate(text, "postgres")
         second = generator.generate(text, "postgres")
         assert first.success and second.success
         assert first.sql == second.sql
-        assert fragment in first.sql
+        for fragment in fragments:
+            assert fragment in first.sql
         assert first.schema_used is False
         assert first.suggestions == second.suggestions
 

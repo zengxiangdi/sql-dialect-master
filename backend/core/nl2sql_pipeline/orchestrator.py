@@ -1307,7 +1307,11 @@ class PipelineNL2SQLGenerator:
         if re.search(r"\bor\b|\bwhose\b|[()]", tail, re.IGNORECASE):
             raise SchemaValidationError("complex whose predicates are unsupported")
         stripped_tail = tail.strip()
-        if stripped_tail and not re.match(r"^and\b", stripped_tail, re.IGNORECASE):
+        if stripped_tail and not re.match(
+            r"^(?:and|order(?:ed)?\s+by|sort(?:ed)?\s+by)\b",
+            stripped_tail,
+            re.IGNORECASE,
+        ):
             raise SchemaValidationError("unexpected text after whose predicate")
         span = (match.start(), value_end)
         return predicate, span
@@ -1365,7 +1369,11 @@ class PipelineNL2SQLGenerator:
 
         tail = executable[value_end:]
         stripped_tail = tail.strip()
-        if stripped_tail and not re.match(r"^(?:where|whose)\b", stripped_tail, re.IGNORECASE):
+        if stripped_tail and not re.match(
+            r"^(?:where|whose|order(?:ed)?\s+by|sort(?:ed)?\s+by)\b",
+            stripped_tail,
+            re.IGNORECASE,
+        ):
             raise SchemaValidationError("unexpected text after joined-on equality")
 
         def resolve_endpoint(raw: str) -> tuple[SchemaTableContext, str]:
@@ -1481,7 +1489,11 @@ class PipelineNL2SQLGenerator:
 
         tail = executable[match.end():]
         stripped_tail = tail.strip()
-        if stripped_tail and not re.match(r"^(?:where|whose)\b", stripped_tail, re.IGNORECASE):
+        if stripped_tail and not re.match(
+            r"^(?:where|whose|order(?:ed)?\s+by|sort(?:ed)?\s+by)\b",
+            stripped_tail,
+            re.IGNORECASE,
+        ):
             raise SchemaValidationError("unexpected text after joined-with target")
         relationships = [
             relationship for relationship in schema.relationships
@@ -1859,12 +1871,24 @@ class PipelineNL2SQLGenerator:
                 else []
             )
             if len(ordering_candidates) > 1 and (
-                joins or group_by or aggregations or label_resolution is not None
-                or whose_resolution is not None or distinct
+                group_by or aggregations or label_resolution is not None
             ):
                 raise SchemaValidationError(
                     "multi-column ORDER BY combinations are unsupported"
                 )
+            if len(ordering_candidates) > 1 and distinct:
+                if columns == ["*"]:
+                    raise SchemaValidationError(
+                        "DISTINCT * cannot be combined with multi-column ORDER BY"
+                    )
+                projected = {
+                    column.rsplit(".", 1)[-1].casefold()
+                    for column in columns
+                }
+                if any(column.casefold() not in projected for column, _ in ordering_candidates):
+                    raise SchemaValidationError(
+                        "DISTINCT ORDER BY columns must be projected"
+                    )
             ordering = ordering_candidates[0] if len(ordering_candidates) == 1 else None
             orderings = ordering_candidates if len(ordering_candidates) > 1 else None
             limit = self._extract_limit(text_lower)
