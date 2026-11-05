@@ -22,6 +22,9 @@ class SchemaValidationError(ValueError):
     """Raised when generated SQL cannot be grounded in a schema."""
 
 
+MAX_SCHEMA_RELATIONSHIP_COLUMN_PAIRS = 1024
+
+
 def _identifier_parts(value: object) -> tuple[str, ...]:
     if not isinstance(value, str):
         raise SchemaValidationError("invalid schema identifier")
@@ -53,9 +56,20 @@ class SchemaRelationshipContext:
     """One explicitly declared relationship between two schema tables."""
 
     from_table: str
-    from_column: str
     to_table: str
-    to_column: str
+    column_pairs: tuple[tuple[str, str], ...]
+
+    @property
+    def from_column(self) -> str:
+        if len(self.column_pairs) != 1:
+            raise SchemaValidationError("composite relationship has no single from_column")
+        return self.column_pairs[0][0]
+
+    @property
+    def to_column(self) -> str:
+        if len(self.column_pairs) != 1:
+            raise SchemaValidationError("composite relationship has no single to_column")
+        return self.column_pairs[0][1]
 
     @property
     def pair(self) -> tuple[str, str]:
@@ -144,6 +158,7 @@ class SchemaContext:
                 column_candidates.setdefault(_key(column), []).append(table)
 
         relationships: list[SchemaRelationshipContext] = []
+        relationship_pair_count = 0
         relationships_by_pair: dict[
             tuple[str, str], list[SchemaRelationshipContext]
         ] = {}
@@ -153,37 +168,74 @@ class SchemaContext:
                 continue
             try:
                 from_table = ".".join(_identifier_parts(raw_relationship.get("from_table")))
-                from_column = ".".join(_identifier_parts(raw_relationship.get("from_column")))
                 to_table = ".".join(_identifier_parts(raw_relationship.get("to_table")))
-                to_column = ".".join(_identifier_parts(raw_relationship.get("to_column")))
             except SchemaValidationError:
+                valid = False
+                continue
+            has_legacy = "from_column" in raw_relationship or "to_column" in raw_relationship
+            has_composite = "columns" in raw_relationship
+            if has_legacy == has_composite:
+                valid = False
+                continue
+            if has_legacy:
+                try:
+                    from_column = ".".join(_identifier_parts(raw_relationship.get("from_column")))
+                    to_column = ".".join(_identifier_parts(raw_relationship.get("to_column")))
+                    column_pairs = ((from_column, to_column),)
+                except SchemaValidationError:
+                    valid = False
+                    continue
+            else:
+                raw_pairs = raw_relationship.get("columns")
+                if not isinstance(raw_pairs, (list, tuple)) or not 1 <= len(raw_pairs) <= 8:
+                    valid = False
+                    continue
+                parsed_pairs: list[tuple[str, str]] = []
+                seen_pairs: set[tuple[str, str]] = set()
+                for raw_pair in raw_pairs:
+                    if not isinstance(raw_pair, Mapping):
+                        valid = False
+                        break
+                    try:
+                        pair = (
+                            ".".join(_identifier_parts(raw_pair.get("from_column"))),
+                            ".".join(_identifier_parts(raw_pair.get("to_column"))),
+                        )
+                    except SchemaValidationError:
+                        valid = False
+                        break
+                    pair_key = (_key(pair[0]), _key(pair[1]))
+                    if pair_key in seen_pairs:
+                        valid = False
+                        break
+                    seen_pairs.add(pair_key)
+                    parsed_pairs.append(pair)
+                if not valid or len(parsed_pairs) == 0:
+                    continue
+                column_pairs = tuple(parsed_pairs)
+            relationship_pair_count += len(column_pairs)
+            if relationship_pair_count > MAX_SCHEMA_RELATIONSHIP_COLUMN_PAIRS:
                 valid = False
                 continue
             relationship = SchemaRelationshipContext(
                 from_table=from_table,
-                from_column=from_column,
                 to_table=to_table,
-                to_column=to_column,
+                column_pairs=column_pairs,
             )
             from_context = tables_by_key.get(_key(from_table))
             to_context = tables_by_key.get(_key(to_table))
             if from_context is None or to_context is None:
                 valid = False
-            if from_context and from_context.has_column_metadata and _key(from_column) not in {
-                _key(column) for column in from_context.columns
-            }:
-                valid = False
-            if to_context and to_context.has_column_metadata and _key(to_column) not in {
-                _key(column) for column in to_context.columns
-            }:
-                valid = False
+            if from_context and from_context.has_column_metadata:
+                valid = valid and all(_key(pair[0]) in {_key(column) for column in from_context.columns} for pair in column_pairs)
+            if to_context and to_context.has_column_metadata:
+                valid = valid and all(_key(pair[1]) in {_key(column) for column in to_context.columns} for pair in column_pairs)
             relationships.append(relationship)
             relationships_by_pair.setdefault(relationship.pair, []).append(relationship)
             reverse = SchemaRelationshipContext(
                 from_table=to_table,
-                from_column=to_column,
                 to_table=from_table,
-                to_column=from_column,
+                column_pairs=tuple((to_column, from_column) for from_column, to_column in column_pairs),
             )
             relationships_by_pair.setdefault(reverse.pair, []).append(reverse)
 

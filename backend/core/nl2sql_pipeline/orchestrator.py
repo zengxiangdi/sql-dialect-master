@@ -820,7 +820,9 @@ class PipelineNL2SQLGenerator:
                 f"{table_singular}_id".casefold(),
                 f"{table_basename}_id".casefold(),
             }
-            from_column = relationships[0].from_column
+            if len(relationships[0].column_pairs) != 1:
+                raise SchemaValidationError("composite group-label relationship is unsupported")
+            from_column = relationships[0].column_pairs[0][0]
             if from_column.casefold() not in allowed_foreign_keys:
                 raise SchemaValidationError(
                     "schema group label relationship has an unsupported foreign key"
@@ -1411,9 +1413,12 @@ class PipelineNL2SQLGenerator:
         ]
         if raw_relationships:
             def matches_relationship(relationship) -> bool:
+                if len(relationship.column_pairs) != 1:
+                    return False
+                from_column, to_column = relationship.column_pairs[0]
                 declared = {
-                    (relationship.from_table.casefold(), relationship.from_column.casefold()),
-                    (relationship.to_table.casefold(), relationship.to_column.casefold()),
+                    (relationship.from_table.casefold(), from_column.casefold()),
+                    (relationship.to_table.casefold(), to_column.casefold()),
                 }
                 supplied = {
                     (left_table.key, left_column.casefold()),
@@ -1504,9 +1509,9 @@ class PipelineNL2SQLGenerator:
         if len(relationships) != 1:
             raise SchemaValidationError("joined-with relationship is not unique")
         relationship = relationships[0]
-        condition = (
-            f"{relationship.from_table}.{relationship.from_column} = "
-            f"{relationship.to_table}.{relationship.to_column}"
+        condition = " AND ".join(
+            f"{relationship.from_table}.{from_column} = {relationship.to_table}.{to_column}"
+            for from_column, to_column in relationship.column_pairs
         )
         span = (match.start(), match.end())
         return subject, [{
@@ -1729,9 +1734,10 @@ class PipelineNL2SQLGenerator:
             condition = None
             if len(candidates) == 1:
                 relationship = candidates[0]
-                condition = (
-                    f"{relationship.from_table}.{relationship.from_column} = "
-                    f"{relationship.to_table}.{relationship.to_column}"
+                condition = " AND ".join(
+                    f"{relationship.from_table}.{from_column} = "
+                    f"{relationship.to_table}.{to_column}"
+                    for from_column, to_column in relationship.column_pairs
                 )
             joins.append({
                 "type": join_type,
