@@ -35,6 +35,7 @@ class QueryIR:
     distinct: bool
     dialect: str
     evidence: GenerationEvidence = field(default_factory=GenerationEvidence)
+    orderings: Optional[List[Tuple[str, str]]] = None
 
 
 def build_ir(
@@ -49,6 +50,7 @@ def build_ir(
     joins: List[Dict],
     distinct: bool,
     dialect: str,
+    orderings: Optional[List[Tuple[str, str]]] = None,
 ) -> QueryIR:
     """Thin positional-arg adapter mirroring the legacy call site.
 
@@ -67,4 +69,5 @@ def build_ir(
         joins=joins,
         distinct=distinct,
         dialect=dialect,
+        orderings=orderings,
     )

@@ -983,39 +983,52 @@ class PipelineNL2SQLGenerator:
         text: str,
         table: SchemaTableContext,
         schema: SchemaContext,
-    ) -> Optional[Tuple[str, str]]:
-        """Resolve one explicit schema-aware ORDER BY target."""
+    ) -> list[tuple[str, str]]:
+        """Resolve schema-aware ORDER BY targets without changing no-schema extraction."""
         match = re.search(
-            r"\b(?:order(?:ed)?|sort(?:ed)?)\s+by\s+"
-            r"([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)"
-            r"(.*)$",
+            r"\b(?:order(?:ed)?|sort(?:ed)?)\s+by\s+",
             text,
             re.IGNORECASE,
         )
         if match is None:
-            return self._extract_ordering(text)
-        raw_column, tail = match.groups()
-        direction = "ASC"
-        direction_match = re.match(
-            r"\s+(ascending|descending|asc|desc|升序|降序)\b",
-            tail,
+            legacy = self._extract_ordering(text)
+            return [legacy] if legacy else []
+        tail = text[match.end():]
+        boundary = re.search(r"\b(?:where|whose|limit)\b", tail, re.IGNORECASE)
+        clause = tail[:boundary.start()] if boundary else tail
+        if re.search(r"\bor\b|[()\u4e00-\u9fff]", clause, re.IGNORECASE):
+            raise SchemaValidationError("unsupported multi-column ordering syntax")
+        items = re.split(r"\s*,\s*|\s+and\s+", clause, flags=re.IGNORECASE)
+        if not items or any(not item.strip() for item in items) or len(items) > 5:
+            raise SchemaValidationError("invalid or excessive ORDER BY columns")
+        resolved: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        identifier = r"[A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*){0,2}"
+        item_pattern = re.compile(
+            rf"^\s*({identifier})\s*(?:(ascending|descending|asc|desc)\s*)?$",
             re.IGNORECASE,
         )
-        if direction_match:
-            direction = "DESC" if direction_match.group(1).casefold() in {"descending", "desc", "降序"} else "ASC"
-            tail = tail[direction_match.end():]
-        if tail.strip(" \t\r\n,.;，。；"):
-            raise SchemaValidationError("multiple schema-aware ordering columns are unsupported")
-        parts = raw_column.split(".")
-        column_name = parts[-1]
-        if len(parts) > 1:
-            candidates = schema.table_candidates(".".join(parts[:-1]))
-            if len(candidates) != 1 or candidates[0].key != table.key:
-                raise SchemaValidationError("ordering column table is not the selected schema table")
-        canonical = schema.canonical_column(table, column_name)
-        if canonical is None:
-            raise SchemaValidationError("ordering column is outside the schema")
-        return canonical, direction
+        for item in items:
+            item_match = item_pattern.fullmatch(item)
+            if item_match is None:
+                raise SchemaValidationError("invalid ORDER BY column")
+            raw_column, raw_direction = item_match.groups()
+            parts = raw_column.split(".")
+            column_name = parts[-1]
+            if len(parts) > 1:
+                candidates = schema.table_candidates(".".join(parts[:-1]))
+                if len(candidates) != 1 or candidates[0].key != table.key:
+                    raise SchemaValidationError("ordering column table is not the selected schema table")
+            canonical = schema.canonical_column(table, column_name)
+            if canonical is None:
+                raise SchemaValidationError("ordering column is outside the schema")
+            key = canonical.casefold()
+            if key in seen:
+                raise SchemaValidationError("duplicate ORDER BY column")
+            seen.add(key)
+            direction = "DESC" if raw_direction and raw_direction.casefold() in {"descending", "desc"} else "ASC"
+            resolved.append((canonical, direction))
+        return resolved
 
     def _schema_resolve_count_metric(
         self,
@@ -1294,7 +1307,11 @@ class PipelineNL2SQLGenerator:
         if re.search(r"\bor\b|\bwhose\b|[()]", tail, re.IGNORECASE):
             raise SchemaValidationError("complex whose predicates are unsupported")
         stripped_tail = tail.strip()
-        if stripped_tail and not re.match(r"^and\b", stripped_tail, re.IGNORECASE):
+        if stripped_tail and not re.match(
+            r"^(?:and|order(?:ed)?\s+by|sort(?:ed)?\s+by)\b",
+            stripped_tail,
+            re.IGNORECASE,
+        ):
             raise SchemaValidationError("unexpected text after whose predicate")
         span = (match.start(), value_end)
         return predicate, span
@@ -1352,7 +1369,11 @@ class PipelineNL2SQLGenerator:
 
         tail = executable[value_end:]
         stripped_tail = tail.strip()
-        if stripped_tail and not re.match(r"^(?:where|whose)\b", stripped_tail, re.IGNORECASE):
+        if stripped_tail and not re.match(
+            r"^(?:where|whose|order(?:ed)?\s+by|sort(?:ed)?\s+by)\b",
+            stripped_tail,
+            re.IGNORECASE,
+        ):
             raise SchemaValidationError("unexpected text after joined-on equality")
 
         def resolve_endpoint(raw: str) -> tuple[SchemaTableContext, str]:
@@ -1468,7 +1489,11 @@ class PipelineNL2SQLGenerator:
 
         tail = executable[match.end():]
         stripped_tail = tail.strip()
-        if stripped_tail and not re.match(r"^(?:where|whose)\b", stripped_tail, re.IGNORECASE):
+        if stripped_tail and not re.match(
+            r"^(?:where|whose|order(?:ed)?\s+by|sort(?:ed)?\s+by)\b",
+            stripped_tail,
+            re.IGNORECASE,
+        ):
             raise SchemaValidationError("unexpected text after joined-with target")
         relationships = [
             relationship for relationship in schema.relationships
@@ -1839,13 +1864,34 @@ class PipelineNL2SQLGenerator:
                     text_lower, table_context, schema, aggregations
                 )
             )
-            ordering = (
+            distinct = self._check_distinct(text_lower)
+            ordering_candidates = (
                 self._schema_resolve_ordering(text_lower, table_context, schema)
                 if self._schema_has_explicit_ordering(text_lower)
-                else None
+                else []
             )
+            if len(ordering_candidates) > 1 and (
+                group_by or aggregations or label_resolution is not None
+            ):
+                raise SchemaValidationError(
+                    "multi-column ORDER BY combinations are unsupported"
+                )
+            if len(ordering_candidates) > 1 and distinct:
+                if columns == ["*"]:
+                    raise SchemaValidationError(
+                        "DISTINCT * cannot be combined with multi-column ORDER BY"
+                    )
+                projected = {
+                    column.rsplit(".", 1)[-1].casefold()
+                    for column in columns
+                }
+                if any(column.casefold() not in projected for column, _ in ordering_candidates):
+                    raise SchemaValidationError(
+                        "DISTINCT ORDER BY columns must be projected"
+                    )
+            ordering = ordering_candidates[0] if len(ordering_candidates) == 1 else None
+            orderings = ordering_candidates if len(ordering_candidates) > 1 else None
             limit = self._extract_limit(text_lower)
-            distinct = self._check_distinct(text_lower)
             render_columns = ["*"] if aggregations and not group_by else columns
             sql, explanation, confidence, evidence = self._build_sql_enhanced(
                 operation,
@@ -1859,6 +1905,7 @@ class PipelineNL2SQLGenerator:
                 joins,
                 distinct,
                 dialect,
+                orderings=orderings,
             )
             result = self._apply_confidence_policy(NL2SQLResult(
                 success=sql is not None,
@@ -2065,6 +2112,7 @@ class PipelineNL2SQLGenerator:
         joins,
         distinct,
         dialect,
+        orderings=None,
     ) -> tuple:
         """Build SQL statement from extracted components.
 
@@ -2075,6 +2123,7 @@ class PipelineNL2SQLGenerator:
         ir = _nl2sql_ir.build_ir(
             operation, table, columns, conditions, aggregations,
             group_by, ordering, limit, joins, distinct, dialect,
+            orderings=orderings,
         )
         return _render_sql_impl(ir)
 
