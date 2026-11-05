@@ -1680,6 +1680,56 @@ class PipelineNL2SQLGenerator:
             else:
                 subject = mentions[0]
 
+        def raw_edges_between(left: str, right: str) -> list:
+            return [
+                relationship for relationship in schema.relationships
+                if {relationship.from_table.casefold(), relationship.to_table.casefold()}
+                == {left.casefold(), right.casefold()}
+            ]
+
+        def condition_for(relationship, left: str, right: str) -> str:
+            if relationship.from_table.casefold() == left.casefold():
+                pairs = relationship.column_pairs
+                return " AND ".join(
+                    f"{relationship.from_table}.{from_column} = {relationship.to_table}.{to_column}"
+                    for from_column, to_column in pairs
+                )
+            return " AND ".join(
+                f"{relationship.to_table}.{to_column} = {relationship.from_table}.{from_column}"
+                for from_column, to_column in relationship.column_pairs
+            )
+
+        def shortest_path(target: SchemaTableContext) -> list[tuple[SchemaTableContext, str]] | None:
+            queue: list[tuple[SchemaTableContext, list[tuple[SchemaTableContext, str]]]] = [(subject, [])]
+            candidates: list[list[tuple[SchemaTableContext, str]]] = []
+            while queue:
+                current, path = queue.pop(0)
+                if len(path) >= 2:
+                    continue
+                for edge in schema.relationships:
+                    endpoints = {edge.from_table.casefold(), edge.to_table.casefold()}
+                    if current.key not in endpoints:
+                        continue
+                    next_name = edge.to_table if edge.from_table.casefold() == current.key else edge.from_table
+                    next_candidates = schema.table_candidates(next_name)
+                    if len(next_candidates) != 1:
+                        continue
+                    next_table = next_candidates[0]
+                    if next_table.key in {table.key for table, _ in path} or next_table.key == subject.key:
+                        continue
+                    next_path = [*path, (next_table, condition_for(edge, current.name, next_table.name))]
+                    if next_table.key == target.key:
+                        candidates.append(next_path)
+                    else:
+                        queue.append((next_table, next_path))
+            if not candidates:
+                return None
+            shortest = min(len(path) for path in candidates)
+            shortest_paths = [path for path in candidates if len(path) == shortest]
+            if len(shortest_paths) != 1:
+                raise SchemaValidationError("schema relationship path is ambiguous")
+            return shortest_paths[0]
+
         relational = self._has_relational_keyword(text.lower())
         lowered = text.lower()
         unsupported_outer = (
@@ -1730,21 +1780,33 @@ class PipelineNL2SQLGenerator:
         for related in mentions:
             if related.key == subject.key:
                 continue
-            candidates = schema.relationship_candidates(subject.name, related.name)
+            raw_candidates = raw_edges_between(subject.name, related.name)
             condition = None
-            if len(candidates) == 1:
-                relationship = candidates[0]
-                condition = " AND ".join(
-                    f"{relationship.from_table}.{from_column} = "
-                    f"{relationship.to_table}.{to_column}"
-                    for from_column, to_column in relationship.column_pairs
-                )
+            if len(raw_candidates) > 1:
+                raise SchemaValidationError("schema relationship is ambiguous")
+            if len(raw_candidates) == 1:
+                condition = condition_for(raw_candidates[0], subject.name, related.name)
+                joins.append({
+                    "type": join_type,
+                    "table": related.name,
+                    "subject": subject.name,
+                    "condition": condition,
+                    "relational": relational,
+                    "join_spec": join_spec,
+                })
+                continue
+            if not relational:
+                raise SchemaValidationError("multi-hop physical joins are unsupported")
+            path = shortest_path(related)
+            if path is None:
+                raise SchemaValidationError("schema relationship path is missing")
             joins.append({
                 "type": join_type,
                 "table": related.name,
                 "subject": subject.name,
-                "condition": condition,
-                "relational": relational,
+                "condition": path[0][1],
+                "path": [{"table": table.name, "condition": edge_condition} for table, edge_condition in path],
+                "relational": True,
                 "join_spec": join_spec,
             })
         return subject, joins
@@ -1871,6 +1933,11 @@ class PipelineNL2SQLGenerator:
                 )
             )
             distinct = self._check_distinct(text_lower)
+            if any(join.get("path") for join in joins):
+                if conditions or aggregations or group_by or label_resolution is not None or distinct:
+                    raise SchemaValidationError(
+                        "multi-hop paths cannot be combined with filters or aggregation"
+                    )
             ordering_candidates = (
                 self._schema_resolve_ordering(text_lower, table_context, schema)
                 if self._schema_has_explicit_ordering(text_lower)

@@ -1,6 +1,7 @@
 """Composite relationship normalization and direct SQL contracts."""
 import sqlite3
 import pytest
+import sqlglot
 from fastapi.testclient import TestClient
 from backend.api import main
 from backend.core.nl2sql import NL2SQLGenerator
@@ -63,6 +64,7 @@ def test_no_schema_unchanged():
 def test_composite_sql_parses(dialect):
     r=NL2SQLGenerator().generate('users join orders',dialect,schema=SchemaContext.from_mapping(composite_schema()));
     assert r.success
+    assert sqlglot.parse_one(r.sql, read=dialect) is not None
 
 def test_repeated_deterministic():
     a=body(generate('users join orders',composite_schema())); b=body(generate('users join orders',composite_schema())); assert a==b
