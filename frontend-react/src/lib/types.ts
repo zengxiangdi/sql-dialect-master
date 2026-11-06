@@ -44,12 +44,30 @@ export interface SchemaTable {
   columns?: SchemaColumn[];
 }
 
-export interface SchemaRelationship {
+export interface SchemaColumnPair {
+  from_column: string;
+  to_column: string;
+}
+
+export interface LegacySchemaRelationship {
   from_table: string;
   from_column: string;
   to_table: string;
   to_column: string;
+  columns?: never;
 }
+
+export interface CompositeSchemaRelationship {
+  from_table: string;
+  to_table: string;
+  columns: SchemaColumnPair[];
+  from_column?: never;
+  to_column?: never;
+}
+
+export type SchemaRelationship =
+  | LegacySchemaRelationship
+  | CompositeSchemaRelationship;
 
 export interface SchemaDefinition {
   tables?: SchemaTable[];

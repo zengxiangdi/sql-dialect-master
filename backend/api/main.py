@@ -53,7 +53,10 @@ from backend.core.functions_lookup import FunctionEncyclopedia
 from backend.core.nl2sql import NL2SQLGenerator, NL2SQLResult
 from backend.core.nl2sql_components.evidence import EvidenceItem, GenerationEvidence
 from backend.core.nl2sql_llm import LLMError, LLMN2SQLClient, validate_llm_sql
-from backend.core.nl2sql_schema import SchemaContext
+from backend.core.nl2sql_schema import (
+    MAX_SCHEMA_RELATIONSHIP_COLUMN_PAIRS,
+    SchemaContext,
+)
 from backend.core.nl2sql_pipeline.orchestrator import SAFE_TABLE_HINT
 from backend.core.parser import SUPPORTED_DIALECTS, SQLParser
 from backend.core.semantic_diff import diff_sql_ast
@@ -460,11 +463,33 @@ class SchemaTable(BaseModel):
     columns: List[SchemaColumn] = Field(default_factory=list, max_length=200)
 
 
+class SchemaColumnPair(BaseModel):
+    from_column: SchemaIdentifier
+    to_column: SchemaIdentifier
+
+
 class SchemaRelationship(BaseModel):
     from_table: SchemaIdentifier
-    from_column: SchemaIdentifier
+    from_column: Optional[SchemaIdentifier] = None
     to_table: SchemaIdentifier
-    to_column: SchemaIdentifier
+    to_column: Optional[SchemaIdentifier] = None
+    columns: Optional[List[SchemaColumnPair]] = Field(None, max_length=8)
+
+    @model_validator(mode="after")
+    def validate_representation(self):
+        legacy = "from_column" in self.model_fields_set or "to_column" in self.model_fields_set
+        composite = "columns" in self.model_fields_set
+        if legacy == composite:
+            raise ValueError("invalid schema relationship")
+        if legacy and (self.from_column is None or self.to_column is None):
+            raise ValueError("invalid schema relationship")
+        if composite:
+            if not self.columns or len(self.columns) < 1:
+                raise ValueError("invalid schema relationship")
+            pairs = {(pair.from_column.casefold(), pair.to_column.casefold()) for pair in self.columns}
+            if len(pairs) != len(self.columns):
+                raise ValueError("invalid schema relationship")
+        return self
 
 
 class SchemaDefinition(BaseModel):
@@ -476,12 +501,34 @@ class SchemaDefinition(BaseModel):
         if sum(len(table.columns) for table in self.tables) > 1000:
             raise ValueError("Schema must contain at most 1000 columns in total")
         table_names = {table.name.casefold() for table in self.tables}
+        tables_by_key = {table.name.casefold(): table for table in self.tables}
+        relationship_pair_count = 0
         for relationship in self.relationships:
             if (
                 relationship.from_table.casefold() not in table_names
                 or relationship.to_table.casefold() not in table_names
             ):
-                raise ValueError("Schema relationship references an unknown table")
+                raise ValueError("invalid schema relationship")
+            pairs = (
+                [(relationship.from_column, relationship.to_column)]
+                if relationship.columns is None
+                else [(pair.from_column, pair.to_column) for pair in relationship.columns]
+            )
+            relationship_pair_count += len(pairs)
+            if relationship_pair_count > MAX_SCHEMA_RELATIONSHIP_COLUMN_PAIRS:
+                raise ValueError("invalid schema relationship")
+            from_context = tables_by_key[relationship.from_table.casefold()]
+            to_context = tables_by_key[relationship.to_table.casefold()]
+            if from_context.columns and any(
+                not any(column.name.casefold() == from_column.casefold() for column in from_context.columns)
+                for from_column, _ in pairs
+            ):
+                raise ValueError("invalid schema relationship")
+            if to_context.columns and any(
+                not any(column.name.casefold() == to_column.casefold() for column in to_context.columns)
+                for _, to_column in pairs
+            ):
+                raise ValueError("invalid schema relationship")
         return self
 
 

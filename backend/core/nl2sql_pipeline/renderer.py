@@ -93,6 +93,8 @@ def render_sql(ir: QueryIR) -> Tuple[Optional[str], str, float, GenerationEviden
     ``(sql, explanation, confidence, evidence)``.
     """
     for join in ir.joins:
+        if join.get("path"):
+            continue
         if join.get("condition") is None:
             subject = join.get("subject") or ir.table
             pair_desc = f"{subject} ⟷ {join['table']}"
@@ -163,7 +165,19 @@ def render_sql(ir: QueryIR) -> Tuple[Optional[str], str, float, GenerationEviden
                 # Multiple relational EXISTS clauses compose into ONE WHERE:
                 # the first gets its own WHERE, the rest append with AND,
                 # mirroring standard SQL 'WHERE EXISTS (...) AND EXISTS (...)'.
-                subquery = f"SELECT 1\n    FROM {join['table']}\n    WHERE {join['condition']}"
+                if join.get("path"):
+                    path = join["path"]
+                    subquery = f"SELECT 1\n    FROM {path[0]['table']}\n    WHERE {path[0]['condition']}"
+                    indent = "    "
+                    for step in path[1:]:
+                        subquery += (
+                            f"\n    AND EXISTS (\n    {indent}SELECT 1\n"
+                            f"    {indent}FROM {step['table']}\n"
+                            f"    {indent}WHERE {step['condition']}\n    {indent})"
+                        )
+                        indent += "    "
+                else:
+                    subquery = f"SELECT 1\n    FROM {join['table']}\n    WHERE {join['condition']}"
                 # Merge date conditions into subquery if present
                 if conditions:
                     cond_sql = conditions if isinstance(conditions, str) else " AND ".join(conditions)

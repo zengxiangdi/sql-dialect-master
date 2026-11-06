@@ -397,4 +397,32 @@ describe("natural language query form", () => {
     expect(screen.queryByText("Schema-grounded")).not.toBeInTheDocument();
     expect(localStorage.length).toBe(0);
   });
+
+  it("sends composite relationship schema JSON unchanged", async () => {
+    const schema = {
+      tables: [
+        { name: "orders", columns: [{ name: "tenant_id" }, { name: "user_id" }] },
+        { name: "users", columns: [{ name: "tenant_id" }, { name: "id" }] },
+      ],
+      relationships: [{
+        from_table: "orders",
+        to_table: "users",
+        columns: [
+          { from_column: "tenant_id", to_column: "tenant_id" },
+          { from_column: "user_id", to_column: "id" },
+        ],
+      }],
+    };
+    const result = { ...generatedResult, input_text: "list orders", schema_used: true };
+    const fetchMock = vi.fn().mockResolvedValue(response(result));
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderPage();
+    await user.type(screen.getByRole("textbox", { name: "Natural language" }), result.input_text);
+    await user.click(screen.getByText("Schema (optional JSON)"));
+    fireEvent.change(screen.getByRole("textbox", { name: "Schema JSON" }), { target: { value: JSON.stringify(schema) } });
+    await user.click(screen.getByRole("button", { name: "Generate SQL" }));
+    await screen.findByRole("textbox", { name: "Generated SQL" });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).schema).toEqual(schema);
+  });
 });
