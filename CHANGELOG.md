@@ -2,6 +2,33 @@
 
 All notable changes to SQL Dialect Master are documented here.
 
+## [1.9.0] - 2026-11-06
+
+### New
+
+- Added composite schema relationships with mutually exclusive legacy and
+  `columns` formats, normalized column pairs, full AND join conditions, and
+  reverse traversal across all pairs.
+- Added two-hop unique shortest simple path resolution for EXISTS and
+  NOT EXISTS, with direct relationship preference.
+- Added nested EXISTS rendering; NOT EXISTS negates only the outer path.
+- Added frontend schema relationship types for legacy and composite shapes.
+
+### Fixed
+
+- Rejected mixed old/new relationship shapes, empty or duplicate column pairs,
+  unknown endpoints, and over-budget relationships.
+- Kept ambiguous shortest paths, cycles requiring repeated tables, paths longer
+  than two hops, filters, GROUP/COUNT/labels, DISTINCT, and physical multi-hop
+  joins fail closed.
+
+### Notes
+
+- Multi-hop COUNT/GROUP semantics, filter ownership, multi-hop physical JOIN
+  chains, and PK/unique identity metadata remain outside this release.
+- The no-schema path is unchanged.
+- No dependency or lockfile changes.
+
 ## [1.8.0] - 2026-11-05
 
 ### New
