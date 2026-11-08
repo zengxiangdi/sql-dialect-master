@@ -461,6 +461,16 @@ class SchemaColumn(BaseModel):
 class SchemaTable(BaseModel):
     name: SchemaIdentifier
     columns: List[SchemaColumn] = Field(default_factory=list, max_length=200)
+    primary_key: Optional[List[SchemaIdentifier]] = Field(None, max_length=8)
+
+    @model_validator(mode="after")
+    def validate_primary_key(self):
+        if self.primary_key is None:
+            return self
+        keys = [column.casefold() for column in self.primary_key]
+        if not keys or len(keys) != len(set(keys)):
+            raise ValueError("invalid schema primary key")
+        return self
 
 
 class SchemaColumnPair(BaseModel):
@@ -500,6 +510,11 @@ class SchemaDefinition(BaseModel):
     def validate_total_columns(self):
         if sum(len(table.columns) for table in self.tables) > 1000:
             raise ValueError("Schema must contain at most 1000 columns in total")
+        for table in self.tables:
+            if table.primary_key and table.columns:
+                column_names = {column.name.casefold() for column in table.columns}
+                if any(column.casefold() not in column_names for column in table.primary_key):
+                    raise ValueError("invalid schema primary key")
         table_names = {table.name.casefold() for table in self.tables}
         tables_by_key = {table.name.casefold(): table for table in self.tables}
         relationship_pair_count = 0

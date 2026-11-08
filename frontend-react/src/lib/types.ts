@@ -42,6 +42,7 @@ export interface SchemaColumn {
 export interface SchemaTable {
   name: string;
   columns?: SchemaColumn[];
+  primary_key?: string[];
 }
 
 export interface SchemaColumnPair {
