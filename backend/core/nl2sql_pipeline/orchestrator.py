@@ -728,7 +728,18 @@ class PipelineNL2SQLGenerator:
         if match is None:
             return None
         label = match.group(1)
-        if text[match.end():].strip(" \t\r\n,.;，。；"):
+        tail = text[match.end():].strip(" \t\r\n,.;，。；")
+        unique_count_phrase = bool(
+            self._schema_unique_count_spans(text, ("count", None))
+        )
+        if tail and not (
+            unique_count_phrase
+            and re.match(
+                r"^(?:where|whose|order(?:ed)?\s+by|sort(?:ed)?\s+by|limit)\b",
+                tail,
+                re.IGNORECASE,
+            )
+        ):
             raise SchemaValidationError("multiple schema group labels are unsupported")
         return self._schema_resolve_group_label(
             text, label, (match.start(), match.end()), schema
@@ -1065,6 +1076,40 @@ class PipelineNL2SQLGenerator:
         if count_intent:
             return "count", None
         return None
+
+    @staticmethod
+    def _schema_unique_count_spans(
+        text: str, count_metric: tuple[str, str | None] | None
+    ) -> list[tuple[int, int]]:
+        """Return explicit unique-count modifiers consumed by schema COUNT."""
+        if count_metric is None or count_metric[0] != "count":
+            return []
+        executable = mask_non_executable(text)
+        english = re.compile(
+            r"\b(?:count(?:\s+of)?|number\s+of)\s+(?:distinct|unique)\b|"
+            r"\b(?:distinct|unique)\s+(?:count(?:\s+of)?|number\s+of)\b",
+            re.IGNORECASE,
+        )
+        spans = [match.span() for match in english.finditer(executable)]
+        chinese = re.compile(
+            r"(?:不同|去重|唯一)\s*(?:的\s*)?"
+            r"[\u4e00-\u9fffA-Za-z0-9_$]{0,12}?"
+            r"(?:数量|计数|数)",
+        )
+        spans.extend(match.span() for match in chinese.finditer(executable))
+        return spans
+
+    @staticmethod
+    def _schema_mask_clause_tail(text: str) -> str:
+        """Mask clauses following a group label while preserving offsets."""
+        match = re.search(
+            r"\b(?:where|whose|order(?:ed)?\s+by|sort(?:ed)?\s+by|limit)\b",
+            text,
+            re.IGNORECASE,
+        )
+        if match is None:
+            return text
+        return text[:match.start()] + " " * (len(text) - match.start())
 
     def _schema_extract_aggregations(
         self,
@@ -1904,6 +1949,10 @@ class PipelineNL2SQLGenerator:
             count_metric = self._schema_resolve_count_metric(
                 text_lower, table_context, schema
             )
+            unique_count_spans = self._schema_unique_count_spans(
+                text_lower, count_metric
+            )
+            unique_count_intent = bool(unique_count_spans)
             columns = self._schema_resolve_columns(
                 metric_text,
                 table_context,
@@ -1929,10 +1978,46 @@ class PipelineNL2SQLGenerator:
                 [label_group_column]
                 if label_resolution is not None
                 else self._schema_resolve_group_by(
-                    text_lower, table_context, schema, aggregations
+                    self._schema_mask_clause_tail(text_lower)
+                    if unique_count_intent
+                    else text_lower,
+                    table_context,
+                    schema,
+                    aggregations,
                 )
             )
             distinct = self._check_distinct(text_lower)
+            if unique_count_intent:
+                if len(unique_count_spans) != 1:
+                    raise SchemaValidationError(
+                        "multiple unique count phrases are unsupported"
+                    )
+                consumed = text_lower
+                for span in unique_count_spans:
+                    consumed = self._schema_mask_span(consumed, span)
+                if self._check_distinct(consumed):
+                    raise SchemaValidationError(
+                        "unique count cannot be combined with DISTINCT projection"
+                    )
+                if joins:
+                    raise SchemaValidationError(
+                        "unique count with relationships is unsupported"
+                    )
+                if len(table_context.primary_key) != 1:
+                    raise SchemaValidationError(
+                        "unique count requires one declared primary key"
+                    )
+                if any(
+                    not aggregation.upper().startswith("COUNT(")
+                    for aggregation in aggregations
+                ):
+                    raise SchemaValidationError(
+                        "unique count cannot combine with non-COUNT aggregation"
+                    )
+                aggregations = [
+                    f"COUNT(DISTINCT {table_context.primary_key[0]}) AS count"
+                ]
+                distinct = False
             if any(join.get("path") for join in joins):
                 if conditions or aggregations or group_by or label_resolution is not None or distinct:
                     raise SchemaValidationError(
