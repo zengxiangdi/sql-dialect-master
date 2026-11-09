@@ -1987,6 +1987,7 @@ class PipelineNL2SQLGenerator:
                 )
             )
             distinct = self._check_distinct(text_lower)
+            distinct_count_plan = None
             if unique_count_intent:
                 if len(unique_count_spans) != 1:
                     raise SchemaValidationError(
@@ -2003,9 +2004,9 @@ class PipelineNL2SQLGenerator:
                     raise SchemaValidationError(
                         "unique count with relationships is unsupported"
                     )
-                if len(table_context.primary_key) != 1:
+                if len(table_context.primary_key) == 0:
                     raise SchemaValidationError(
-                        "unique count requires one declared primary key"
+                        "unique count requires a declared primary key"
                     )
                 if any(
                     not aggregation.upper().startswith("COUNT(")
@@ -2014,9 +2015,16 @@ class PipelineNL2SQLGenerator:
                     raise SchemaValidationError(
                         "unique count cannot combine with non-COUNT aggregation"
                     )
-                aggregations = [
-                    f"COUNT(DISTINCT {table_context.primary_key[0]}) AS count"
-                ]
+                if len(table_context.primary_key) == 1:
+                    aggregations = [
+                        f"COUNT(DISTINCT {table_context.primary_key[0]}) AS count"
+                    ]
+                else:
+                    aggregations = []
+                    distinct_count_plan = _nl2sql_ir.DistinctCountPlan(
+                        tuple(table_context.primary_key),
+                        exclude_null_identity=True,
+                    )
                 distinct = False
             if any(join.get("path") for join in joins):
                 if conditions or aggregations or group_by or label_resolution is not None or distinct:
@@ -2064,6 +2072,7 @@ class PipelineNL2SQLGenerator:
                 distinct,
                 dialect,
                 orderings=orderings,
+                distinct_count_plan=distinct_count_plan,
             )
             result = self._apply_confidence_policy(NL2SQLResult(
                 success=sql is not None,
@@ -2271,6 +2280,7 @@ class PipelineNL2SQLGenerator:
         distinct,
         dialect,
         orderings=None,
+        distinct_count_plan=None,
     ) -> tuple:
         """Build SQL statement from extracted components.
 
@@ -2282,6 +2292,7 @@ class PipelineNL2SQLGenerator:
             operation, table, columns, conditions, aggregations,
             group_by, ordering, limit, joins, distinct, dialect,
             orderings=orderings,
+            distinct_count_plan=distinct_count_plan,
         )
         return _render_sql_impl(ir)
 
