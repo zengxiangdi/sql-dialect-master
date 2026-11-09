@@ -31,6 +31,19 @@ describe("schema relationship types", () => {
     expect(schema.relationships).toHaveLength(2);
   });
 
+  it("accepts optional single and composite table primary keys", () => {
+    const schema: SchemaDefinition = {
+      tables: [
+        { name: "users", primary_key: ["id"] },
+        { name: "tenant_users", primary_key: ["tenant_id", "id"] },
+      ],
+    };
+    expect(schema.tables?.map((table) => table.primary_key)).toEqual([
+      ["id"],
+      ["tenant_id", "id"],
+    ]);
+  });
+
   it("rejects mixed and partial relationship shapes at compile time", () => {
     // @ts-expect-error legacy and composite fields are mutually exclusive
     const mixed: SchemaRelationship = {

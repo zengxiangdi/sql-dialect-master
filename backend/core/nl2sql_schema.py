@@ -45,10 +45,16 @@ class SchemaTableContext:
     name: str
     columns: frozenset[str]
     has_column_metadata: bool
+    primary_key: tuple[str, ...] = ()
 
     @property
     def key(self) -> str:
         return _key(self.name)
+
+    @property
+    def identity_columns(self) -> tuple[str, ...]:
+        """Return the declared table identity without inferring one."""
+        return self.primary_key
 
 
 @dataclass(frozen=True)
@@ -142,10 +148,45 @@ class SchemaContext:
                     valid = False
                     continue
                 columns.add(column_name)
+            primary_key: tuple[str, ...] = ()
+            if "primary_key" in raw_table:
+                raw_primary_key = raw_table.get("primary_key")
+                if not isinstance(raw_primary_key, (list, tuple)) or not 1 <= len(
+                    raw_primary_key
+                ) <= 8:
+                    valid = False
+                else:
+                    parsed_primary_key: list[str] = []
+                    seen_primary_key: set[str] = set()
+                    column_by_key = {_key(column): column for column in columns}
+                    primary_key_valid = True
+                    for raw_column in raw_primary_key:
+                        try:
+                            column_name = ".".join(_identifier_parts(raw_column))
+                        except SchemaValidationError:
+                            primary_key_valid = False
+                            break
+                        column_key = _key(column_name)
+                        if column_key in seen_primary_key:
+                            primary_key_valid = False
+                            break
+                        seen_primary_key.add(column_key)
+                        if has_metadata:
+                            canonical_column = column_by_key.get(column_key)
+                            if canonical_column is None:
+                                primary_key_valid = False
+                                break
+                            column_name = canonical_column
+                        parsed_primary_key.append(column_name)
+                    if primary_key_valid:
+                        primary_key = tuple(parsed_primary_key)
+                    else:
+                        valid = False
             table = SchemaTableContext(
                 name=canonical_name,
                 columns=frozenset(columns),
                 has_column_metadata=has_metadata,
+                primary_key=primary_key,
             )
             if table.key in tables_by_key:
                 valid = False
