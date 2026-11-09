@@ -13,6 +13,14 @@ from typing import Dict, List, Optional, Tuple, Union
 from ..nl2sql_components.evidence import GenerationEvidence
 
 
+@dataclass(frozen=True)
+class DistinctCountPlan:
+    """Validated identity columns for a derived distinct entity count."""
+
+    identity_columns: tuple[str, ...]
+    exclude_null_identity: bool = True
+
+
 @dataclass
 class QueryIR:
     """Structured intermediate representation for an NL2SQL query.
@@ -36,6 +44,7 @@ class QueryIR:
     dialect: str
     evidence: GenerationEvidence = field(default_factory=GenerationEvidence)
     orderings: Optional[List[Tuple[str, str]]] = None
+    distinct_count_plan: Optional[DistinctCountPlan] = None
 
 
 def build_ir(
@@ -51,6 +60,7 @@ def build_ir(
     distinct: bool,
     dialect: str,
     orderings: Optional[List[Tuple[str, str]]] = None,
+    distinct_count_plan: Optional[DistinctCountPlan] = None,
 ) -> QueryIR:
     """Thin positional-arg adapter mirroring the legacy call site.
 
@@ -70,4 +80,5 @@ def build_ir(
         distinct=distinct,
         dialect=dialect,
         orderings=orderings,
+        distinct_count_plan=distinct_count_plan,
     )
