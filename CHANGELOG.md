@@ -2,6 +2,31 @@
 
 All notable changes to SQL Dialect Master are documented here.
 
+## [1.10.0] - 2026-11-09
+
+### New
+
+- Added optional schema-table `primary_key` metadata with single and composite
+  identity validation across API, core, frontend types, and LLM schema payloads.
+- Added schema-aware single-table distinct entity counts for explicit
+  distinct/unique wording, using `COUNT(DISTINCT primary_key)`.
+- Supported distinct counts with and without GROUP BY, plus WHERE and `whose`
+  conditions on the selected table.
+
+### Fixed
+
+- Kept ordinary COUNT(*), plain DISTINCT projection, and the no-schema path
+  unchanged.
+- Kept absent or composite primary keys, joins/relationship paths, non-COUNT
+  aggregates, and DISTINCT plus unique-count combinations fail closed.
+
+### Notes
+
+- Composite-primary-key derived DISTINCT counts, relationship-target unique
+  counts, multi-hop COUNT/GROUP, zero-count / LEFT JOIN behavior, and
+  multi-hop physical JOIN chains remain outside this release.
+- No dependency or lockfile changes.
+
 ## [1.9.0] - 2026-11-06
 
 ### New
