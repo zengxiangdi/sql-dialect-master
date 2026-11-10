@@ -319,6 +319,36 @@ def _render_zero_path_distinct_count_plan(
         f"b.{alias} = c.{alias}" for alias in group_aliases
     )
     select_groups = ", ".join(f"b.{alias}" for alias in group_aliases)
+    ordering_sql = ""
+    active_orderings = ir.orderings or ([ir.ordering] if ir.ordering else [])
+    if active_orderings:
+        alias_by_column = {
+            column.casefold(): alias
+            for column, alias in zip(plan.group_identity, group_aliases)
+        }
+        ordered_columns: set[str] = set()
+        resolved_orderings: list[str] = []
+        for column, direction in active_orderings:
+            key = column.casefold()
+            alias = alias_by_column.get(key)
+            if (
+                not _safe_identifier(column)
+                or direction not in {"ASC", "DESC"}
+                or key == "count"
+                or alias is None
+                or key in ordered_columns
+            ):
+                return _render_plan_failure(
+                    "zero-count ordering must use unique subject identity columns"
+                )
+            ordered_columns.add(key)
+            resolved_orderings.append(f"b.{alias} {direction}")
+        resolved_orderings.extend(
+            f"b.{alias} ASC"
+            for column, alias in zip(plan.group_identity, group_aliases)
+            if column.casefold() not in ordered_columns
+        )
+        ordering_sql = ", ".join(resolved_orderings)
     sql = (
         f"SELECT {select_groups}, COALESCE(c.count, 0) AS count\n"
         f"FROM (\n"
@@ -328,6 +358,8 @@ def _render_zero_path_distinct_count_plan(
         + "\n".join(f"    {line}" for line in count_sql.splitlines())
         + f"\n) AS c ON {join_conditions}"
     )
+    if ordering_sql:
+        sql += f"\nORDER BY {ordering_sql}"
 
     explanation_parts = [
         "聚合: COUNT(*) AS count",
@@ -335,6 +367,8 @@ def _render_zero_path_distinct_count_plan(
         f"分组: {', '.join(group_aliases)}",
         "包含零计数",
     ]
+    if ordering_sql:
+        explanation_parts.append(f"排序: {ordering_sql}")
     evidence = ir.evidence
     evidence.items.append(EvidenceItem("base", "Base confidence for zero-count distinct targets", 0.5))
     evidence.items.append(EvidenceItem(
@@ -395,7 +429,7 @@ def _render_path_distinct_count_plan(
         return _render_plan_failure("only SELECT operations are supported")
     if ir.joins or ir.aggregations or ir.distinct:
         return _render_plan_failure("joins, aggregations, and DISTINCT are unsupported")
-    if ir.ordering or ir.orderings:
+    if (ir.ordering or ir.orderings) and not plan.include_zero:
         return _render_plan_failure("ORDER BY is unsupported")
     if not 1 <= len(plan.path_steps) <= 2:
         return _render_plan_failure("one or two path steps are required")

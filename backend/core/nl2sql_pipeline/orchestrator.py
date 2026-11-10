@@ -106,6 +106,21 @@ _SCHEMA_WHOSE_PREFIX = re.compile(
     r"(is\s+not|isn't|is|equals|<>|!=|>=|<=|=|>|<)\s*",
     re.IGNORECASE,
 )
+_SCHEMA_ZERO_COUNT_PATTERNS = (
+    re.compile(r"\b(?:including|include)\s+zero(?:s)?\b", re.IGNORECASE),
+    re.compile(r"\bwith\s+zero\s+[A-Za-z_][A-Za-z0-9_$]*\b", re.IGNORECASE),
+    re.compile(
+        r"\b(?:including|include)\s+(?:users|those)\s+with\s+no\s+[A-Za-z_][A-Za-z0-9_$]*\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:including|include)\s+(?:users|those)\s+with\s+zero\s+[A-Za-z_][A-Za-z0-9_$]*\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"含\s*[0０零]"),
+    re.compile(r"(?:包括|包含)\s*没有[\u4e00-\u9fff]{1,12}的用户"),
+    re.compile(r"没有[\u4e00-\u9fff]{1,12}的用户也(?:包括|包含)"),
+)
 _SCHEMA_WHOSE_REJECTED_VALUES = {
     "and", "or", "not", "is", "null", "true", "false", "unknown",
     "select", "from", "where", "group", "order", "by", "limit",
@@ -739,6 +754,7 @@ class PipelineNL2SQLGenerator:
                 tail,
                 re.IGNORECASE,
             )
+            or unique_count_phrase and self._schema_is_zero_count_suffix(tail)
         ):
             raise SchemaValidationError("multiple schema group labels are unsupported")
         return self._schema_resolve_group_label(
@@ -1103,42 +1119,69 @@ class PipelineNL2SQLGenerator:
     def _schema_has_zero_count_intent(text: str) -> bool:
         """Detect explicit inclusion of subjects with no matching targets."""
         executable = mask_non_executable(text)
-        patterns = (
-            r"\b(?:including|include)\s+zero(?:s)?\b",
-            r"\bwith\s+zero\s+[A-Za-z_][A-Za-z0-9_$]*\b",
-            r"\b(?:including|include)\s+(?:users|those)\s+with\s+no\s+[A-Za-z_][A-Za-z0-9_$]*\b",
-            r"\b(?:including|include)\s+(?:users|those)\s+with\s+zero\s+[A-Za-z_][A-Za-z0-9_$]*\b",
-        )
-        if any(re.search(pattern, executable, re.IGNORECASE) for pattern in patterns):
+        matches = [
+            match
+            for pattern in _SCHEMA_ZERO_COUNT_PATTERNS
+            for match in pattern.finditer(executable)
+        ]
+        if not matches:
+            return False
+        matches.sort(key=lambda match: (match.start(), -(match.end() - match.start())))
+        non_overlapping = []
+        for match in matches:
+            if non_overlapping and match.start() < non_overlapping[-1].end():
+                continue
+            non_overlapping.append(match)
+        matches = non_overlapping
+        if len(matches) != 1:
+            raise SchemaValidationError("multiple zero-count phrases are unsupported")
+        suffix = executable[matches[0].end():].strip(" \t\r\n,.;，。；、")
+        if not PipelineNL2SQLGenerator._schema_is_zero_count_clause_suffix(suffix):
+            raise SchemaValidationError("unexpected text after zero-count phrase")
+        return True
+
+    @staticmethod
+    def _schema_is_zero_count_clause_suffix(text: str) -> bool:
+        """Accept only supported outer ordering and limit clauses after a zero marker."""
+        suffix = text.strip(" \t\r\n,.;，。；、")
+        if not suffix:
             return True
-        chinese_patterns = (
-            r"含\s*[0０零]",
-            r"(?:包括|包含)\s*没有[\u4e00-\u9fff]{1,12}的用户",
-            r"没有[\u4e00-\u9fff]{1,12}的用户也(?:包括|包含)",
+        limit_match = re.search(r"(?:^|\s+)limit\s+\d+\s*$", suffix, re.IGNORECASE)
+        if limit_match is not None:
+            suffix = suffix[:limit_match.start()].strip(" \t\r\n,.;，。；、")
+            if not suffix:
+                return True
+        ordering = re.fullmatch(
+            r"(?:order(?:ed)?|sort(?:ed)?)\s+by\s+(.+)",
+            suffix,
+            re.IGNORECASE,
         )
-        return any(re.search(pattern, executable) for pattern in chinese_patterns)
+        if ordering is None:
+            return False
+        clause = ordering.group(1)
+        if re.search(r"\bor\b|[()\u4e00-\u9fff]", clause, re.IGNORECASE):
+            return False
+        terms = re.split(r"\s*,\s*|\s+and\s+", clause, flags=re.IGNORECASE)
+        identifier = r"[A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*){0,2}"
+        item = re.compile(
+            rf"^\s*{identifier}\s*(?:(?:ascending|descending|asc|desc)\s*)?$",
+            re.IGNORECASE,
+        )
+        return bool(terms) and all(item.fullmatch(term) is not None for term in terms)
 
     @staticmethod
     def _schema_is_zero_count_suffix(text: str) -> bool:
         """Check whether a trailing phrase is solely an explicit zero marker."""
-        executable = mask_non_executable(text).strip()
-        limit = re.search(r"\s+limit\s+\d+\s*$", executable, re.IGNORECASE)
-        if limit is not None:
-            executable = executable[:limit.start()].strip()
-        english_patterns = (
-            r"(?:including|include)\s+zero(?:s)?",
-            r"with\s+zero\s+[A-Za-z_][A-Za-z0-9_$]*",
-            r"(?:including|include)\s+(?:users|those)\s+with\s+no\s+[A-Za-z_][A-Za-z0-9_$]*",
-            r"(?:including|include)\s+(?:users|those)\s+with\s+zero\s+[A-Za-z_][A-Za-z0-9_$]*",
-        )
-        if any(re.fullmatch(pattern, executable, re.IGNORECASE) for pattern in english_patterns):
-            return True
-        chinese_patterns = (
-            r"含\s*[0０零]",
-            r"(?:包括|包含)\s*没有[\u4e00-\u9fff]{1,12}的用户",
-            r"没有[\u4e00-\u9fff]{1,12}的用户也(?:包括|包含)",
-        )
-        return any(re.fullmatch(pattern, executable) for pattern in chinese_patterns)
+        executable = mask_non_executable(text).strip(" \t\r\n,.;，。；、")
+        matches = []
+        for pattern in _SCHEMA_ZERO_COUNT_PATTERNS:
+            match = pattern.match(executable)
+            if match is not None:
+                matches.append(match)
+        if len(matches) != 1:
+            return False
+        suffix = executable[matches[0].end():].strip(" \t\r\n,.;，。；、")
+        return PipelineNL2SQLGenerator._schema_is_zero_count_clause_suffix(suffix)
 
     @staticmethod
     def _schema_mask_clause_tail(text: str) -> str:
@@ -2235,7 +2278,7 @@ class PipelineNL2SQLGenerator:
                         raise SchemaValidationError(
                             "multi-hop unique count only supports subject whose predicates"
                         )
-                    if self._schema_has_explicit_ordering(text_lower):
+                    if not zero_count_intent and self._schema_has_explicit_ordering(text_lower):
                         raise SchemaValidationError(
                             "multi-hop unique count ordering is unsupported"
                         )
@@ -2284,6 +2327,23 @@ class PipelineNL2SQLGenerator:
                 if self._schema_has_explicit_ordering(text_lower)
                 else []
             )
+            if path_distinct_count_plan is not None:
+                if not path_distinct_count_plan.include_zero and ordering_candidates:
+                    raise SchemaValidationError(
+                        "non-zero path count ordering is unsupported"
+                    )
+                if path_distinct_count_plan.include_zero:
+                    group_identity = {
+                        column.casefold()
+                        for column in path_distinct_count_plan.group_identity
+                    }
+                    if any(
+                        column.casefold() not in group_identity
+                        for column, _ in ordering_candidates
+                    ):
+                        raise SchemaValidationError(
+                            "zero-count ordering must use subject identity columns"
+                        )
             if len(ordering_candidates) > 1 and (
                 group_by or aggregations or label_resolution is not None
             ):

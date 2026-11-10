@@ -15,12 +15,12 @@ DIALECTS = [
 ]
 
 
-def make_schema(*, path_length=2):
+def make_schema(*, path_length=2, subject_primary_key=("tenant_id", "id")):
     tables = [
         {
             "name": "users",
             "columns": [{"name": "tenant_id"}, {"name": "id"}, {"name": "status"}],
-            "primary_key": ["tenant_id", "id"],
+            "primary_key": list(subject_primary_key),
         },
         {
             "name": "orders",
@@ -241,10 +241,115 @@ def test_zero_count_limit_is_outer_and_results_are_deterministic():
     assert first.sql.index(") AS c ON") < first.sql.index("LIMIT 2")
 
 
+def test_zero_count_ordering_maps_subject_pk_and_adds_asc_tiebreaker():
+    result = generate(
+        "count distinct products per user including zero ordered by users.id desc limit 2",
+        make_schema(),
+    )
+
+    assert result.success
+    assert "ORDER BY b._group_1 DESC, b._group_0 ASC" in result.sql
+    assert result.sql.index(") AS c ON") < result.sql.index("ORDER BY") < result.sql.index("LIMIT 2")
+    inner = result.sql.split("FROM (")[1].split(") AS _distinct_targets")[0]
+    assert "ORDER BY" not in inner
+
+
+def test_zero_count_ordering_keeps_explicit_group_key_order():
+    result = generate(
+        "count distinct products per user including zero ordered by tenant_id desc, id desc",
+        make_schema(),
+    )
+
+    assert result.success
+    assert "ORDER BY b._group_0 DESC, b._group_1 DESC" in result.sql
+
+
+def test_zero_count_single_subject_pk_ordering_has_no_tiebreaker():
+    result = generate(
+        "count distinct products per user including zero ordered by users.id desc",
+        make_schema(subject_primary_key=("id",)),
+    )
+
+    assert result.success
+    assert "ORDER BY b._group_0 DESC" in result.sql
+    assert "ORDER BY b._group_0 DESC," not in result.sql
+
+
+@pytest.mark.parametrize("path_length,target", [(1, "orders"), (2, "products")])
+def test_zero_count_ordering_supports_one_and_two_hop(path_length, target):
+    result = generate(
+        f"count distinct {target} per user including zero ordered by users.id desc",
+        make_schema(path_length=path_length),
+    )
+
+    assert result.success
+    assert "ORDER BY b._group_1 DESC, b._group_0 ASC" in result.sql
+
+
+@pytest.mark.parametrize("text", [
+    "count distinct products per user including zero ordered by status",
+    "count distinct products per user including zero ordered by count",
+    "count distinct products per user including zero ordered by products.id",
+    "count distinct products per user including zero ordered by orders.id",
+    "count distinct products per user including zero ordered by lower(id)",
+    "count distinct products per user including zero ordered by users.id NULLS LAST",
+])
+def test_zero_count_rejects_non_group_or_complex_ordering(text):
+    result = generate(text, make_schema())
+
+    assert result.success is False
+    assert result.sql is None
+
+
+def test_nonzero_path_ordering_remains_fail_closed():
+    result = generate(
+        "count distinct products per user ordered by users.id desc",
+        make_schema(),
+    )
+
+    assert result.success is False
+    assert result.sql is None
+
+
+@pytest.mark.parametrize("text", [
+    "count distinct products per user including zero, ordered by users.id desc limit 2",
+    "count distinct products per user whose status is active, including zero, ordered by users.id desc limit 2",
+    "count distinct products per user 含零，ordered by users.id desc limit 2",
+])
+def test_zero_suffix_accepts_punctuation_ordering_and_limit(text):
+    result = generate(text, make_schema())
+
+    assert result.success
+    assert "ORDER BY b._group_1 DESC, b._group_0 ASC" in result.sql
+    assert result.sql.index(") AS c ON") < result.sql.index("ORDER BY") < result.sql.index("LIMIT 2")
+
+
+def test_zero_suffix_rejects_garbage_after_order_clause():
+    result = generate(
+        "count distinct products per user including zero ordered by users.id desc nonsense",
+        make_schema(),
+    )
+
+    assert result.success is False
+    assert result.sql is None
+
+
 @pytest.mark.parametrize("dialect", DIALECTS)
 def test_zero_count_sql_is_parseable_in_all_dialects(dialect):
     result = generate(
         "count distinct products per user including zero limit 5",
+        make_schema(),
+        dialect=dialect,
+    )
+
+    assert result.success
+    assert sqlglot.parse_one(result.sql, read=dialect) is not None
+
+
+@pytest.mark.parametrize("dialect", DIALECTS)
+def test_zero_count_ordering_is_parseable_in_all_dialects(dialect):
+    result = generate(
+        "count distinct products per user including zero ordered by users.id desc limit 5",
         make_schema(),
         dialect=dialect,
     )
