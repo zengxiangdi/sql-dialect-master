@@ -258,8 +258,8 @@ def _render_path_distinct_count_plan(
         return _render_plan_failure("joins, aggregations, and DISTINCT are unsupported")
     if ir.ordering or ir.orderings:
         return _render_plan_failure("ORDER BY is unsupported")
-    if len(plan.path_steps) != 2:
-        return _render_plan_failure("exactly two path steps are required")
+    if not 1 <= len(plan.path_steps) <= 2:
+        return _render_plan_failure("one or two path steps are required")
     if not _safe_identifier(plan.subject_table) or plan.subject_table != ir.table:
         return _render_plan_failure("subject table is invalid")
     if not plan.group_identity or not plan.target_identity:
