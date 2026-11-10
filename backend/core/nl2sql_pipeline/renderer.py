@@ -24,7 +24,7 @@ from ..nl2sql_components.evidence import (
     GenerationEvidence,
 )
 from .dialect import apply_dialect_adjustments
-from .ir import DistinctCountPlan, QueryIR
+from .ir import DistinctCountPlan, PathDistinctCountPlan, QueryIR
 from .validation import validate_sql
 
 
@@ -239,6 +239,148 @@ def _render_distinct_count_plan(
     return sql, " | ".join(explanation_parts), evidence.score, evidence
 
 
+def _qualify_subject_condition(condition: str, subject_table: str) -> str:
+    """Qualify simple whose predicates against the outer subject table."""
+    pattern = re.compile(
+        r"(?<![\w$.])([A-Za-z_][A-Za-z0-9_$]*)(?=\s*(?:=|!=|<>|>=|<=|>|<))"
+    )
+    return pattern.sub(lambda match: f"{subject_table}.{match.group(1)}", condition)
+
+
+def _render_path_distinct_count_plan(
+    ir: QueryIR,
+) -> Tuple[Optional[str], str, float, GenerationEvidence]:
+    """Render a bounded inner-join path and count distinct terminal targets."""
+    plan: PathDistinctCountPlan = ir.path_distinct_count_plan  # type: ignore[assignment]
+    if ir.operation != "SELECT":
+        return _render_plan_failure("only SELECT operations are supported")
+    if ir.joins or ir.aggregations or ir.distinct:
+        return _render_plan_failure("joins, aggregations, and DISTINCT are unsupported")
+    if ir.ordering or ir.orderings:
+        return _render_plan_failure("ORDER BY is unsupported")
+    if len(plan.path_steps) != 2:
+        return _render_plan_failure("exactly two path steps are required")
+    if not _safe_identifier(plan.subject_table) or plan.subject_table != ir.table:
+        return _render_plan_failure("subject table is invalid")
+    if not plan.group_identity or not plan.target_identity:
+        return _render_plan_failure("group and target identities are required")
+    if any(not _safe_identifier(column) for column in (*plan.group_identity, *plan.target_identity)):
+        return _render_plan_failure("identity columns are invalid")
+
+    table_names = [plan.subject_table]
+    for step in plan.path_steps:
+        if (
+            not _safe_identifier(step.from_table)
+            or not _safe_identifier(step.to_table)
+            or step.from_table != table_names[-1]
+            or not step.column_pairs
+            or any(
+                not _safe_identifier(column)
+                for pair in step.column_pairs
+                for column in pair
+            )
+        ):
+            return _render_plan_failure("path step is invalid")
+        table_names.append(step.to_table)
+    if len(set(name.casefold() for name in table_names)) != len(table_names):
+        return _render_plan_failure("path repeats a table")
+    target_table = table_names[-1]
+
+    inner_projection = [
+        f"{plan.subject_table}.{column} AS _group_{index}"
+        for index, column in enumerate(plan.group_identity)
+    ] + [
+        f"{target_table}.{column} AS _target_{index}"
+        for index, column in enumerate(plan.target_identity)
+    ]
+    inner_sql = f"SELECT DISTINCT {', '.join(inner_projection)}\nFROM {plan.subject_table}"
+    for step in plan.path_steps:
+        conditions = " AND ".join(
+            f"{step.from_table}.{from_column} = {step.to_table}.{to_column}"
+            for from_column, to_column in step.column_pairs
+        )
+        inner_sql += f"\nJOIN {step.to_table} ON {conditions}"
+
+    conditions = ir.conditions
+    inner_conditions = (
+        [_qualify_subject_condition(condition, plan.subject_table) for condition in conditions if condition.strip()]
+        if isinstance(conditions, list)
+        else ([_qualify_subject_condition(conditions, plan.subject_table)] if conditions.strip() else [])
+    )
+    if plan.exclude_null_identity:
+        inner_conditions.extend(
+            f"{plan.subject_table}.{column} IS NOT NULL"
+            for column in plan.group_identity
+        )
+        inner_conditions.extend(
+            f"{target_table}.{column} IS NOT NULL"
+            for column in plan.target_identity
+        )
+    if inner_conditions:
+        inner_sql += "\nWHERE " + " AND ".join(inner_conditions)
+    indented_inner = "\n".join(f"    {line}" for line in inner_sql.splitlines())
+
+    group_aliases = [f"_group_{index}" for index in range(len(plan.group_identity))]
+    select_clause = ", ".join([*group_aliases, "COUNT(*) AS count"])
+    sql = (
+        f"SELECT {select_clause}\n"
+        f"FROM (\n{indented_inner}\n) AS _distinct_targets\n"
+        f"GROUP BY {', '.join(group_aliases)}"
+    )
+    explanation_parts = ["聚合: COUNT(*) AS count", f"表: {plan.subject_table}", f"分组: {', '.join(group_aliases)}"]
+    evidence = ir.evidence
+    evidence.items.append(EvidenceItem("base", "Base confidence for multi-hop distinct count", 0.5))
+    evidence.items.append(EvidenceItem(
+        EVIDENCE_AGGREGATION_PRESENT,
+        "Derived multi-hop distinct entity count",
+        0.15,
+        detail=", ".join(plan.target_identity),
+    ))
+    evidence.items.append(EvidenceItem(
+        EVIDENCE_GROUP_BY,
+        f"GROUP BY clause: {', '.join(group_aliases)}",
+        0.1,
+    ))
+    if inner_conditions and conditions:
+        explanation_parts.append(
+            f"条件: {len(conditions) if isinstance(conditions, list) else 1}个"
+        )
+        evidence.items.append(EvidenceItem(
+            EVIDENCE_CONDITIONS_PRESENT,
+            "Subject predicates in multi-hop derived count input",
+            0.1,
+        ))
+    if ir.limit is not None:
+        sql = add_limit(sql, ir.limit, ir.dialect)
+        explanation_parts.append(f"限制: {ir.limit}条")
+        evidence.items.append(EvidenceItem(
+            EVIDENCE_LIMIT,
+            f"Explicit limit: {ir.limit}",
+            0.1,
+            detail=str(ir.limit),
+        ))
+    sql = f"-- Generated for {ir.dialect.upper()}\n{sql}"
+    sql = apply_dialect_adjustments(sql, ir.dialect)
+    parse_adjustment = validate_sql(sql, ir.dialect)
+    if parse_adjustment > 0:
+        evidence.items.append(EvidenceItem(
+            EVIDENCE_PARSE_OK,
+            "Target dialect parser accepted the generated SQL",
+            parse_adjustment,
+        ))
+    elif parse_adjustment < 0:
+        evidence.items.append(EvidenceItem(
+            EVIDENCE_PARSE_FAIL,
+            "Target dialect parser rejected the generated SQL",
+            parse_adjustment,
+        ))
+        return None, (
+            "Generated SQL failed target-dialect validation: "
+            + " | ".join(explanation_parts)
+        ), 0.0, evidence
+    return sql, " | ".join(explanation_parts), evidence.score, evidence
+
+
 # ── Renderer ────────────────────────────────────────────────────────────────
 
 def render_sql(ir: QueryIR) -> Tuple[Optional[str], str, float, GenerationEvidence]:
@@ -253,6 +395,10 @@ def render_sql(ir: QueryIR) -> Tuple[Optional[str], str, float, GenerationEviden
     Returns the same 4-tuple the legacy ``_build_sql_enhanced`` returns:
     ``(sql, explanation, confidence, evidence)``.
     """
+    if ir.path_distinct_count_plan is not None and ir.distinct_count_plan is not None:
+        return _render_plan_failure("multiple derived count plans are unsupported")
+    if ir.path_distinct_count_plan is not None:
+        return _render_path_distinct_count_plan(ir)
     if ir.distinct_count_plan is not None:
         return _render_distinct_count_plan(ir)
 
