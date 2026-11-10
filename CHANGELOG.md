@@ -2,6 +2,32 @@
 
 All notable changes to SQL Dialect Master are documented here.
 
+## [1.11.0] - 2026-11-10
+
+### New
+
+- Added derived DISTINCT entity counts for composite primary keys through a
+  schema-only DistinctCountPlan in the query IR.
+- Added an inner SELECT DISTINCT over group and identity columns, NULL identity
+  filtering, and outer COUNT/GROUP BY/ORDER BY/LIMIT rendering.
+- Supported WHERE and `whose` conditions inside the derived table while keeping
+  grouping, ordering, and limits on the outer query.
+
+### Fixed
+
+- Preserved the existing single-column COUNT(DISTINCT pk) path and all
+  no-schema output exactly.
+- Kept absent primary keys, joins, relationship paths, non-COUNT aggregates,
+  DISTINCT plus unique-count combinations, and aggregate-alias ordering fail
+  closed.
+
+### Notes
+
+- Relationship-target unique counts, multi-hop COUNT/GROUP/group-label
+  semantics, zero-count / LEFT JOIN behavior, and multi-hop physical JOIN
+  chains remain outside this release.
+- No API, frontend, dependency, or lockfile changes.
+
 ## [1.10.0] - 2026-11-09
 
 ### New
