@@ -2,6 +2,35 @@
 
 All notable changes to SQL Dialect Master are documented here.
 
+## [1.12.0] - 2026-11-10
+
+### New
+
+- Added bounded two-hop unique target counts through PathStep and
+  PathDistinctCountPlan.
+- Added subject primary-key group identity and target primary-key identity,
+  with derived DISTINCT rendering over the JOIN path.
+- Required relationship column pairs to cover every primary-key component of
+  composite path endpoints.
+- Supported subject-side `whose` and outer LIMIT with INNER path semantics.
+
+### Fixed
+
+- Deduplicated repeated targets across multiple path rows and excluded NULL
+  identity components.
+- Kept single-table distinct counts, EXISTS paths, and all no-schema output
+  unchanged.
+- Kept missing/ambiguous paths, three-hop paths, ordinary WHERE,
+  target/intermediate filters, ORDER BY, zero-count, and physical multi-hop
+  JOIN fail closed.
+
+### Notes
+
+- One-hop target unique counts with composite subject identity, zero-count /
+  LEFT JOIN behavior, target/intermediate filter ownership, outer ORDER BY,
+  and physical multi-hop JOIN chains remain outside this release.
+- No API, frontend, dependency, or lockfile changes.
+
 ## [1.11.0] - 2026-11-10
 
 ### New
