@@ -1355,7 +1355,7 @@ class PipelineNL2SQLGenerator:
             raise SchemaValidationError("complex whose predicates are unsupported")
         stripped_tail = tail.strip()
         if stripped_tail and not re.match(
-            r"^(?:and|order(?:ed)?\s+by|sort(?:ed)?\s+by)\b",
+            r"^(?:and|order(?:ed)?\s+by|sort(?:ed)?\s+by|limit)\b",
             stripped_tail,
             re.IGNORECASE,
         ):
@@ -1856,6 +1856,132 @@ class PipelineNL2SQLGenerator:
             })
         return subject, joins
 
+    def _schema_resolve_multihop_unique_path(
+        self,
+        text: str,
+        table_hint: Optional[str],
+        schema: SchemaContext,
+    ) -> tuple[SchemaTableContext, tuple[object, ...], tuple[int, int]] | None:
+        """Resolve one bounded two-hop path for a subject-grouped unique count."""
+        if not self._schema_unique_count_spans(text, ("count", None)):
+            return None
+        executable = mask_non_executable(text)
+        group_match = re.search(
+            r"\b(?:per|each)\s+([A-Za-z_][A-Za-z0-9_$]*)\b",
+            executable,
+            re.IGNORECASE,
+        )
+        if group_match is None:
+            group_match = re.search(
+                r"(?:每个|各个|每位)\s*([\u4e00-\u9fff]{1,8}?)"
+                r"(?=的|数量|数|$)",
+                executable,
+            )
+        if group_match is None:
+            return None
+        label = group_match.group(1)
+        if table_hint:
+            subject_candidates = schema.table_candidates(table_hint)
+        else:
+            subject_candidates = schema.table_candidates(label)
+            if not subject_candidates:
+                mapped = {
+                    pattern: table
+                    for pattern, table in self.TABLE_PATTERNS.items()
+                    if pattern.casefold() == label.casefold()
+                }
+                subject_candidates = tuple(
+                    candidate
+                    for table_name in mapped.values()
+                    for candidate in schema.table_candidates(table_name)
+                )
+                if not subject_candidates:
+                    return None
+        if len(subject_candidates) != 1:
+            raise SchemaValidationError("multi-hop group subject is not unique")
+        subject = subject_candidates[0]
+        if not subject.primary_key:
+            raise SchemaValidationError("multi-hop group subject has no primary key")
+
+        masked_group = self._schema_mask_span(executable, group_match.span())
+        mentions = self._schema_table_mentions(masked_group, schema)
+        target_candidates = tuple(table for table in mentions if table.key != subject.key)
+        if len(target_candidates) != 1:
+            raise SchemaValidationError("multi-hop target table is not unique")
+        target = target_candidates[0]
+        if not target.primary_key:
+            raise SchemaValidationError("multi-hop target has no primary key")
+
+        direct = schema.relationship_candidates(subject.name, target.name)
+        if len(direct) > 1:
+            raise SchemaValidationError("direct multi-hop target relationship is ambiguous")
+        if direct:
+            return None
+
+        def complete_edge(edge, left: SchemaTableContext, right: SchemaTableContext) -> bool:
+            if left.key == edge.from_table.casefold():
+                pairs = edge.column_pairs
+            else:
+                pairs = tuple((to_column, from_column) for from_column, to_column in edge.column_pairs)
+            if len(left.primary_key) > 1 and not {
+                pair[0].casefold() for pair in pairs
+            }.issuperset(column.casefold() for column in left.primary_key):
+                return False
+            if len(right.primary_key) > 1 and not {
+                pair[1].casefold() for pair in pairs
+            }.issuperset(column.casefold() for column in right.primary_key):
+                return False
+            return True
+
+        def oriented_step(edge, left: SchemaTableContext, right: SchemaTableContext):
+            if edge.from_table.casefold() == left.key:
+                pairs = edge.column_pairs
+            else:
+                pairs = tuple((to_column, from_column) for from_column, to_column in edge.column_pairs)
+            return _nl2sql_ir.PathStep(left.name, right.name, tuple(pairs))
+
+        queue: list[tuple[SchemaTableContext, list[object]]] = [(subject, [])]
+        paths: list[list[object]] = []
+        expansions = 0
+        while queue:
+            current, path = queue.pop(0)
+            if len(path) >= 2:
+                continue
+            for edge in schema.relationships:
+                endpoints = {edge.from_table.casefold(), edge.to_table.casefold()}
+                if current.key not in endpoints:
+                    continue
+                next_name = (
+                    edge.to_table
+                    if edge.from_table.casefold() == current.key
+                    else edge.from_table
+                )
+                candidates = schema.table_candidates(next_name)
+                if len(candidates) != 1:
+                    continue
+                next_table = candidates[0]
+                if next_table.key == subject.key or any(
+                    step.to_table.casefold() == next_table.key for step in path
+                ):
+                    continue
+                expansions += 1
+                if expansions > 4096:
+                    raise SchemaValidationError("multi-hop path search budget exceeded")
+                if not complete_edge(edge, current, next_table):
+                    continue
+                next_path = [*path, oriented_step(edge, current, next_table)]
+                if next_table.key == target.key:
+                    paths.append(next_path)
+                else:
+                    queue.append((next_table, next_path))
+        if not paths:
+            raise SchemaValidationError("multi-hop target path is missing")
+        shortest_length = min(len(path) for path in paths)
+        shortest = [path for path in paths if len(path) == shortest_length]
+        if shortest_length != 2 or len(shortest) != 1:
+            raise SchemaValidationError("multi-hop target path is ambiguous or unsupported")
+        return subject, tuple(shortest[0]), group_match.span()
+
     def _schema_finalize(
         self, result: NL2SQLResult, schema: SchemaContext
     ) -> NL2SQLResult:
@@ -1899,8 +2025,17 @@ class PipelineNL2SQLGenerator:
                 joined_with_resolution = self._schema_resolve_joined_with(
                     text, table_hint, schema
                 )
-            label_resolution = None
+            multihop_unique_resolution = None
             if joined_on_resolution is None and joined_with_resolution is None:
+                multihop_unique_resolution = self._schema_resolve_multihop_unique_path(
+                    text, table_hint, schema
+                )
+            label_resolution = None
+            if (
+                joined_on_resolution is None
+                and joined_with_resolution is None
+                and multihop_unique_resolution is None
+            ):
                 label_resolution = self._schema_resolve_english_group_label(executable_text, schema)
                 if label_resolution is None:
                     label_resolution = self._schema_resolve_chinese_group_label(executable_text, schema)
@@ -1922,6 +2057,10 @@ class PipelineNL2SQLGenerator:
             elif joined_with_resolution is not None:
                 table_context, joins, joined_with_span = joined_with_resolution
                 metric_text = self._schema_mask_span(text_lower, joined_with_span)
+            elif multihop_unique_resolution is not None:
+                table_context, path_steps, group_span = multihop_unique_resolution
+                joins = []
+                metric_text = self._schema_mask_span(text_lower, group_span)
             elif label_resolution is not None:
                 table_context = label_resolution[0]
                 label_group_column = label_resolution[1]
@@ -1933,6 +2072,7 @@ class PipelineNL2SQLGenerator:
                 metric_text = text_lower
             whose_resolution = self._schema_resolve_whose(text, table_context, schema)
             whose_condition = None
+            ordinary_conditions: list[str] = []
             condition_text = text_lower
             condition_original = text
             if joined_on_span is not None:
@@ -1949,6 +2089,8 @@ class PipelineNL2SQLGenerator:
             count_metric = self._schema_resolve_count_metric(
                 text_lower, table_context, schema
             )
+            if multihop_unique_resolution is not None and count_metric is None:
+                count_metric = ("count", None)
             unique_count_spans = self._schema_unique_count_spans(
                 text_lower, count_metric
             )
@@ -1966,6 +2108,7 @@ class PipelineNL2SQLGenerator:
                 table_context,
                 schema,
             )
+            ordinary_conditions = list(conditions)
             if whose_condition is not None:
                 conditions = [*conditions, whose_condition]
             parsed = self._parse_text(text_lower, text)
@@ -1975,7 +2118,9 @@ class PipelineNL2SQLGenerator:
                 metric_text, table_context, schema, count_metric
             )
             group_by = (
-                [label_group_column]
+                []
+                if multihop_unique_resolution is not None
+                else [label_group_column]
                 if label_resolution is not None
                 else self._schema_resolve_group_by(
                     self._schema_mask_clause_tail(text_lower)
@@ -1988,6 +2133,7 @@ class PipelineNL2SQLGenerator:
             )
             distinct = self._check_distinct(text_lower)
             distinct_count_plan = None
+            path_distinct_count_plan = None
             if unique_count_intent:
                 if len(unique_count_spans) != 1:
                     raise SchemaValidationError(
@@ -2004,6 +2150,35 @@ class PipelineNL2SQLGenerator:
                     raise SchemaValidationError(
                         "unique count with relationships is unsupported"
                     )
+                if multihop_unique_resolution is not None:
+                    if whose_condition is not None:
+                        qualified = re.match(
+                            r"([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)*)\."
+                            r"[A-Za-z_][A-Za-z0-9_$]*",
+                            whose_condition,
+                        )
+                        if qualified and qualified.group(1).casefold() != table_context.key:
+                            raise SchemaValidationError(
+                                "multi-hop unique count whose predicate is not subject-owned"
+                            )
+                    if ordinary_conditions:
+                        raise SchemaValidationError(
+                            "multi-hop unique count only supports subject whose predicates"
+                        )
+                    if self._schema_has_explicit_ordering(text_lower):
+                        raise SchemaValidationError(
+                            "multi-hop unique count ordering is unsupported"
+                        )
+                    subject, path_steps, _ = multihop_unique_resolution
+                    path_distinct_count_plan = _nl2sql_ir.PathDistinctCountPlan(
+                        subject_table=subject.name,
+                        path_steps=tuple(path_steps),
+                        group_identity=tuple(subject.primary_key),
+                        target_identity=tuple(
+                            schema.table_candidates(path_steps[-1].to_table)[0].primary_key
+                        ),
+                        exclude_null_identity=True,
+                    )
                 if len(table_context.primary_key) == 0:
                     raise SchemaValidationError(
                         "unique count requires a declared primary key"
@@ -2015,7 +2190,9 @@ class PipelineNL2SQLGenerator:
                     raise SchemaValidationError(
                         "unique count cannot combine with non-COUNT aggregation"
                     )
-                if len(table_context.primary_key) == 1:
+                if path_distinct_count_plan is not None:
+                    aggregations = []
+                elif len(table_context.primary_key) == 1:
                     aggregations = [
                         f"COUNT(DISTINCT {table_context.primary_key[0]}) AS count"
                     ]
@@ -2073,6 +2250,7 @@ class PipelineNL2SQLGenerator:
                 dialect,
                 orderings=orderings,
                 distinct_count_plan=distinct_count_plan,
+                path_distinct_count_plan=path_distinct_count_plan,
             )
             result = self._apply_confidence_policy(NL2SQLResult(
                 success=sql is not None,
@@ -2281,6 +2459,7 @@ class PipelineNL2SQLGenerator:
         dialect,
         orderings=None,
         distinct_count_plan=None,
+        path_distinct_count_plan=None,
     ) -> tuple:
         """Build SQL statement from extracted components.
 
@@ -2293,6 +2472,7 @@ class PipelineNL2SQLGenerator:
             group_by, ordering, limit, joins, distinct, dialect,
             orderings=orderings,
             distinct_count_plan=distinct_count_plan,
+            path_distinct_count_plan=path_distinct_count_plan,
         )
         return _render_sql_impl(ir)
 

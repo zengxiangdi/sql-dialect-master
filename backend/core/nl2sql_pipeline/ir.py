@@ -21,6 +21,26 @@ class DistinctCountPlan:
     exclude_null_identity: bool = True
 
 
+@dataclass(frozen=True)
+class PathStep:
+    """One validated relationship edge in a schema-only count path."""
+
+    from_table: str
+    to_table: str
+    column_pairs: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True)
+class PathDistinctCountPlan:
+    """Validated two-hop target identity count plan."""
+
+    subject_table: str
+    path_steps: tuple[PathStep, ...]
+    group_identity: tuple[str, ...]
+    target_identity: tuple[str, ...]
+    exclude_null_identity: bool = True
+
+
 @dataclass
 class QueryIR:
     """Structured intermediate representation for an NL2SQL query.
@@ -45,6 +65,7 @@ class QueryIR:
     evidence: GenerationEvidence = field(default_factory=GenerationEvidence)
     orderings: Optional[List[Tuple[str, str]]] = None
     distinct_count_plan: Optional[DistinctCountPlan] = None
+    path_distinct_count_plan: Optional[PathDistinctCountPlan] = None
 
 
 def build_ir(
@@ -61,6 +82,7 @@ def build_ir(
     dialect: str,
     orderings: Optional[List[Tuple[str, str]]] = None,
     distinct_count_plan: Optional[DistinctCountPlan] = None,
+    path_distinct_count_plan: Optional[PathDistinctCountPlan] = None,
 ) -> QueryIR:
     """Thin positional-arg adapter mirroring the legacy call site.
 
@@ -81,4 +103,5 @@ def build_ir(
         dialect=dialect,
         orderings=orderings,
         distinct_count_plan=distinct_count_plan,
+        path_distinct_count_plan=path_distinct_count_plan,
     )
