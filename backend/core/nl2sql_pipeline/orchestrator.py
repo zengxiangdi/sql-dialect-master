@@ -1912,12 +1912,6 @@ class PipelineNL2SQLGenerator:
         if not target.primary_key:
             raise SchemaValidationError("multi-hop target has no primary key")
 
-        direct = schema.relationship_candidates(subject.name, target.name)
-        if len(direct) > 1:
-            raise SchemaValidationError("direct multi-hop target relationship is ambiguous")
-        if direct:
-            return None
-
         def complete_edge(edge, left: SchemaTableContext, right: SchemaTableContext) -> bool:
             if left.key == edge.from_table.casefold():
                 pairs = edge.column_pairs
@@ -1939,6 +1933,16 @@ class PipelineNL2SQLGenerator:
             else:
                 pairs = tuple((to_column, from_column) for from_column, to_column in edge.column_pairs)
             return _nl2sql_ir.PathStep(left.name, right.name, tuple(pairs))
+
+        direct = schema.relationship_candidates(subject.name, target.name)
+        if len(direct) > 1:
+            raise SchemaValidationError("direct multi-hop target relationship is ambiguous")
+        if direct:
+            if len(subject.primary_key) == 1:
+                return None
+            if not complete_edge(direct[0], subject, target):
+                raise SchemaValidationError("direct relationship does not cover composite identity")
+            return subject, (oriented_step(direct[0], subject, target),), group_match.span()
 
         queue: list[tuple[SchemaTableContext, list[object]]] = [(subject, [])]
         paths: list[list[object]] = []

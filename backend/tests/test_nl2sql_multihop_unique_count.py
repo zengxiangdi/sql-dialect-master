@@ -172,7 +172,10 @@ def test_three_hop_cycle_and_multiple_paths_fail_closed():
             ],
         },
     ])
-    assert not generate("count distinct products per user", multiple).success
+    direct_result = generate("count distinct products per user", multiple)
+    assert direct_result.success
+    assert "JOIN products" in direct_result.sql
+    assert "JOIN orders" not in direct_result.sql
 
 
 def test_one_hop_unique_count_keeps_single_table_renderer():
