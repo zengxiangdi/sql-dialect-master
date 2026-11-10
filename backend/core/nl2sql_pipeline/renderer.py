@@ -247,6 +247,145 @@ def _qualify_subject_condition(condition: str, subject_table: str) -> str:
     return pattern.sub(lambda match: f"{subject_table}.{match.group(1)}", condition)
 
 
+def _render_zero_path_distinct_count_plan(
+    ir: QueryIR,
+    plan: PathDistinctCountPlan,
+    target_table: str,
+) -> Tuple[Optional[str], str, float, GenerationEvidence]:
+    """Render a subject baseline left-joined to distinct target counts."""
+    raw_conditions = (
+        ir.conditions
+        if isinstance(ir.conditions, list)
+        else [ir.conditions]
+    )
+    subject_conditions = [
+        _qualify_subject_condition(condition, plan.subject_table)
+        for condition in raw_conditions
+        if condition.strip()
+    ]
+    group_aliases = [f"_group_{index}" for index in range(len(plan.group_identity))]
+    target_aliases = [f"_target_{index}" for index in range(len(plan.target_identity))]
+    group_projection = [
+        f"{plan.subject_table}.{column} AS {alias}"
+        for column, alias in zip(plan.group_identity, group_aliases)
+    ]
+    target_projection = [
+        f"{target_table}.{column} AS {alias}"
+        for column, alias in zip(plan.target_identity, target_aliases)
+    ]
+
+    baseline_conditions = [*subject_conditions]
+    baseline_conditions.extend(
+        f"{plan.subject_table}.{column} IS NOT NULL"
+        for column in plan.group_identity
+    )
+    baseline_sql = (
+        f"SELECT DISTINCT {', '.join(group_projection)}\n"
+        f"FROM {plan.subject_table}"
+    )
+    if baseline_conditions:
+        baseline_sql += "\nWHERE " + " AND ".join(baseline_conditions)
+
+    pair_sql = (
+        f"SELECT DISTINCT {', '.join([*group_projection, *target_projection])}\n"
+        f"FROM {plan.subject_table}"
+    )
+    for step in plan.path_steps:
+        conditions = " AND ".join(
+            f"{step.from_table}.{from_column} = {step.to_table}.{to_column}"
+            for from_column, to_column in step.column_pairs
+        )
+        pair_sql += f"\nJOIN {step.to_table} ON {conditions}"
+    pair_conditions = [*subject_conditions]
+    pair_conditions.extend(
+        f"{plan.subject_table}.{column} IS NOT NULL"
+        for column in plan.group_identity
+    )
+    pair_conditions.extend(
+        f"{target_table}.{column} IS NOT NULL"
+        for column in plan.target_identity
+    )
+    if pair_conditions:
+        pair_sql += "\nWHERE " + " AND ".join(pair_conditions)
+
+    count_sql = (
+        f"SELECT {', '.join(group_aliases)}, COUNT(*) AS count\n"
+        f"FROM (\n"
+        + "\n".join(f"    {line}" for line in pair_sql.splitlines())
+        + "\n) AS _distinct_targets\n"
+        f"GROUP BY {', '.join(group_aliases)}"
+    )
+    join_conditions = " AND ".join(
+        f"b.{alias} = c.{alias}" for alias in group_aliases
+    )
+    select_groups = ", ".join(f"b.{alias}" for alias in group_aliases)
+    sql = (
+        f"SELECT {select_groups}, COALESCE(c.count, 0) AS count\n"
+        f"FROM (\n"
+        + "\n".join(f"    {line}" for line in baseline_sql.splitlines())
+        + "\n) AS b\n"
+        "LEFT JOIN (\n"
+        + "\n".join(f"    {line}" for line in count_sql.splitlines())
+        + f"\n) AS c ON {join_conditions}"
+    )
+
+    explanation_parts = [
+        "聚合: COUNT(*) AS count",
+        f"表: {plan.subject_table}",
+        f"分组: {', '.join(group_aliases)}",
+        "包含零计数",
+    ]
+    evidence = ir.evidence
+    evidence.items.append(EvidenceItem("base", "Base confidence for zero-count distinct targets", 0.5))
+    evidence.items.append(EvidenceItem(
+        EVIDENCE_AGGREGATION_PRESENT,
+        "Derived distinct target count including zero-count subjects",
+        0.15,
+        detail=", ".join(plan.target_identity),
+    ))
+    evidence.items.append(EvidenceItem(
+        EVIDENCE_GROUP_BY,
+        f"Subject identity groups: {', '.join(group_aliases)}",
+        0.1,
+    ))
+    if subject_conditions:
+        explanation_parts.append(f"条件: {len(subject_conditions)}个")
+        evidence.items.append(EvidenceItem(
+            EVIDENCE_CONDITIONS_PRESENT,
+            "Subject predicates restrict zero-count baseline and target counts",
+            0.1,
+        ))
+    if ir.limit is not None:
+        sql = add_limit(sql, ir.limit, ir.dialect)
+        explanation_parts.append(f"限制: {ir.limit}条")
+        evidence.items.append(EvidenceItem(
+            EVIDENCE_LIMIT,
+            f"Explicit limit: {ir.limit}",
+            0.1,
+            detail=str(ir.limit),
+        ))
+    sql = f"-- Generated for {ir.dialect.upper()}\n{sql}"
+    sql = apply_dialect_adjustments(sql, ir.dialect)
+    parse_adjustment = validate_sql(sql, ir.dialect)
+    if parse_adjustment > 0:
+        evidence.items.append(EvidenceItem(
+            EVIDENCE_PARSE_OK,
+            "Target dialect parser accepted the generated SQL",
+            parse_adjustment,
+        ))
+    elif parse_adjustment < 0:
+        evidence.items.append(EvidenceItem(
+            EVIDENCE_PARSE_FAIL,
+            "Target dialect parser rejected the generated SQL",
+            parse_adjustment,
+        ))
+        return None, (
+            "Generated SQL failed target-dialect validation: "
+            + " | ".join(explanation_parts)
+        ), 0.0, evidence
+    return sql, " | ".join(explanation_parts), evidence.score, evidence
+
+
 def _render_path_distinct_count_plan(
     ir: QueryIR,
 ) -> Tuple[Optional[str], str, float, GenerationEvidence]:
@@ -285,6 +424,8 @@ def _render_path_distinct_count_plan(
     if len(set(name.casefold() for name in table_names)) != len(table_names):
         return _render_plan_failure("path repeats a table")
     target_table = table_names[-1]
+    if plan.include_zero:
+        return _render_zero_path_distinct_count_plan(ir, plan, target_table)
 
     inner_projection = [
         f"{plan.subject_table}.{column} AS _group_{index}"

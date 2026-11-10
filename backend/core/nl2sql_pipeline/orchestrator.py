@@ -1100,6 +1100,47 @@ class PipelineNL2SQLGenerator:
         return spans
 
     @staticmethod
+    def _schema_has_zero_count_intent(text: str) -> bool:
+        """Detect explicit inclusion of subjects with no matching targets."""
+        executable = mask_non_executable(text)
+        patterns = (
+            r"\b(?:including|include)\s+zero(?:s)?\b",
+            r"\bwith\s+zero\s+[A-Za-z_][A-Za-z0-9_$]*\b",
+            r"\b(?:including|include)\s+(?:users|those)\s+with\s+no\s+[A-Za-z_][A-Za-z0-9_$]*\b",
+            r"\b(?:including|include)\s+(?:users|those)\s+with\s+zero\s+[A-Za-z_][A-Za-z0-9_$]*\b",
+        )
+        if any(re.search(pattern, executable, re.IGNORECASE) for pattern in patterns):
+            return True
+        chinese_patterns = (
+            r"含\s*[0０零]",
+            r"(?:包括|包含)\s*没有[\u4e00-\u9fff]{1,12}的用户",
+            r"没有[\u4e00-\u9fff]{1,12}的用户也(?:包括|包含)",
+        )
+        return any(re.search(pattern, executable) for pattern in chinese_patterns)
+
+    @staticmethod
+    def _schema_is_zero_count_suffix(text: str) -> bool:
+        """Check whether a trailing phrase is solely an explicit zero marker."""
+        executable = mask_non_executable(text).strip()
+        limit = re.search(r"\s+limit\s+\d+\s*$", executable, re.IGNORECASE)
+        if limit is not None:
+            executable = executable[:limit.start()].strip()
+        english_patterns = (
+            r"(?:including|include)\s+zero(?:s)?",
+            r"with\s+zero\s+[A-Za-z_][A-Za-z0-9_$]*",
+            r"(?:including|include)\s+(?:users|those)\s+with\s+no\s+[A-Za-z_][A-Za-z0-9_$]*",
+            r"(?:including|include)\s+(?:users|those)\s+with\s+zero\s+[A-Za-z_][A-Za-z0-9_$]*",
+        )
+        if any(re.fullmatch(pattern, executable, re.IGNORECASE) for pattern in english_patterns):
+            return True
+        chinese_patterns = (
+            r"含\s*[0０零]",
+            r"(?:包括|包含)\s*没有[\u4e00-\u9fff]{1,12}的用户",
+            r"没有[\u4e00-\u9fff]{1,12}的用户也(?:包括|包含)",
+        )
+        return any(re.fullmatch(pattern, executable) for pattern in chinese_patterns)
+
+    @staticmethod
     def _schema_mask_clause_tail(text: str) -> str:
         """Mask clauses following a group label while preserving offsets."""
         match = re.search(
@@ -1358,7 +1399,7 @@ class PipelineNL2SQLGenerator:
             r"^(?:and|order(?:ed)?\s+by|sort(?:ed)?\s+by|limit)\b",
             stripped_tail,
             re.IGNORECASE,
-        ):
+        ) and not self._schema_is_zero_count_suffix(stripped_tail):
             raise SchemaValidationError("unexpected text after whose predicate")
         span = (match.start(), value_end)
         return predicate, span
@@ -1861,6 +1902,8 @@ class PipelineNL2SQLGenerator:
         text: str,
         table_hint: Optional[str],
         schema: SchemaContext,
+        *,
+        include_zero: bool = False,
     ) -> tuple[SchemaTableContext, tuple[object, ...], tuple[int, int]] | None:
         """Resolve one bounded two-hop path for a subject-grouped unique count."""
         if not self._schema_unique_count_spans(text, ("count", None)):
@@ -1938,7 +1981,7 @@ class PipelineNL2SQLGenerator:
         if len(direct) > 1:
             raise SchemaValidationError("direct multi-hop target relationship is ambiguous")
         if direct:
-            if len(subject.primary_key) == 1:
+            if len(subject.primary_key) == 1 and not include_zero:
                 return None
             if not complete_edge(direct[0], subject, target):
                 raise SchemaValidationError("direct relationship does not cover composite identity")
@@ -2021,6 +2064,7 @@ class PipelineNL2SQLGenerator:
         """Generate through the enhanced path with strict schema resolution."""
         try:
             executable_text = mask_non_executable(text)
+            zero_count_intent = self._schema_has_zero_count_intent(text)
             joined_on_resolution = self._schema_resolve_joined_on(
                 text, table_hint, schema
             )
@@ -2032,7 +2076,7 @@ class PipelineNL2SQLGenerator:
             multihop_unique_resolution = None
             if joined_on_resolution is None and joined_with_resolution is None:
                 multihop_unique_resolution = self._schema_resolve_multihop_unique_path(
-                    text, table_hint, schema
+                    text, table_hint, schema, include_zero=zero_count_intent
                 )
             label_resolution = None
             if (
@@ -2099,6 +2143,12 @@ class PipelineNL2SQLGenerator:
                 text_lower, count_metric
             )
             unique_count_intent = bool(unique_count_spans)
+            if zero_count_intent and (
+                not unique_count_intent or multihop_unique_resolution is None
+            ):
+                raise SchemaValidationError(
+                    "zero-count requests require a unique-count path and group label"
+                )
             columns = self._schema_resolve_columns(
                 metric_text,
                 table_context,
@@ -2156,15 +2206,31 @@ class PipelineNL2SQLGenerator:
                     )
                 if multihop_unique_resolution is not None:
                     if whose_condition is not None:
-                        qualified = re.match(
-                            r"([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)*)\."
-                            r"[A-Za-z_][A-Za-z0-9_$]*",
-                            whose_condition,
-                        )
-                        if qualified and qualified.group(1).casefold() != table_context.key:
-                            raise SchemaValidationError(
-                                "multi-hop unique count whose predicate is not subject-owned"
-                            )
+                        whose_clause = text[whose_span[0]:whose_span[1]]
+                        whose_match = _SCHEMA_WHOSE_PREFIX.match(whose_clause)
+                        if whose_match is None:
+                            raise SchemaValidationError("whose predicate ownership is invalid")
+                        raw_column = whose_match.group(1)
+                        column_parts = raw_column.split(".")
+                        if len(column_parts) > 1:
+                            owners = schema.table_candidates(".".join(column_parts[:-1]))
+                            if len(owners) != 1 or owners[0].key != table_context.key:
+                                raise SchemaValidationError(
+                                    "multi-hop unique count whose predicate is not subject-owned"
+                                )
+                        elif zero_count_intent:
+                            path_table_names = {
+                                step.to_table.casefold()
+                                for step in multihop_unique_resolution[1]
+                            }
+                            for path_table_name in path_table_names:
+                                path_tables = schema.table_candidates(path_table_name)
+                                if len(path_tables) != 1:
+                                    raise SchemaValidationError("path table is not unique")
+                                if schema.canonical_column(path_tables[0], column_parts[0]) is not None:
+                                    raise SchemaValidationError(
+                                        "unqualified whose column is ambiguous across the path"
+                                    )
                     if ordinary_conditions:
                         raise SchemaValidationError(
                             "multi-hop unique count only supports subject whose predicates"
@@ -2182,6 +2248,7 @@ class PipelineNL2SQLGenerator:
                             schema.table_candidates(path_steps[-1].to_table)[0].primary_key
                         ),
                         exclude_null_identity=True,
+                        include_zero=zero_count_intent,
                     )
                 if len(table_context.primary_key) == 0:
                     raise SchemaValidationError(
