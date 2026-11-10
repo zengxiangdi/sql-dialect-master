@@ -111,8 +111,8 @@ def test_plain_count_and_non_count_language_remain_unchanged():
     assert "SELECT DISTINCT *" in projection.sql
 
 
-@pytest.mark.parametrize("primary_key", [None, ["id", "user_id"]])
-def test_missing_or_composite_primary_key_fails_closed(primary_key):
+@pytest.mark.parametrize("primary_key", [None])
+def test_missing_primary_key_fails_closed(primary_key):
     result = generate("count distinct orders", make_schema(primary_key=primary_key))
     assert result.success is False
     assert result.sql is None

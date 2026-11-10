@@ -24,7 +24,7 @@ from ..nl2sql_components.evidence import (
     GenerationEvidence,
 )
 from .dialect import apply_dialect_adjustments
-from .ir import QueryIR
+from .ir import DistinctCountPlan, QueryIR
 from .validation import validate_sql
 
 
@@ -78,6 +78,167 @@ def parameter_placeholder(index: int, dialect: str) -> str:
     return "?"
 
 
+_SAFE_IDENTIFIER = re.compile(
+    r"[A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)*"
+)
+_DERIVED_COUNT_ALIAS = "_distinct_targets"
+
+
+def _safe_identifier(value: str) -> bool:
+    return isinstance(value, str) and _SAFE_IDENTIFIER.fullmatch(value) is not None
+
+
+def _render_plan_failure(reason: str) -> Tuple[None, str, float, GenerationEvidence]:
+    return None, f"Derived distinct count plan rejected: {reason}", 0.0, GenerationEvidence()
+
+
+def _render_distinct_count_plan(
+    ir: QueryIR,
+) -> Tuple[Optional[str], str, float, GenerationEvidence]:
+    """Render a validated composite-identity count through a derived table."""
+    plan: DistinctCountPlan = ir.distinct_count_plan  # type: ignore[assignment]
+    if ir.operation != "SELECT":
+        return _render_plan_failure("only SELECT operations are supported")
+    if ir.joins:
+        return _render_plan_failure("joins are unsupported")
+    if ir.distinct:
+        return _render_plan_failure("DISTINCT projection is unsupported")
+    if ir.aggregations:
+        return _render_plan_failure("aggregations are unsupported")
+    if not plan.identity_columns or any(
+        not _safe_identifier(column) for column in plan.identity_columns
+    ):
+        return _render_plan_failure("identity columns are invalid")
+    if not _safe_identifier(ir.table):
+        return _render_plan_failure("source table is invalid")
+    if any(not _safe_identifier(column) for column in ir.group_by):
+        return _render_plan_failure("group columns are invalid")
+
+    projection: list[str] = []
+    seen: set[str] = set()
+    for column in [*ir.group_by, *plan.identity_columns]:
+        key = column.casefold()
+        if key not in seen:
+            seen.add(key)
+            projection.append(column)
+    if not projection:
+        return _render_plan_failure("derived projection is empty")
+
+    conditions = ir.conditions
+    inner_conditions = (
+        [condition for condition in conditions if condition.strip()]
+        if isinstance(conditions, list)
+        else ([conditions] if conditions.strip() else [])
+    )
+    if plan.exclude_null_identity:
+        inner_conditions.extend(
+            f"{column} IS NOT NULL" for column in plan.identity_columns
+        )
+    inner_sql = (
+        f"SELECT DISTINCT {', '.join(projection)}\nFROM {ir.table}"
+    )
+    if inner_conditions:
+        inner_sql += "\nWHERE " + " AND ".join(inner_conditions)
+    indented_inner = "\n".join(
+        f"    {line}" for line in inner_sql.splitlines()
+    )
+
+    select_clause = (
+        ", ".join([*ir.group_by, "COUNT(*) AS count"])
+        if ir.group_by
+        else "COUNT(*) AS count"
+    )
+    sql = (
+        f"SELECT {select_clause}\n"
+        f"FROM (\n{indented_inner}\n) AS {_DERIVED_COUNT_ALIAS}"
+    )
+    explanation_parts = ["聚合: COUNT(*) AS count", f"表: {ir.table}"]
+    evidence = ir.evidence
+    evidence.items.append(EvidenceItem("base", "Base confidence for generated SQL", 0.5))
+    evidence.items.append(EvidenceItem(
+        EVIDENCE_AGGREGATION_PRESENT,
+        "Derived distinct entity count",
+        0.15,
+        detail=", ".join(plan.identity_columns),
+    ))
+    if ir.table != "table_name":
+        evidence.items.append(EvidenceItem(
+            EVIDENCE_TABLE_KNOWN,
+            f"Table resolved to known name: {ir.table}",
+            0.2,
+            detail=ir.table,
+        ))
+    if inner_conditions and isinstance(conditions, (list, str)) and conditions:
+        explanation_parts.append(
+            f"条件: {len(conditions) if isinstance(conditions, list) else 1}个"
+        )
+        evidence.items.append(EvidenceItem(
+            EVIDENCE_CONDITIONS_PRESENT,
+            "Explicit predicates in derived count input",
+            0.1,
+        ))
+    if ir.group_by:
+        explanation_parts.append(f"分组: {', '.join(ir.group_by)}")
+        evidence.items.append(EvidenceItem(
+            EVIDENCE_GROUP_BY,
+            f"GROUP BY clause: {', '.join(ir.group_by)}",
+            0.1,
+        ))
+
+    active_orderings = ir.orderings or ([ir.ordering] if ir.ordering else [])
+    ordering_sql = ""
+    if active_orderings:
+        group_keys = {column.casefold() for column in ir.group_by}
+        for column, direction in active_orderings:
+            if (
+                not _safe_identifier(column)
+                or direction not in {"ASC", "DESC"}
+                or column.casefold() == "count"
+                or column.casefold() not in group_keys
+            ):
+                return _render_plan_failure(
+                    "derived count ordering must use a grouped schema column"
+                )
+        ordering_sql = ", ".join(
+            f"{column} {direction}" for column, direction in active_orderings
+        )
+        explanation_parts.append(f"排序: {ordering_sql}")
+    if ir.group_by:
+        sql += f"\nGROUP BY {', '.join(ir.group_by)}"
+    if ordering_sql:
+        sql += f"\nORDER BY {ordering_sql}"
+    if ir.limit is not None:
+        sql = add_limit(sql, ir.limit, ir.dialect)
+        explanation_parts.append(f"限制: {ir.limit}条")
+        evidence.items.append(EvidenceItem(
+            EVIDENCE_LIMIT,
+            f"Explicit limit: {ir.limit}",
+            0.1,
+            detail=str(ir.limit),
+        ))
+
+    sql = f"-- Generated for {ir.dialect.upper()}\n{sql}"
+    sql = apply_dialect_adjustments(sql, ir.dialect)
+    parse_adjustment = validate_sql(sql, ir.dialect)
+    if parse_adjustment > 0:
+        evidence.items.append(EvidenceItem(
+            EVIDENCE_PARSE_OK,
+            "Target dialect parser accepted the generated SQL",
+            parse_adjustment,
+        ))
+    elif parse_adjustment < 0:
+        evidence.items.append(EvidenceItem(
+            EVIDENCE_PARSE_FAIL,
+            "Target dialect parser rejected the generated SQL",
+            parse_adjustment,
+        ))
+        return None, (
+            "Generated SQL failed target-dialect validation: "
+            + " | ".join(explanation_parts)
+        ), 0.0, evidence
+    return sql, " | ".join(explanation_parts), evidence.score, evidence
+
+
 # ── Renderer ────────────────────────────────────────────────────────────────
 
 def render_sql(ir: QueryIR) -> Tuple[Optional[str], str, float, GenerationEvidence]:
@@ -92,6 +253,9 @@ def render_sql(ir: QueryIR) -> Tuple[Optional[str], str, float, GenerationEviden
     Returns the same 4-tuple the legacy ``_build_sql_enhanced`` returns:
     ``(sql, explanation, confidence, evidence)``.
     """
+    if ir.distinct_count_plan is not None:
+        return _render_distinct_count_plan(ir)
+
     for join in ir.joins:
         if join.get("path"):
             continue
