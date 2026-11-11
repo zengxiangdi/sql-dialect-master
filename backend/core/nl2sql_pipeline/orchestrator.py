@@ -2520,7 +2520,21 @@ class PipelineNL2SQLGenerator:
                 if path_distinct_count_plan is None and len(ordering_candidates) > 1
                 else None
             )
-            limit = self._extract_limit(text_lower)
+            if path_distinct_count_plan is not None:
+                masked_path_text = mask_non_executable(text_lower)
+                if parsed_whose is not None:
+                    masked_path_text = self._schema_mask_span(
+                        masked_path_text,
+                        parsed_whose.span,
+                    )
+                if multihop_unique_resolution is not None:
+                    masked_path_text = self._schema_mask_span(
+                        masked_path_text,
+                        multihop_unique_resolution[2],
+                    )
+                limit = self._extract_limit(masked_path_text)
+            else:
+                limit = self._extract_limit(text_lower)
             render_columns = ["*"] if aggregations and not group_by else columns
             sql, explanation, confidence, evidence = self._build_sql_enhanced(
                 operation,

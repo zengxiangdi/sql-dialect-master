@@ -121,12 +121,32 @@ def test_ordering_words_inside_path_filter_values_do_not_trigger_ordering(
 
     assert result.success
     assert not any(line.lstrip().upper().startswith("ORDER BY ") for line in result.sql.splitlines())
+    assert not any(line.lstrip().upper().startswith("LIMIT ") for line in result.sql.splitlines())
     predicate = f"{owner}.status = "
     assert predicate in result.sql
     if include_zero and owner != "users":
         baseline, counts = result.sql.split(") AS b\nLEFT JOIN (", 1)
         assert predicate not in baseline
         assert predicate in counts
+
+
+@pytest.mark.parametrize("owner", ["users", "orders", "products"])
+@pytest.mark.parametrize("include_zero", [False, True])
+@pytest.mark.parametrize("value", [
+    "'top 10'", "'limit 5'", "'first 5'", "'前5'", "'5条'",
+    "'5个'", "'5行'", "'5 rows'", "'only 5'",
+])
+def test_limit_words_inside_path_filter_values_do_not_limit(owner, include_zero, value):
+    suffix = " including zero" if include_zero else ""
+    result = generate(
+        f"count distinct products per user whose {owner}.status is {value}{suffix}",
+        twohop_schema(),
+    )
+
+    assert result.success
+    assert not any(line.lstrip().upper().startswith("LIMIT ") for line in result.sql.splitlines())
+    assert not any(line.lstrip().upper().startswith("FETCH FIRST ") for line in result.sql.splitlines())
+    assert not any(line.lstrip().upper().startswith("SELECT TOP ") for line in result.sql.splitlines())
 
 
 @pytest.mark.parametrize("owner", ["users", "orders", "products"])
@@ -142,6 +162,56 @@ def test_real_ordering_after_path_filter_still_orders(owner, include_zero):
     assert result.success
     expected = "ORDER BY COALESCE(c.count, 0) DESC" if include_zero else "ORDER BY COUNT(*) DESC"
     assert expected in result.sql
+
+
+@pytest.mark.parametrize("text,limit", [
+    (
+        "count distinct products per user whose products.status is 'top 10' "
+        "ordered by count desc limit 2",
+        "LIMIT 2",
+    ),
+    (
+        "count distinct products per user whose products.status is 'top 5' "
+        "ordered by count desc top 10",
+        "LIMIT 10",
+    ),
+    (
+        "count distinct products per user whose products.status is 'limit 5' "
+        "ordered by count desc limit 2",
+        "LIMIT 2",
+    ),
+    (
+        "count distinct products per user whose products.status is 'limit 2' "
+        "ordered by count desc top 10",
+        "LIMIT 10",
+    ),
+    (
+        "count distinct products per user whose products.status is 'top 10' "
+        "ordered by count desc",
+        None,
+    ),
+    (
+        "count distinct products per user ordered by count desc limit 2 "
+        "whose products.status is 'top 10'",
+        "LIMIT 2",
+    ),
+    (
+        "count distinct products per user including zero whose products.status is 'top 10' "
+        "ordered by count desc limit 2",
+        "LIMIT 2",
+    ),
+])
+def test_real_path_limit_wins_over_filter_limit_words(text, limit):
+    result = generate(
+        text,
+        twohop_schema(),
+    )
+
+    assert result.success
+    if limit is None:
+        assert not any(line.lstrip().upper().startswith("LIMIT ") for line in result.sql.splitlines())
+    else:
+        assert result.sql.rstrip().endswith(limit)
 
 
 @pytest.mark.parametrize("text", [
