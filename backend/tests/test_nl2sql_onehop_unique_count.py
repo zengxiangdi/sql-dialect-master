@@ -65,7 +65,7 @@ def test_composite_subject_onehop_exact_sql():
 
 def test_subject_whose_and_outer_limit():
     result = generate(
-        "count distinct orders per user whose tenant_id is 1 limit 5",
+        "count distinct orders per user whose users.tenant_id is 1 limit 5",
         context(),
     )
 
@@ -74,9 +74,20 @@ def test_subject_whose_and_outer_limit():
     assert result.sql.index(") AS _distinct_targets") < result.sql.index("LIMIT 5")
 
 
+def test_composite_subject_target_whose_is_inner():
+    result = generate(
+        "count distinct orders per user whose orders.id is 1",
+        context(),
+    )
+
+    assert result.success
+    assert "orders.id = 1" in result.sql
+    assert result.sql.index("orders.id = 1") < result.sql.index(") AS _distinct_targets")
+
+
 @pytest.mark.parametrize("text", [
     "count distinct orders per user where tenant_id = 1",
-    "count distinct orders per user whose orders.id is 1",
+    "count distinct orders per user whose tenant_id is 1",
     "count distinct orders per user ordered by tenant_id",
 ])
 def test_unsupported_onehop_filters_and_order_fail_closed(text):
@@ -168,8 +179,8 @@ def test_onehop_composite_count_is_parseable_in_all_dialects(dialect):
 
 
 def test_onehop_generation_is_deterministic():
-    first = generate("count distinct orders per user whose tenant_id is 1 limit 5", context())
-    second = generate("count distinct orders per user whose tenant_id is 1 limit 5", context())
+    first = generate("count distinct orders per user whose users.tenant_id is 1 limit 5", context())
+    second = generate("count distinct orders per user whose users.tenant_id is 1 limit 5", context())
 
     assert first.success and second.success
     assert first.sql == second.sql

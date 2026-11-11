@@ -18,6 +18,7 @@ did against the legacy class.
 """
 import logging
 import re
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 import sqlglot
@@ -127,6 +128,18 @@ _SCHEMA_WHOSE_REJECTED_VALUES = {
     "current_date", "current_timestamp", "now",
 }
 _SCHEMA_WHOSE_CJK_CONNECTORS = {"和", "或", "且", "并", "与", "跟", "及"}
+
+
+@dataclass(frozen=True)
+class _SchemaWhoseParsed:
+    """Schema-safe lexical result for one whose predicate."""
+
+    raw_column: str
+    operator: str
+    literal: str
+    span: tuple[int, int]
+
+
 _SCHEMA_JOINED_ON_PREFIX = re.compile(
     r"\b(?:(inner|left|right)\s+)?joined\s+on\b",
     re.IGNORECASE,
@@ -1306,13 +1319,8 @@ class PipelineNL2SQLGenerator:
         start, end = span
         return text[:start] + " " * (end - start) + text[end:]
 
-    def _schema_resolve_whose(
-        self,
-        text: str,
-        table: SchemaTableContext,
-        schema: SchemaContext,
-    ) -> tuple[str, tuple[int, int]] | None:
-        """Resolve one schema-aware ``whose`` predicate in linear time."""
+    def _schema_parse_whose(self, text: str) -> _SchemaWhoseParsed | None:
+        """Parse one schema-safe whose predicate without resolving its owner."""
         executable = mask_non_executable(text)
         match = _SCHEMA_WHOSE_PREFIX.search(executable)
         if match is None:
@@ -1326,18 +1334,6 @@ class PipelineNL2SQLGenerator:
         match = original_match
 
         raw_column, raw_operator = match.groups()
-        parts = raw_column.split(".")
-        column_name = parts[-1]
-        if len(parts) > 1:
-            candidates = schema.table_candidates(".".join(parts[:-1]))
-            if len(candidates) != 1 or candidates[0].key != table.key:
-                raise SchemaValidationError("whose column table is not the selected table")
-        canonical = schema.canonical_column(table, column_name)
-        if canonical is None:
-            if table.has_column_metadata:
-                raise SchemaValidationError("whose column is outside the schema")
-            canonical = column_name
-
         position = match.end()
         if position >= len(text):
             raise SchemaValidationError("whose predicate value is missing")
@@ -1404,16 +1400,17 @@ class PipelineNL2SQLGenerator:
 
         operator = raw_operator.casefold()
         if literal == "NULL":
-            if operator in {"is", "is not", "isn't"}:
-                predicate = f"{canonical} IS {'NOT ' if operator != 'is' else ''}NULL"
+            if operator == "is":
+                normalized_operator = "IS"
+            elif operator in {"is not", "isn't"}:
+                normalized_operator = "IS NOT"
             else:
                 raise SchemaValidationError("comparison with NULL is unsupported")
         else:
-            normalized = {
+            normalized_operator = {
                 "is": "=", "equals": "=", "is not": "!=", "isn't": "!=",
                 "<>": "!=",
             }.get(operator, raw_operator)
-            predicate = f"{canonical} {normalized} {literal}"
 
         tail = executable[value_end:]
         if re.search(r"\bor\b|\bwhose\b|[()]", tail, re.IGNORECASE):
@@ -1426,7 +1423,30 @@ class PipelineNL2SQLGenerator:
         ) and not self._schema_is_zero_count_suffix(stripped_tail):
             raise SchemaValidationError("unexpected text after whose predicate")
         span = (match.start(), value_end)
-        return predicate, span
+        return _SchemaWhoseParsed(raw_column, normalized_operator, literal, span)
+
+    def _schema_resolve_whose(
+        self,
+        text: str,
+        table: SchemaTableContext,
+        schema: SchemaContext,
+    ) -> tuple[str, tuple[int, int]] | None:
+        """Resolve one schema-aware ``whose`` predicate for a selected table."""
+        parsed = self._schema_parse_whose(text)
+        if parsed is None:
+            return None
+        parts = parsed.raw_column.split(".")
+        column_name = parts[-1]
+        if len(parts) > 1:
+            candidates = schema.table_candidates(".".join(parts[:-1]))
+            if len(candidates) != 1 or candidates[0].key != table.key:
+                raise SchemaValidationError("whose column table is not the selected table")
+        canonical = schema.canonical_column(table, column_name)
+        if canonical is None:
+            if table.has_column_metadata:
+                raise SchemaValidationError("whose column is outside the schema")
+            canonical = column_name
+        return f"{canonical} {parsed.operator} {parsed.literal}", parsed.span
 
     def _schema_resolve_joined_on(
         self,
@@ -1921,6 +1941,54 @@ class PipelineNL2SQLGenerator:
             })
         return subject, joins
 
+    def _schema_resolve_path_whose(
+        self,
+        parsed: _SchemaWhoseParsed,
+        subject: SchemaTableContext,
+        path_steps: tuple[object, ...],
+        schema: SchemaContext,
+    ) -> tuple[str | None, _nl2sql_ir.PathCondition | None]:
+        """Resolve one whose predicate against the validated path tables."""
+        path_tables = [subject]
+        path_tables.extend(
+            schema.table_candidates(step.to_table)[0]
+            for step in path_steps
+            if len(schema.table_candidates(step.to_table)) == 1
+        )
+        if len(path_tables) != len(path_steps) + 1:
+            raise SchemaValidationError("path table is not unique")
+
+        parts = parsed.raw_column.split(".")
+        column_name = parts[-1]
+        if len(parts) > 1:
+            owners = schema.table_candidates(".".join(parts[:-1]))
+            if len(owners) != 1:
+                raise SchemaValidationError("whose column table is not unique")
+            owner = owners[0]
+            if owner.key not in {table.key for table in path_tables}:
+                raise SchemaValidationError("whose column table is outside the path")
+        else:
+            owners = [
+                table for table in path_tables
+                if schema.canonical_column(table, column_name) is not None
+            ]
+            if len(owners) != 1:
+                raise SchemaValidationError("whose column owner is ambiguous or unknown")
+            owner = owners[0]
+
+        canonical = schema.canonical_column(owner, column_name)
+        if canonical is None:
+            raise SchemaValidationError("whose column is outside the path schema")
+        predicate = f"{owner.name}.{canonical} {parsed.operator} {parsed.literal}"
+        if owner.key == subject.key:
+            return predicate, None
+        return None, _nl2sql_ir.PathCondition(
+            table=owner.name,
+            column=canonical,
+            operator=parsed.operator,
+            literal=parsed.literal,
+        )
+
     def _schema_resolve_multihop_unique_path(
         self,
         text: str,
@@ -1928,6 +1996,7 @@ class PipelineNL2SQLGenerator:
         schema: SchemaContext,
         *,
         include_zero: bool = False,
+        whose_span: tuple[int, int] | None = None,
     ) -> tuple[SchemaTableContext, tuple[object, ...], tuple[int, int]] | None:
         """Resolve one bounded two-hop path for a subject-grouped unique count."""
         if not self._schema_unique_count_spans(text, ("count", None)):
@@ -1971,6 +2040,8 @@ class PipelineNL2SQLGenerator:
             raise SchemaValidationError("multi-hop group subject has no primary key")
 
         masked_group = self._schema_mask_span(executable, group_match.span())
+        if whose_span is not None:
+            masked_group = self._schema_mask_span(masked_group, whose_span)
         mentions = self._schema_table_mentions(masked_group, schema)
         target_candidates = tuple(table for table in mentions if table.key != subject.key)
         if len(target_candidates) != 1:
@@ -2089,6 +2160,7 @@ class PipelineNL2SQLGenerator:
         try:
             executable_text = mask_non_executable(text)
             zero_count_intent = self._schema_has_zero_count_intent(text)
+            parsed_whose = self._schema_parse_whose(text)
             joined_on_resolution = self._schema_resolve_joined_on(
                 text, table_hint, schema
             )
@@ -2100,7 +2172,11 @@ class PipelineNL2SQLGenerator:
             multihop_unique_resolution = None
             if joined_on_resolution is None and joined_with_resolution is None:
                 multihop_unique_resolution = self._schema_resolve_multihop_unique_path(
-                    text, table_hint, schema, include_zero=zero_count_intent
+                    text,
+                    table_hint,
+                    schema,
+                    include_zero=zero_count_intent,
+                    whose_span=parsed_whose.span if parsed_whose is not None else None,
                 )
             label_resolution = None
             if (
@@ -2142,9 +2218,26 @@ class PipelineNL2SQLGenerator:
             else:
                 table_context, joins = self._schema_resolve_joins(text, table_hint, schema)
                 metric_text = text_lower
-            whose_resolution = self._schema_resolve_whose(text, table_context, schema)
+            whose_resolution = (
+                None
+                if multihop_unique_resolution is not None
+                else self._schema_resolve_whose(text, table_context, schema)
+            )
             whose_condition = None
+            path_conditions: list[_nl2sql_ir.PathCondition] = []
             ordinary_conditions: list[str] = []
+            whose_span: tuple[int, int] | None = None
+            if multihop_unique_resolution is not None and parsed_whose is not None:
+                subject, path_steps, _ = multihop_unique_resolution
+                whose_condition, path_condition = self._schema_resolve_path_whose(
+                    parsed_whose,
+                    subject,
+                    path_steps,
+                    schema,
+                )
+                if path_condition is not None:
+                    path_conditions.append(path_condition)
+                whose_span = parsed_whose.span
             condition_text = text_lower
             condition_original = text
             if joined_on_span is not None:
@@ -2155,6 +2248,10 @@ class PipelineNL2SQLGenerator:
                 condition_original = self._schema_mask_span(condition_original, joined_with_span)
             if whose_resolution is not None:
                 whose_condition, whose_span = whose_resolution
+                metric_text = self._schema_mask_span(metric_text, whose_span)
+                condition_text = self._schema_mask_span(condition_text, whose_span)
+                condition_original = self._schema_mask_span(condition_original, whose_span)
+            elif whose_span is not None:
                 metric_text = self._schema_mask_span(metric_text, whose_span)
                 condition_text = self._schema_mask_span(condition_text, whose_span)
                 condition_original = self._schema_mask_span(condition_original, whose_span)
@@ -2229,35 +2326,9 @@ class PipelineNL2SQLGenerator:
                         "unique count with relationships is unsupported"
                     )
                 if multihop_unique_resolution is not None:
-                    if whose_condition is not None:
-                        whose_clause = text[whose_span[0]:whose_span[1]]
-                        whose_match = _SCHEMA_WHOSE_PREFIX.match(whose_clause)
-                        if whose_match is None:
-                            raise SchemaValidationError("whose predicate ownership is invalid")
-                        raw_column = whose_match.group(1)
-                        column_parts = raw_column.split(".")
-                        if len(column_parts) > 1:
-                            owners = schema.table_candidates(".".join(column_parts[:-1]))
-                            if len(owners) != 1 or owners[0].key != table_context.key:
-                                raise SchemaValidationError(
-                                    "multi-hop unique count whose predicate is not subject-owned"
-                                )
-                        elif zero_count_intent:
-                            path_table_names = {
-                                step.to_table.casefold()
-                                for step in multihop_unique_resolution[1]
-                            }
-                            for path_table_name in path_table_names:
-                                path_tables = schema.table_candidates(path_table_name)
-                                if len(path_tables) != 1:
-                                    raise SchemaValidationError("path table is not unique")
-                                if schema.canonical_column(path_tables[0], column_parts[0]) is not None:
-                                    raise SchemaValidationError(
-                                        "unqualified whose column is ambiguous across the path"
-                                    )
                     if ordinary_conditions:
                         raise SchemaValidationError(
-                            "multi-hop unique count only supports subject whose predicates"
+                            "path unique count only supports whose predicates"
                         )
                     if not zero_count_intent and self._schema_has_explicit_ordering(text_lower):
                         raise SchemaValidationError(
@@ -2273,6 +2344,7 @@ class PipelineNL2SQLGenerator:
                         ),
                         exclude_null_identity=True,
                         include_zero=zero_count_intent,
+                        path_conditions=tuple(path_conditions),
                     )
                 if len(table_context.primary_key) == 0:
                     raise SchemaValidationError(

@@ -24,7 +24,7 @@ from ..nl2sql_components.evidence import (
     GenerationEvidence,
 )
 from .dialect import apply_dialect_adjustments
-from .ir import DistinctCountPlan, PathDistinctCountPlan, QueryIR
+from .ir import DistinctCountPlan, PathCondition, PathDistinctCountPlan, QueryIR
 from .validation import validate_sql
 
 
@@ -82,6 +82,10 @@ _SAFE_IDENTIFIER = re.compile(
     r"[A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)*"
 )
 _DERIVED_COUNT_ALIAS = "_distinct_targets"
+_PATH_LITERAL = re.compile(
+    r"(?:NULL|-?(?:\d+(?:\.\d*)?|\.\d+)|'(?:''|[^'])*')",
+    re.IGNORECASE,
+)
 
 
 def _safe_identifier(value: str) -> bool:
@@ -247,12 +251,51 @@ def _qualify_subject_condition(condition: str, subject_table: str) -> str:
     return pattern.sub(lambda match: f"{subject_table}.{match.group(1)}", condition)
 
 
+def _render_path_conditions(
+    plan: PathDistinctCountPlan,
+    path_tables: set[str],
+) -> tuple[list[str], str | None]:
+    """Validate and render intermediate/target-owned path predicates."""
+    if not isinstance(plan.path_conditions, tuple):
+        return [], "path condition collection is invalid"
+    rendered: list[str] = []
+    allowed_operators = {"=", "!=", ">", ">=", "<", "<=", "IS", "IS NOT"}
+    for condition in plan.path_conditions:
+        if (
+            not isinstance(condition, PathCondition)
+            or not _safe_identifier(condition.table)
+            or condition.table.casefold() not in path_tables
+            or not _safe_identifier(condition.column)
+            or condition.operator not in allowed_operators
+            or not isinstance(condition.literal, str)
+            or _PATH_LITERAL.fullmatch(condition.literal) is None
+        ):
+            return [], "path condition is invalid"
+        if condition.literal.upper() == "NULL":
+            if condition.operator not in {"IS", "IS NOT"}:
+                return [], "NULL path condition requires IS or IS NOT"
+        elif condition.operator in {"IS", "IS NOT"}:
+            return [], "IS path condition requires NULL"
+        rendered.append(
+            f"{condition.table}.{condition.column} "
+            f"{condition.operator} {condition.literal}"
+        )
+    return rendered, None
+
+
 def _render_zero_path_distinct_count_plan(
     ir: QueryIR,
     plan: PathDistinctCountPlan,
     target_table: str,
 ) -> Tuple[Optional[str], str, float, GenerationEvidence]:
     """Render a subject baseline left-joined to distinct target counts."""
+    path_tables = {
+        step.to_table.casefold()
+        for step in plan.path_steps
+    }
+    rendered_path_conditions, condition_error = _render_path_conditions(plan, path_tables)
+    if condition_error is not None:
+        return _render_plan_failure(condition_error)
     raw_conditions = (
         ir.conditions
         if isinstance(ir.conditions, list)
@@ -297,6 +340,7 @@ def _render_zero_path_distinct_count_plan(
         )
         pair_sql += f"\nJOIN {step.to_table} ON {conditions}"
     pair_conditions = [*subject_conditions]
+    pair_conditions.extend(rendered_path_conditions)
     pair_conditions.extend(
         f"{plan.subject_table}.{column} IS NOT NULL"
         for column in plan.group_identity
@@ -381,8 +425,10 @@ def _render_zero_path_distinct_count_plan(
         f"Subject identity groups: {', '.join(group_aliases)}",
         0.1,
     ))
-    if subject_conditions:
-        explanation_parts.append(f"条件: {len(subject_conditions)}个")
+    if subject_conditions or rendered_path_conditions:
+        explanation_parts.append(
+            f"条件: {len(subject_conditions) + len(rendered_path_conditions)}个"
+        )
         evidence.items.append(EvidenceItem(
             EVIDENCE_CONDITIONS_PRESENT,
             "Subject predicates restrict zero-count baseline and target counts",
@@ -459,6 +505,12 @@ def _render_path_distinct_count_plan(
     target_table = table_names[-1]
     if plan.include_zero:
         return _render_zero_path_distinct_count_plan(ir, plan, target_table)
+    rendered_path_conditions, condition_error = _render_path_conditions(
+        plan,
+        {name.casefold() for name in table_names[1:]},
+    )
+    if condition_error is not None:
+        return _render_plan_failure(condition_error)
 
     inner_projection = [
         f"{plan.subject_table}.{column} AS _group_{index}"
@@ -481,6 +533,7 @@ def _render_path_distinct_count_plan(
         if isinstance(conditions, list)
         else ([_qualify_subject_condition(conditions, plan.subject_table)] if conditions.strip() else [])
     )
+    inner_conditions.extend(rendered_path_conditions)
     if plan.exclude_null_identity:
         inner_conditions.extend(
             f"{plan.subject_table}.{column} IS NOT NULL"
@@ -515,9 +568,12 @@ def _render_path_distinct_count_plan(
         f"GROUP BY clause: {', '.join(group_aliases)}",
         0.1,
     ))
-    if inner_conditions and conditions:
+    if inner_conditions and (conditions or rendered_path_conditions):
+        condition_count = (
+            len(conditions) if isinstance(conditions, list) else (1 if conditions else 0)
+        ) + len(rendered_path_conditions)
         explanation_parts.append(
-            f"条件: {len(conditions) if isinstance(conditions, list) else 1}个"
+            f"条件: {condition_count}个"
         )
         evidence.items.append(EvidenceItem(
             EVIDENCE_CONDITIONS_PRESENT,

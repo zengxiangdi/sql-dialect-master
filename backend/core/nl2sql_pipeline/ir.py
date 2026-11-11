@@ -31,6 +31,16 @@ class PathStep:
 
 
 @dataclass(frozen=True)
+class PathCondition:
+    """One canonical predicate owned by an intermediate or target table."""
+
+    table: str
+    column: str
+    operator: str
+    literal: str
+
+
+@dataclass(frozen=True)
 class PathDistinctCountPlan:
     """Validated two-hop target identity count plan."""
 
@@ -40,6 +50,7 @@ class PathDistinctCountPlan:
     target_identity: tuple[str, ...]
     exclude_null_identity: bool = True
     include_zero: bool = False
+    path_conditions: tuple[PathCondition, ...] = ()
 
 
 @dataclass
