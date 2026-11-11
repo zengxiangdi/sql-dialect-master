@@ -18,7 +18,7 @@ did against the legacy class.
 """
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Dict, List, Optional, Tuple
 
 import sqlglot
@@ -1071,6 +1071,90 @@ class PipelineNL2SQLGenerator:
             direction = "DESC" if raw_direction and raw_direction.casefold() in {"descending", "desc"} else "ASC"
             resolved.append((canonical, direction))
         return resolved
+
+    def _schema_resolve_path_ordering(
+        self,
+        text: str,
+        table: SchemaTableContext,
+        schema: SchemaContext,
+        plan: _nl2sql_ir.PathDistinctCountPlan,
+    ) -> tuple[_nl2sql_ir.PathOrderingTerm, ...]:
+        """Resolve explicit aggregate/group ordering for a path count."""
+        explicit = re.search(
+            r"\b(?:order(?:ed)?|sort(?:ed)?)\s+by\s+",
+            text,
+            re.IGNORECASE,
+        )
+        has_top = re.search(r"\btop\s+\d+\b", text, re.IGNORECASE) is not None
+        if explicit is None:
+            if has_top or self._schema_has_explicit_ordering(text):
+                raise SchemaValidationError(
+                    "path count requires explicit ORDER BY syntax"
+                )
+            return ()
+
+        tail = text[explicit.end():]
+        boundary = re.search(r"\b(?:where|whose|limit)\b", tail, re.IGNORECASE)
+        clause = tail[:boundary.start()] if boundary else tail
+        if re.search(r"\bor\b|[()\u4e00-\u9fff]", clause, re.IGNORECASE):
+            raise SchemaValidationError("unsupported path ordering syntax")
+        items = re.split(r"\s*,\s*|\s+and\s+", clause)
+        if not items or any(not item.strip() for item in items) or len(items) > 5:
+            raise SchemaValidationError("invalid or excessive path ordering")
+        identifier = r"[A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*){0,2}"
+        item_pattern = re.compile(
+            rf"^\s*({identifier})\s*(?:(ascending|descending|asc|desc)\s*)?$",
+            re.IGNORECASE,
+        )
+        group_identity = {
+            column.casefold(): column for column in plan.group_identity
+        }
+        terms: list[_nl2sql_ir.PathOrderingTerm] = []
+        seen: set[tuple[str, str]] = set()
+        for item in items:
+            match = item_pattern.fullmatch(item)
+            if match is None:
+                raise SchemaValidationError("invalid path ordering term")
+            raw_column, raw_direction = match.groups()
+            direction = (
+                "DESC"
+                if raw_direction and raw_direction.casefold() in {"descending", "desc"}
+                else "ASC"
+            )
+            if raw_column.casefold() == "count":
+                key = ("count", "")
+                if key in seen:
+                    raise SchemaValidationError("duplicate path count ordering")
+                seen.add(key)
+                terms.append(_nl2sql_ir.PathOrderingTerm("count", None, direction))
+                continue
+
+            parts = raw_column.split(".")
+            column_name = parts[-1]
+            if len(parts) > 1:
+                owners = schema.table_candidates(".".join(parts[:-1]))
+                if len(owners) != 1 or owners[0].key != table.key:
+                    raise SchemaValidationError(
+                        "path ordering table is not the subject table"
+                    )
+            canonical = schema.canonical_column(table, column_name)
+            if canonical is None or canonical.casefold() not in group_identity:
+                raise SchemaValidationError(
+                    "path ordering must use subject group identity"
+                )
+            key = ("group", canonical.casefold())
+            if key in seen:
+                raise SchemaValidationError("duplicate path group ordering")
+            seen.add(key)
+            terms.append(
+                _nl2sql_ir.PathOrderingTerm("group", group_identity[canonical.casefold()], direction)
+            )
+
+        if has_top and not any(term.kind == "count" for term in terms):
+            raise SchemaValidationError(
+                "path TOP requires explicit count ordering"
+            )
+        return tuple(terms)
 
     def _schema_resolve_count_metric(
         self,
@@ -2330,10 +2414,6 @@ class PipelineNL2SQLGenerator:
                         raise SchemaValidationError(
                             "path unique count only supports whose predicates"
                         )
-                    if not zero_count_intent and self._schema_has_explicit_ordering(text_lower):
-                        raise SchemaValidationError(
-                            "multi-hop unique count ordering is unsupported"
-                        )
                     subject, path_steps, _ = multihop_unique_resolution
                     path_distinct_count_plan = _nl2sql_ir.PathDistinctCountPlan(
                         subject_table=subject.name,
@@ -2375,35 +2455,31 @@ class PipelineNL2SQLGenerator:
                     raise SchemaValidationError(
                         "multi-hop paths cannot be combined with filters or aggregation"
                     )
-            ordering_candidates = (
-                self._schema_resolve_ordering(text_lower, table_context, schema)
-                if self._schema_has_explicit_ordering(text_lower)
-                else []
-            )
+            ordering_candidates: list[tuple[str, str]] = []
             if path_distinct_count_plan is not None:
-                if not path_distinct_count_plan.include_zero and ordering_candidates:
-                    raise SchemaValidationError(
-                        "non-zero path count ordering is unsupported"
-                    )
-                if path_distinct_count_plan.include_zero:
-                    group_identity = {
-                        column.casefold()
-                        for column in path_distinct_count_plan.group_identity
-                    }
-                    if any(
-                        column.casefold() not in group_identity
-                        for column, _ in ordering_candidates
-                    ):
-                        raise SchemaValidationError(
-                            "zero-count ordering must use subject identity columns"
-                        )
-            if len(ordering_candidates) > 1 and (
+                path_orderings = self._schema_resolve_path_ordering(
+                    text_lower,
+                    table_context,
+                    schema,
+                    path_distinct_count_plan,
+                )
+                path_distinct_count_plan = replace(
+                    path_distinct_count_plan,
+                    path_orderings=path_orderings,
+                )
+            else:
+                ordering_candidates = (
+                    self._schema_resolve_ordering(text_lower, table_context, schema)
+                    if self._schema_has_explicit_ordering(text_lower)
+                    else []
+                )
+            if path_distinct_count_plan is None and len(ordering_candidates) > 1 and (
                 group_by or aggregations or label_resolution is not None
             ):
                 raise SchemaValidationError(
                     "multi-column ORDER BY combinations are unsupported"
                 )
-            if len(ordering_candidates) > 1 and distinct:
+            if path_distinct_count_plan is None and len(ordering_candidates) > 1 and distinct:
                 if columns == ["*"]:
                     raise SchemaValidationError(
                         "DISTINCT * cannot be combined with multi-column ORDER BY"
@@ -2416,8 +2492,16 @@ class PipelineNL2SQLGenerator:
                     raise SchemaValidationError(
                         "DISTINCT ORDER BY columns must be projected"
                     )
-            ordering = ordering_candidates[0] if len(ordering_candidates) == 1 else None
-            orderings = ordering_candidates if len(ordering_candidates) > 1 else None
+            ordering = (
+                ordering_candidates[0]
+                if path_distinct_count_plan is None and len(ordering_candidates) == 1
+                else None
+            )
+            orderings = (
+                ordering_candidates
+                if path_distinct_count_plan is None and len(ordering_candidates) > 1
+                else None
+            )
             limit = self._extract_limit(text_lower)
             render_columns = ["*"] if aggregations and not group_by else columns
             sql, explanation, confidence, evidence = self._build_sql_enhanced(

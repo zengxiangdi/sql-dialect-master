@@ -41,6 +41,15 @@ class PathCondition:
 
 
 @dataclass(frozen=True)
+class PathOrderingTerm:
+    """One typed aggregate or subject-group ordering for a path count."""
+
+    kind: str
+    column: str | None
+    direction: str
+
+
+@dataclass(frozen=True)
 class PathDistinctCountPlan:
     """Validated two-hop target identity count plan."""
 
@@ -51,6 +60,7 @@ class PathDistinctCountPlan:
     exclude_null_identity: bool = True
     include_zero: bool = False
     path_conditions: tuple[PathCondition, ...] = ()
+    path_orderings: tuple[PathOrderingTerm, ...] = ()
 
 
 @dataclass

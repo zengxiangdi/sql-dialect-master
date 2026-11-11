@@ -24,7 +24,13 @@ from ..nl2sql_components.evidence import (
     GenerationEvidence,
 )
 from .dialect import apply_dialect_adjustments
-from .ir import DistinctCountPlan, PathCondition, PathDistinctCountPlan, QueryIR
+from .ir import (
+    DistinctCountPlan,
+    PathCondition,
+    PathDistinctCountPlan,
+    PathOrderingTerm,
+    QueryIR,
+)
 from .validation import validate_sql
 
 
@@ -283,6 +289,58 @@ def _render_path_conditions(
     return rendered, None
 
 
+def _render_path_orderings(
+    plan: PathDistinctCountPlan,
+    group_aliases: list[str],
+    *,
+    include_zero: bool,
+) -> tuple[str, str | None]:
+    """Validate and render typed path aggregate/group orderings."""
+    if not isinstance(plan.path_orderings, tuple):
+        return "", "path ordering collection is invalid"
+    if len(plan.path_orderings) > 5:
+        return "", "invalid or excessive path ordering"
+    if not plan.path_orderings:
+        return "", None
+    alias_by_column = {
+        column.casefold(): alias
+        for column, alias in zip(plan.group_identity, group_aliases)
+    }
+    seen: set[tuple[str, str]] = set()
+    rendered: list[str] = []
+    ordered_groups: set[str] = set()
+    for term in plan.path_orderings:
+        if not isinstance(term, PathOrderingTerm) or term.direction not in {"ASC", "DESC"}:
+            return "", "path ordering term is invalid"
+        if term.kind == "count":
+            if term.column is not None:
+                return "", "count ordering cannot name a column"
+            key = ("count", "")
+            expression = "COALESCE(c.count, 0)" if include_zero else "COUNT(*)"
+        elif term.kind == "group":
+            if not _safe_identifier(term.column or ""):
+                return "", "path group ordering column is invalid"
+            key = ("group", (term.column or "").casefold())
+            alias = alias_by_column.get(key[1])
+            if alias is None:
+                return "", "path ordering must use subject group identity"
+            ordered_groups.add(key[1])
+            expression = f"b.{alias}" if include_zero else alias
+        else:
+            return "", "path ordering kind is invalid"
+        if key in seen:
+            return "", "duplicate path ordering"
+        seen.add(key)
+        rendered.append(f"{expression} {term.direction}")
+
+    for column, alias in zip(plan.group_identity, group_aliases):
+        if column.casefold() in ordered_groups:
+            continue
+        expression = f"b.{alias}" if include_zero else alias
+        rendered.append(f"{expression} ASC")
+    return ", ".join(rendered), None
+
+
 def _render_zero_path_distinct_count_plan(
     ir: QueryIR,
     plan: PathDistinctCountPlan,
@@ -363,35 +421,13 @@ def _render_zero_path_distinct_count_plan(
         f"b.{alias} = c.{alias}" for alias in group_aliases
     )
     select_groups = ", ".join(f"b.{alias}" for alias in group_aliases)
-    ordering_sql = ""
-    active_orderings = ir.orderings or ([ir.ordering] if ir.ordering else [])
-    if active_orderings:
-        alias_by_column = {
-            column.casefold(): alias
-            for column, alias in zip(plan.group_identity, group_aliases)
-        }
-        ordered_columns: set[str] = set()
-        resolved_orderings: list[str] = []
-        for column, direction in active_orderings:
-            key = column.casefold()
-            alias = alias_by_column.get(key)
-            if (
-                not _safe_identifier(column)
-                or direction not in {"ASC", "DESC"}
-                or alias is None
-                or key in ordered_columns
-            ):
-                return _render_plan_failure(
-                    "zero-count ordering must use unique subject identity columns"
-                )
-            ordered_columns.add(key)
-            resolved_orderings.append(f"b.{alias} {direction}")
-        resolved_orderings.extend(
-            f"b.{alias} ASC"
-            for column, alias in zip(plan.group_identity, group_aliases)
-            if column.casefold() not in ordered_columns
-        )
-        ordering_sql = ", ".join(resolved_orderings)
+    ordering_sql, ordering_error = _render_path_orderings(
+        plan,
+        group_aliases,
+        include_zero=True,
+    )
+    if ordering_error is not None:
+        return _render_plan_failure(ordering_error)
     sql = (
         f"SELECT {select_groups}, COALESCE(c.count, 0) AS count\n"
         f"FROM (\n"
@@ -474,8 +510,8 @@ def _render_path_distinct_count_plan(
         return _render_plan_failure("only SELECT operations are supported")
     if ir.joins or ir.aggregations or ir.distinct:
         return _render_plan_failure("joins, aggregations, and DISTINCT are unsupported")
-    if (ir.ordering or ir.orderings) and not plan.include_zero:
-        return _render_plan_failure("ORDER BY is unsupported")
+    if ir.ordering or ir.orderings:
+        return _render_plan_failure("path ordering must use path_orderings")
     if not 1 <= len(plan.path_steps) <= 2:
         return _render_plan_failure("one or two path steps are required")
     if not _safe_identifier(plan.subject_table) or plan.subject_table != ir.table:
@@ -554,7 +590,18 @@ def _render_path_distinct_count_plan(
         f"FROM (\n{indented_inner}\n) AS _distinct_targets\n"
         f"GROUP BY {', '.join(group_aliases)}"
     )
+    ordering_sql, ordering_error = _render_path_orderings(
+        plan,
+        group_aliases,
+        include_zero=False,
+    )
+    if ordering_error is not None:
+        return _render_plan_failure(ordering_error)
+    if ordering_sql:
+        sql += f"\nORDER BY {ordering_sql}"
     explanation_parts = ["聚合: COUNT(*) AS count", f"表: {plan.subject_table}", f"分组: {', '.join(group_aliases)}"]
+    if ordering_sql:
+        explanation_parts.append(f"排序: {ordering_sql}")
     evidence = ir.evidence
     evidence.items.append(EvidenceItem("base", "Base confidence for multi-hop distinct count", 0.5))
     evidence.items.append(EvidenceItem(

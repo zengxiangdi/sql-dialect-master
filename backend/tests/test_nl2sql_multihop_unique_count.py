@@ -133,13 +133,22 @@ def test_target_and_intermediate_whose_are_inner(column):
 @pytest.mark.parametrize("text", [
     "count distinct products per user where users.tenant_id = 1",
     "count distinct products per user whose tenant_id is 1",
-    "count distinct products per user ordered by tenant_id",
 ])
 def test_non_batch_a_ordinary_ambiguous_filters_and_ordering_fail_closed(text):
     result = generate(text, schema())
 
     assert result.success is False
     assert result.sql is None
+
+
+def test_nonzero_twohop_group_ordering_is_supported():
+    result = generate(
+        "count distinct products per user ordered by tenant_id desc",
+        schema(),
+    )
+
+    assert result.success
+    assert "ORDER BY _group_0 DESC, _group_1 ASC" in result.sql
 
 
 def test_repeated_product_orders_count_once_and_tenants_remain_distinct():
