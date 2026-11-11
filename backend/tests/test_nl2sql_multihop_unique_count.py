@@ -108,7 +108,7 @@ def test_chinese_unique_wording_uses_the_same_path_plan():
 
 def test_subject_whose_is_inner_and_limit_is_outer():
     result = generate(
-        "count distinct products per user whose tenant_id is 1 limit 5",
+        "count distinct products per user whose users.tenant_id is 1 limit 5",
         schema(),
     )
 
@@ -118,13 +118,24 @@ def test_subject_whose_is_inner_and_limit_is_outer():
     assert result.sql.index(") AS _distinct_targets") < result.sql.index("LIMIT 5")
 
 
+@pytest.mark.parametrize("column", ["products.tenant_id", "orders.tenant_id"])
+def test_target_and_intermediate_whose_are_inner(column):
+    result = generate(
+        f"count distinct products per user whose {column} is 1",
+        schema(),
+    )
+
+    assert result.success
+    assert f"{column} = 1" in result.sql
+    assert result.sql.index(f"{column} = 1") < result.sql.index(") AS _distinct_targets")
+
+
 @pytest.mark.parametrize("text", [
     "count distinct products per user where users.tenant_id = 1",
-    "count distinct products per user whose products.tenant_id is 1",
-    "count distinct products per user whose orders.tenant_id is 1",
+    "count distinct products per user whose tenant_id is 1",
     "count distinct products per user ordered by tenant_id",
 ])
-def test_non_batch_a_filters_and_ordering_fail_closed(text):
+def test_non_batch_a_ordinary_ambiguous_filters_and_ordering_fail_closed(text):
     result = generate(text, schema())
 
     assert result.success is False
@@ -219,8 +230,8 @@ def test_two_hop_unique_count_is_parseable_in_all_dialects(dialect):
 
 def test_two_hop_generation_is_deterministic():
     context = schema()
-    first = generate("count distinct products per user whose tenant_id is 1 limit 5", context)
-    second = generate("count distinct products per user whose tenant_id is 1 limit 5", context)
+    first = generate("count distinct products per user whose users.tenant_id is 1 limit 5", context)
+    second = generate("count distinct products per user whose users.tenant_id is 1 limit 5", context)
 
     assert first.success and second.success
     assert first.sql == second.sql

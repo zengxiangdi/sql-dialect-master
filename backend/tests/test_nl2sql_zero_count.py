@@ -193,14 +193,26 @@ def test_zero_count_subject_whose_is_applied_to_baseline_and_counts():
     assert "users.status = 'active'" in result.sql.split("LEFT JOIN", 1)[1]
 
 
+@pytest.mark.parametrize("column", ["products.tenant_id", "orders.tenant_id"])
+def test_zero_count_path_filters_only_constrain_count_input(column):
+    result = generate(
+        f"count distinct products per user whose {column} is 1 including zero",
+        make_schema(),
+    )
+
+    assert result.success
+    baseline, counts = result.sql.split(") AS b\nLEFT JOIN (", 1)
+    assert f"{column} = 1" not in baseline
+    assert f"{column} = 1" in counts
+    assert "WHERE" not in result.sql.rsplit(") AS c ON", 1)[-1]
+
+
 @pytest.mark.parametrize("text", [
     "count distinct products per user where users.tenant_id = 1 including zero",
     "count distinct products per user whose tenant_id is 1 including zero",
-    "count distinct products per user whose products.tenant_id is 1 including zero",
-    "count distinct products per user whose orders.tenant_id is 1 including zero",
     "count distinct products per user ordered by tenant_id including zero",
 ])
-def test_zero_count_ordinary_where_target_filters_and_order_fail_closed(text):
+def test_zero_count_ordinary_where_ambiguous_filters_and_order_fail_closed(text):
     result = generate(text, make_schema())
 
     assert result.success is False
