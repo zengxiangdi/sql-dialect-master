@@ -39,6 +39,7 @@ class PathDistinctCountPlan:
     group_identity: tuple[str, ...]
     target_identity: tuple[str, ...]
     exclude_null_identity: bool = True
+    include_zero: bool = False
 
 
 @dataclass
