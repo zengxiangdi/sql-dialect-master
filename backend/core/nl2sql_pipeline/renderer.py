@@ -334,7 +334,6 @@ def _render_zero_path_distinct_count_plan(
             if (
                 not _safe_identifier(column)
                 or direction not in {"ASC", "DESC"}
-                or key == "count"
                 or alias is None
                 or key in ordered_columns
             ):

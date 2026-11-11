@@ -1119,26 +1119,7 @@ class PipelineNL2SQLGenerator:
     def _schema_has_zero_count_intent(text: str) -> bool:
         """Detect explicit inclusion of subjects with no matching targets."""
         executable = mask_non_executable(text)
-        matches = [
-            match
-            for pattern in _SCHEMA_ZERO_COUNT_PATTERNS
-            for match in pattern.finditer(executable)
-        ]
-        if not matches:
-            return False
-        matches.sort(key=lambda match: (match.start(), -(match.end() - match.start())))
-        non_overlapping = []
-        for match in matches:
-            if non_overlapping and match.start() < non_overlapping[-1].end():
-                continue
-            non_overlapping.append(match)
-        matches = non_overlapping
-        if len(matches) != 1:
-            raise SchemaValidationError("multiple zero-count phrases are unsupported")
-        suffix = executable[matches[0].end():].strip(" \t\r\n,.;，。；、")
-        if not PipelineNL2SQLGenerator._schema_is_zero_count_clause_suffix(suffix):
-            raise SchemaValidationError("unexpected text after zero-count phrase")
-        return True
+        return any(pattern.search(executable) for pattern in _SCHEMA_ZERO_COUNT_PATTERNS)
 
     @staticmethod
     def _schema_is_zero_count_clause_suffix(text: str) -> bool:

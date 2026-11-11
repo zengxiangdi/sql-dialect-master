@@ -67,6 +67,28 @@ def make_schema(*, path_length=2, subject_primary_key=("tenant_id", "id")):
     return SchemaContext.from_mapping({"tables": tables, "relationships": relationships})
 
 
+def make_count_pk_schema():
+    return SchemaContext.from_mapping({
+        "tables": [
+            {
+                "name": "users",
+                "columns": [{"name": "count"}],
+                "primary_key": ["count"],
+            },
+            {
+                "name": "orders",
+                "columns": [{"name": "id"}, {"name": "user_id"}],
+                "primary_key": ["id"],
+            },
+        ],
+        "relationships": [{
+            "from_table": "users",
+            "to_table": "orders",
+            "columns": [{"from_column": "count", "to_column": "user_id"}],
+        }],
+    })
+
+
 def generate(text, schema=None, dialect="postgres"):
     return NL2SQLGenerator().generate(text, dialect, schema=schema)
 
@@ -91,6 +113,35 @@ def test_explicit_zero_wording_uses_zero_count_baseline(text):
     assert "COALESCE(c.count, 0) AS count" in result.sql
     assert "AS b" in result.sql
     assert "AS c ON" in result.sql
+
+
+@pytest.mark.parametrize("text", [
+    "count distinct products per user including zero whose status is active",
+    "count distinct products including zero per user",
+    "count distinct products per user including zero products",
+    "count distinct products per user including zero users with no products",
+    "count distinct products per user including zero, whose status is active",
+])
+def test_zero_phrase_can_precede_subject_clauses(text):
+    result = generate(text, make_schema())
+
+    assert result.success
+    assert "LEFT JOIN" in result.sql
+    if "whose status" in text:
+        assert result.sql.count("users.status = 'active'") == 2
+
+
+def test_zero_phrase_before_whose_ordering_and_limit_is_valid():
+    result = generate(
+        "count distinct products per user including zero whose status is active "
+        "ordered by users.id desc limit 2",
+        make_schema(),
+    )
+
+    assert result.success
+    assert result.sql.count("users.status = 'active'") == 2
+    assert "ORDER BY b._group_1 DESC, b._group_0 ASC" in result.sql
+    assert result.sql.index(") AS c ON") < result.sql.index("ORDER BY") < result.sql.index("LIMIT 2")
 
 
 def test_default_path_count_still_excludes_zero_subjects():
@@ -211,6 +262,36 @@ def test_two_hop_zero_count_runtime_duckdb():
     connection.close()
 
 
+def test_zero_count_ordering_runtime_sqlite():
+    result = generate(
+        "count distinct products per user including zero ordered by users.id desc limit 2",
+        make_schema(),
+    )
+    assert result.success
+    connection = sqlite3.connect(":memory:")
+    _insert_runtime_rows(connection)
+
+    assert connection.execute(result.sql.split("\n", 1)[1]).fetchall() == [
+        (1, 2, 1), (2, 2, 0),
+    ]
+
+
+def test_zero_count_ordering_runtime_duckdb():
+    duckdb = pytest.importorskip("duckdb")
+    result = generate(
+        "count distinct products per user including zero ordered by users.id desc limit 2",
+        make_schema(),
+    )
+    assert result.success
+    connection = duckdb.connect()
+    _insert_runtime_rows(connection)
+
+    assert connection.execute(result.sql.split("\n", 1)[1]).fetchall() == [
+        (1, 2, 1), (2, 2, 0),
+    ]
+    connection.close()
+
+
 def test_one_hop_zero_count_runtime_includes_users_without_orders():
     result = generate(
         "count distinct orders per user including zero",
@@ -273,6 +354,16 @@ def test_zero_count_single_subject_pk_ordering_has_no_tiebreaker():
     assert result.success
     assert "ORDER BY b._group_0 DESC" in result.sql
     assert "ORDER BY b._group_0 DESC," not in result.sql
+
+
+def test_zero_count_allows_identity_column_named_count():
+    result = generate(
+        "count distinct orders per user including zero ordered by users.count desc",
+        make_count_pk_schema(),
+    )
+
+    assert result.success
+    assert "ORDER BY b._group_0 DESC" in result.sql
 
 
 @pytest.mark.parametrize("path_length,target", [(1, "orders"), (2, "products")])
