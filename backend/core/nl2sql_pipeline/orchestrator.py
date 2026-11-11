@@ -1078,23 +1078,35 @@ class PipelineNL2SQLGenerator:
         table: SchemaTableContext,
         schema: SchemaContext,
         plan: _nl2sql_ir.PathDistinctCountPlan,
+        *,
+        parsed_whose: _SchemaWhoseParsed | None = None,
+        group_span: tuple[int, int] | None = None,
     ) -> tuple[_nl2sql_ir.PathOrderingTerm, ...]:
         """Resolve explicit aggregate/group ordering for a path count."""
+        executable = mask_non_executable(text)
+        if parsed_whose is not None:
+            executable = self._schema_mask_span(executable, parsed_whose.span)
+        if group_span is not None:
+            executable = self._schema_mask_span(executable, group_span)
         explicit = re.search(
             r"\b(?:order(?:ed)?|sort(?:ed)?)\s+by\s+",
-            text,
+            executable,
             re.IGNORECASE,
         )
-        has_top = re.search(r"\btop\s+\d+\b", text, re.IGNORECASE) is not None
+        has_top = re.search(r"\btop\s+\d+\b", executable, re.IGNORECASE) is not None
         if explicit is None:
-            if has_top or self._schema_has_explicit_ordering(text):
+            if has_top or self._schema_has_explicit_ordering(executable):
                 raise SchemaValidationError(
                     "path count requires explicit ORDER BY syntax"
                 )
             return ()
 
-        tail = text[explicit.end():]
-        boundary = re.search(r"\b(?:where|whose|limit)\b", tail, re.IGNORECASE)
+        tail = executable[explicit.end():]
+        boundary = re.search(
+            r"\b(?:where|whose|limit|top\s+\d+)\b",
+            tail,
+            re.IGNORECASE,
+        )
         clause = tail[:boundary.start()] if boundary else tail
         if re.search(r"\bor\b|[()\u4e00-\u9fff]", clause, re.IGNORECASE):
             raise SchemaValidationError("unsupported path ordering syntax")
@@ -2462,6 +2474,12 @@ class PipelineNL2SQLGenerator:
                     table_context,
                     schema,
                     path_distinct_count_plan,
+                    parsed_whose=parsed_whose,
+                    group_span=(
+                        multihop_unique_resolution[2]
+                        if multihop_unique_resolution is not None
+                        else None
+                    ),
                 )
                 path_distinct_count_plan = replace(
                     path_distinct_count_plan,

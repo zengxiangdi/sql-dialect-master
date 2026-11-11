@@ -101,6 +101,49 @@ def test_zero_count_ordering_with_path_filter_and_limit():
     assert "products.tenant_id = 1" in counts
 
 
+@pytest.mark.parametrize("owner", ["users", "orders", "products"])
+@pytest.mark.parametrize("include_zero", [False, True])
+@pytest.mark.parametrize("value", [
+    "'desc'", "desc", "'max'", "max", "'top 10'",
+    "'order by count desc'", "'sort'", "sort", "'sorted'", "sorted",
+    "'asc'", "asc", "'ascending'", "ascending", "'descending'",
+    "descending", "'highest'", "highest", "'lowest'", "lowest",
+    "'min'", "min", "'排序'", "排序", "'降序'", "降序",
+])
+def test_ordering_words_inside_path_filter_values_do_not_trigger_ordering(
+    owner, include_zero, value
+):
+    suffix = " including zero" if include_zero else ""
+    result = generate(
+        f"count distinct products per user whose {owner}.status is {value}{suffix}",
+        twohop_schema(),
+    )
+
+    assert result.success
+    assert not any(line.lstrip().upper().startswith("ORDER BY ") for line in result.sql.splitlines())
+    predicate = f"{owner}.status = "
+    assert predicate in result.sql
+    if include_zero and owner != "users":
+        baseline, counts = result.sql.split(") AS b\nLEFT JOIN (", 1)
+        assert predicate not in baseline
+        assert predicate in counts
+
+
+@pytest.mark.parametrize("owner", ["users", "orders", "products"])
+@pytest.mark.parametrize("include_zero", [False, True])
+def test_real_ordering_after_path_filter_still_orders(owner, include_zero):
+    suffix = " including zero" if include_zero else ""
+    result = generate(
+        f"count distinct products per user whose {owner}.status is 'desc'{suffix} "
+        "ordered by count desc",
+        twohop_schema(),
+    )
+
+    assert result.success
+    expected = "ORDER BY COALESCE(c.count, 0) DESC" if include_zero else "ORDER BY COUNT(*) DESC"
+    assert expected in result.sql
+
+
 @pytest.mark.parametrize("text", [
     "count distinct products per user top 10",
     "count distinct products per user top 10 ordered by users.id desc",
@@ -121,6 +164,19 @@ def test_path_top_with_count_ordering_only_controls_limit():
     assert result.success
     assert "ORDER BY COUNT(*) DESC" in result.sql
     assert result.sql.rstrip().endswith("LIMIT 10")
+
+
+@pytest.mark.parametrize("text,limit", [
+    ("count distinct products per user ordered by count desc top 10", "LIMIT 10"),
+    ("count distinct products per user ordered by count desc, users.id asc top 10", "LIMIT 10"),
+    ("count distinct products per user including zero ordered by count desc top 2", "LIMIT 2"),
+])
+def test_top_after_explicit_ordering_is_only_limit(text, limit):
+    result = generate(text, twohop_schema() if "including zero" not in text else make_schema())
+
+    assert result.success
+    assert "ORDER BY" in result.sql
+    assert result.sql.rstrip().endswith(limit)
 
 
 @pytest.mark.parametrize("text", [
