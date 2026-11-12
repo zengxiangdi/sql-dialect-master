@@ -284,11 +284,11 @@ def test_count_alias_wins_over_subject_identity_named_count():
     ("count distinct orders per user ordered by count desc", single_schema(primary_key=["id"])),
     ("count distinct orders per user ordered by count desc", single_composite_schema(primary_key=["tenant_id", "id"])),
 ])
-def test_flat_and_single_table_count_ordering_remains_fail_closed(text, schema):
+def test_flat_and_single_table_count_ordering_is_handled_by_grouped_batch(text, schema):
     result = generate(text, schema)
 
-    assert result.success is False
-    assert result.sql is None
+    assert result.success
+    assert "ORDER BY" in result.sql
 
 
 def _setup_onehop_runtime(connection):

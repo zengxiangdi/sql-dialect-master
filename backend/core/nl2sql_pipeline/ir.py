@@ -50,6 +50,15 @@ class PathOrderingTerm:
 
 
 @dataclass(frozen=True)
+class AggregateOrderingTerm:
+    """Typed aggregate/group ordering for schema-aware unique counts."""
+
+    kind: str
+    column: str | None
+    direction: str
+
+
+@dataclass(frozen=True)
 class PathDistinctCountPlan:
     """Validated two-hop target identity count plan."""
 
@@ -88,6 +97,7 @@ class QueryIR:
     orderings: Optional[List[Tuple[str, str]]] = None
     distinct_count_plan: Optional[DistinctCountPlan] = None
     path_distinct_count_plan: Optional[PathDistinctCountPlan] = None
+    aggregate_orderings: Optional[tuple[AggregateOrderingTerm, ...]] = None
 
 
 def build_ir(
@@ -105,6 +115,7 @@ def build_ir(
     orderings: Optional[List[Tuple[str, str]]] = None,
     distinct_count_plan: Optional[DistinctCountPlan] = None,
     path_distinct_count_plan: Optional[PathDistinctCountPlan] = None,
+    aggregate_orderings: Optional[tuple[AggregateOrderingTerm, ...]] = None,
 ) -> QueryIR:
     """Thin positional-arg adapter mirroring the legacy call site.
 
@@ -126,4 +137,5 @@ def build_ir(
         orderings=orderings,
         distinct_count_plan=distinct_count_plan,
         path_distinct_count_plan=path_distinct_count_plan,
+        aggregate_orderings=aggregate_orderings,
     )

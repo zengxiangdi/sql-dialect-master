@@ -25,6 +25,7 @@ from ..nl2sql_components.evidence import (
 )
 from .dialect import apply_dialect_adjustments
 from .ir import (
+    AggregateOrderingTerm,
     DistinctCountPlan,
     PathCondition,
     PathDistinctCountPlan,
@@ -100,6 +101,28 @@ def _safe_identifier(value: str) -> bool:
 
 def _render_plan_failure(reason: str) -> Tuple[None, str, float, GenerationEvidence]:
     return None, f"Derived distinct count plan rejected: {reason}", 0.0, GenerationEvidence()
+
+
+def _render_aggregate_orderings(
+    terms: tuple[AggregateOrderingTerm, ...], group_by: list[str], count_expression: str,
+) -> tuple[str, str | None]:
+    if not terms or not group_by or len(terms) > 5:
+        return "", "aggregate ordering requires grouped query" if terms else None
+    keys = {c.casefold(): c for c in group_by}; seen = set(); rendered=[]; groups=set()
+    for term in terms:
+        if not isinstance(term, AggregateOrderingTerm) or term.direction not in {"ASC", "DESC"}:
+            return "", "aggregate ordering term is invalid"
+        if term.kind == "count" and term.column is None:
+            key=("count",""); expression=count_expression
+        elif term.kind == "group" and _safe_identifier(term.column or "") and (term.column or "").casefold() in keys:
+            key=("group",(term.column or "").casefold()); groups.add(key[1]); expression=keys[key[1]]
+        else:
+            return "", "aggregate ordering column is invalid"
+        if key in seen: return "", "duplicate aggregate ordering"
+        seen.add(key); rendered.append(f"{expression} {term.direction}")
+    for col in group_by:
+        if col.casefold() not in groups: rendered.append(f"{col} ASC")
+    return ", ".join(rendered), None
 
 
 def _render_distinct_count_plan(
@@ -195,9 +218,19 @@ def _render_distinct_count_plan(
             0.1,
         ))
 
-    active_orderings = ir.orderings or ([ir.ordering] if ir.ordering else [])
+    if ir.aggregate_orderings is not None and (ir.ordering or ir.orderings):
+        return _render_plan_failure("generic and aggregate orderings cannot be combined")
     ordering_sql = ""
-    if active_orderings:
+    if ir.aggregate_orderings:
+        ordering_sql, ordering_error = _render_aggregate_orderings(
+            ir.aggregate_orderings, ir.group_by, "COUNT(*)"
+        )
+        if ordering_error is not None:
+            return _render_plan_failure(ordering_error)
+        explanation_parts.append(f"排序: {ordering_sql}")
+    else:
+        active_orderings = ir.orderings or ([ir.ordering] if ir.ordering else [])
+    if ir.aggregate_orderings is None and active_orderings:
         group_keys = {column.casefold() for column in ir.group_by}
         for column, direction in active_orderings:
             if (
@@ -824,13 +857,34 @@ def render_sql(ir: QueryIR) -> Tuple[Optional[str], str, float, GenerationEviden
             group_cols = [c for c in columns if c != "*"]
             if group_cols:
                 sql += f"\nGROUP BY {', '.join(group_cols)}"
+        if ir.aggregate_orderings is not None and (ordering or ir.orderings):
+            return _render_plan_failure("generic and aggregate orderings cannot be combined")
+        aggregate_ordering_sql = ""
+        if ir.aggregate_orderings:
+            if len(aggregations) != 1:
+                return _render_plan_failure("aggregate ordering requires one COUNT(DISTINCT pk) aggregation")
+            match = re.fullmatch(
+                r"COUNT\(DISTINCT\s+([A-Za-z_][A-Za-z0-9_$]*)\)\s+AS\s+count",
+                aggregations[0], re.IGNORECASE,
+            )
+            if match is None:
+                return _render_plan_failure("aggregate ordering requires COUNT(DISTINCT pk) AS count")
+            count_expression = f"COUNT(DISTINCT {match.group(1)})"
+            aggregate_ordering_sql, ordering_error = _render_aggregate_orderings(
+                ir.aggregate_orderings, group_by, count_expression
+            )
+            if ordering_error is not None:
+                return _render_plan_failure(ordering_error)
+            explanation_parts.append(f"排序: {aggregate_ordering_sql}")
         active_orderings = ir.orderings or ([ordering] if ordering else [])
-        if active_orderings:
+        if ir.aggregate_orderings is None and active_orderings:
             ordering_sql = ", ".join(
                 f"{column} {direction}" for column, direction in active_orderings
             )
             sql += f"\nORDER BY {ordering_sql}"
             explanation_parts.append(f"排序: {ordering_sql}")
+        elif aggregate_ordering_sql:
+            sql += f"\nORDER BY {aggregate_ordering_sql}"
         if limit is not None:
             sql = add_limit(sql, limit, dialect)
             explanation_parts.append(f"限制: {limit}条")
