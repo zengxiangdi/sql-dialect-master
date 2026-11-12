@@ -88,13 +88,22 @@ def test_composite_subject_target_whose_is_inner():
 @pytest.mark.parametrize("text", [
     "count distinct orders per user where tenant_id = 1",
     "count distinct orders per user whose tenant_id is 1",
-    "count distinct orders per user ordered by tenant_id",
 ])
 def test_unsupported_onehop_filters_and_order_fail_closed(text):
     result = generate(text, context())
 
     assert result.success is False
     assert result.sql is None
+
+
+def test_nonzero_onehop_group_ordering_is_supported():
+    result = generate(
+        "count distinct orders per user ordered by tenant_id desc",
+        context(),
+    )
+
+    assert result.success
+    assert "ORDER BY _group_0 DESC, _group_1 ASC" in result.sql
 
 
 @pytest.mark.parametrize("kwargs", [

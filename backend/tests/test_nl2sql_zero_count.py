@@ -391,7 +391,6 @@ def test_zero_count_ordering_supports_one_and_two_hop(path_length, target):
 
 @pytest.mark.parametrize("text", [
     "count distinct products per user including zero ordered by status",
-    "count distinct products per user including zero ordered by count",
     "count distinct products per user including zero ordered by products.id",
     "count distinct products per user including zero ordered by orders.id",
     "count distinct products per user including zero ordered by lower(id)",
@@ -404,14 +403,14 @@ def test_zero_count_rejects_non_group_or_complex_ordering(text):
     assert result.sql is None
 
 
-def test_nonzero_path_ordering_remains_fail_closed():
+def test_nonzero_path_group_ordering_is_supported():
     result = generate(
         "count distinct products per user ordered by users.id desc",
         make_schema(),
     )
 
-    assert result.success is False
-    assert result.sql is None
+    assert result.success
+    assert "ORDER BY _group_1 DESC, _group_0 ASC" in result.sql
 
 
 @pytest.mark.parametrize("text", [
