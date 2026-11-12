@@ -861,11 +861,15 @@ def render_sql(ir: QueryIR) -> Tuple[Optional[str], str, float, GenerationEviden
             return _render_plan_failure("generic and aggregate orderings cannot be combined")
         aggregate_ordering_sql = ""
         if ir.aggregate_orderings:
-            count_expression = "COUNT(DISTINCT id)"
-            if aggregations:
-                match = re.match(r"(COUNT\s*\([^)]*\))\s+AS\s+count", aggregations[0], re.IGNORECASE)
-                if match:
-                    count_expression = match.group(1)
+            if len(aggregations) != 1:
+                return _render_plan_failure("aggregate ordering requires one COUNT(DISTINCT pk) aggregation")
+            match = re.fullmatch(
+                r"COUNT\(DISTINCT\s+([A-Za-z_][A-Za-z0-9_$]*)\)\s+AS\s+count",
+                aggregations[0], re.IGNORECASE,
+            )
+            if match is None:
+                return _render_plan_failure("aggregate ordering requires COUNT(DISTINCT pk) AS count")
+            count_expression = f"COUNT(DISTINCT {match.group(1)})"
             aggregate_ordering_sql, ordering_error = _render_aggregate_orderings(
                 ir.aggregate_orderings, group_by, count_expression
             )

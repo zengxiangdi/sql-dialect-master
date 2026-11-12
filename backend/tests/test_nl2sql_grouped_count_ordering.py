@@ -2,6 +2,8 @@
 import pytest
 import sqlglot
 from backend.core.nl2sql import NL2SQLGenerator
+from backend.core.nl2sql_pipeline.ir import AggregateOrderingTerm, build_ir
+from backend.core.nl2sql_pipeline.renderer import render_sql
 from backend.tests.test_nl2sql_unique_count import make_schema
 from backend.tests.test_nl2sql_composite_unique_count import schema as composite_schema
 
@@ -54,3 +56,30 @@ def test_flat_count_ordering_parseable(dialect):
 def test_no_schema_is_unchanged():
     result = NL2SQLGenerator().generate("count distinct orders per user ordered by count desc", "postgres")
     assert result.schema_used is False and result.success
+
+
+@pytest.mark.parametrize("aggregations", [
+    [], ["AVG(amount) AS count"], ["COUNT(DISTINCT id) AS cnt"],
+    ["COUNT(DISTINCT id) AS count", "SUM(amount) AS total"],
+])
+def test_flat_renderer_validates_count_aggregation(aggregations):
+    ir = build_ir(
+        "SELECT", "orders", ["*"], [], aggregations, ["user_id"],
+        None, None, [], False, "postgres",
+        aggregate_orderings=(AggregateOrderingTerm("count", None, "DESC"),),
+    )
+    sql, _, confidence, _ = render_sql(ir)
+    assert sql is None
+    assert confidence == 0.0
+
+
+def test_flat_renderer_accepts_valid_count_aggregation():
+    ir = build_ir(
+        "SELECT", "orders", ["*"], [], ["COUNT(DISTINCT id) AS count"], ["user_id"],
+        None, None, [], False, "postgres",
+        aggregate_orderings=(AggregateOrderingTerm("count", None, "DESC"),),
+    )
+    sql, _, confidence, _ = render_sql(ir)
+    assert sql is not None
+    assert "ORDER BY COUNT(DISTINCT id) DESC, user_id ASC" in sql
+    assert confidence > 0

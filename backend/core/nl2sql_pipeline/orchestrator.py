@@ -2521,6 +2521,11 @@ class PipelineNL2SQLGenerator:
                     )
             ordering_candidates: list[tuple[str, str]] = []
             aggregate_orderings = None
+            masked_unique_text = mask_non_executable(text_lower)
+            if whose_span is not None:
+                masked_unique_text = self._schema_mask_span(masked_unique_text, whose_span)
+            if label_resolution is not None:
+                masked_unique_text = self._schema_mask_span(masked_unique_text, label_resolution[2])
             if path_distinct_count_plan is not None:
                 path_orderings = self._schema_resolve_path_ordering(
                     text_lower,
@@ -2544,8 +2549,10 @@ class PipelineNL2SQLGenerator:
                     whose_span=whose_span,
                     group_span=(label_resolution[2] if label_resolution is not None else None),
                 )
-            elif unique_count_intent and self._schema_has_explicit_ordering(text_lower):
+            elif unique_count_intent and self._schema_has_explicit_ordering(masked_unique_text):
                 raise SchemaValidationError("unique scalar count ordering is unsupported")
+            elif unique_count_intent:
+                pass
             else:
                 ordering_candidates = (
                     self._schema_resolve_ordering(text_lower, table_context, schema)
@@ -2581,6 +2588,10 @@ class PipelineNL2SQLGenerator:
                 if path_distinct_count_plan is None and len(ordering_candidates) > 1
                 else None
             )
+            if unique_count_intent and not group_by and path_distinct_count_plan is None:
+                ordering = None
+                orderings = None
+                aggregate_orderings = None
             if path_distinct_count_plan is not None:
                 masked_path_text = mask_non_executable(text_lower)
                 if parsed_whose is not None:
@@ -2595,13 +2606,8 @@ class PipelineNL2SQLGenerator:
                     )
                 limit = self._extract_limit(masked_path_text)
             else:
-                if aggregate_orderings is not None:
-                    masked_aggregate_text = mask_non_executable(text_lower)
-                    if whose_span is not None:
-                        masked_aggregate_text = self._schema_mask_span(masked_aggregate_text, whose_span)
-                    if label_resolution is not None:
-                        masked_aggregate_text = self._schema_mask_span(masked_aggregate_text, label_resolution[2])
-                    limit = self._extract_limit(masked_aggregate_text)
+                if unique_count_intent:
+                    limit = self._extract_limit(masked_unique_text)
                 else:
                     limit = self._extract_limit(text_lower)
             render_columns = ["*"] if aggregations and not group_by else columns
