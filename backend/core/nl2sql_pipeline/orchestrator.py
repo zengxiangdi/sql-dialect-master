@@ -763,7 +763,7 @@ class PipelineNL2SQLGenerator:
         if tail and not (
             unique_count_phrase
             and re.match(
-                r"^(?:where|whose|order(?:ed)?\s+by|sort(?:ed)?\s+by|limit)\b",
+                r"^(?:where|whose|order(?:ed)?\s+by|sort(?:ed)?\s+by|limit|top\s+\d+)\b",
                 tail,
                 re.IGNORECASE,
             )
@@ -1166,6 +1166,58 @@ class PipelineNL2SQLGenerator:
             raise SchemaValidationError(
                 "path TOP requires explicit count ordering"
             )
+        return tuple(terms)
+
+    def _schema_resolve_aggregate_ordering(
+        self, text: str, table: SchemaTableContext, schema: SchemaContext,
+        group_by: list[str], *, whose_span=None, group_span=None,
+    ) -> tuple[_nl2sql_ir.AggregateOrderingTerm, ...]:
+        executable = mask_non_executable(text)
+        if whose_span is not None:
+            executable = self._schema_mask_span(executable, whose_span)
+        if group_span is not None:
+            executable = self._schema_mask_span(executable, group_span)
+        explicit = re.search(r"\b(?:order(?:ed)?|sort(?:ed)?)\s+by\s+", executable, re.IGNORECASE)
+        has_top = re.search(r"\btop\s+\d+\b", executable, re.IGNORECASE) is not None
+        if explicit is None:
+            if has_top or self._schema_has_explicit_ordering(executable):
+                raise SchemaValidationError("unique count requires explicit ORDER BY syntax")
+            return ()
+        tail = executable[explicit.end():]
+        boundary = re.search(r"\b(?:where|whose|limit|top\s+\d+)\b", tail, re.IGNORECASE)
+        clause = tail[:boundary.start()] if boundary else tail
+        if re.search(r"\bor\b|[()\u4e00-\u9fff]", clause, re.IGNORECASE):
+            raise SchemaValidationError("unsupported aggregate ordering syntax")
+        items = re.split(r"\s*,\s*|\s+and\s+", clause)
+        if not items or any(not item.strip() for item in items) or len(items) > 5:
+            raise SchemaValidationError("invalid or excessive aggregate ordering")
+        pattern = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*){0,2})\s*(?:(ascending|descending|asc|desc)\s*)?$", re.IGNORECASE)
+        group_keys = {c.casefold(): c for c in group_by}
+        terms = []
+        seen = set()
+        for item in items:
+            match = pattern.fullmatch(item)
+            if match is None:
+                raise SchemaValidationError("invalid aggregate ordering term")
+            raw, raw_direction = match.groups()
+            direction = "DESC" if raw_direction and raw_direction.casefold() in {"desc", "descending"} else "ASC"
+            if raw.casefold() == "count":
+                key = ("count", "")
+                if key in seen: raise SchemaValidationError("duplicate aggregate ordering")
+                seen.add(key); terms.append(_nl2sql_ir.AggregateOrderingTerm("count", None, direction)); continue
+            parts = raw.split(".")
+            if len(parts) > 1:
+                owners = schema.table_candidates(".".join(parts[:-1]))
+                if len(owners) != 1 or owners[0].key != table.key:
+                    raise SchemaValidationError("aggregate ordering table is not selected table")
+            canonical = schema.canonical_column(table, parts[-1])
+            if canonical is None or canonical.casefold() not in group_keys:
+                raise SchemaValidationError("aggregate ordering must use group column")
+            key = ("group", canonical.casefold())
+            if key in seen: raise SchemaValidationError("duplicate aggregate ordering")
+            seen.add(key); terms.append(_nl2sql_ir.AggregateOrderingTerm("group", group_keys[canonical.casefold()], direction))
+        if has_top and not any(t.kind == "count" for t in terms):
+            raise SchemaValidationError("TOP requires explicit count ordering")
         return tuple(terms)
 
     def _schema_resolve_count_metric(
@@ -2468,6 +2520,7 @@ class PipelineNL2SQLGenerator:
                         "multi-hop paths cannot be combined with filters or aggregation"
                     )
             ordering_candidates: list[tuple[str, str]] = []
+            aggregate_orderings = None
             if path_distinct_count_plan is not None:
                 path_orderings = self._schema_resolve_path_ordering(
                     text_lower,
@@ -2485,6 +2538,14 @@ class PipelineNL2SQLGenerator:
                     path_distinct_count_plan,
                     path_orderings=path_orderings,
                 )
+            elif unique_count_intent and group_by:
+                aggregate_orderings = self._schema_resolve_aggregate_ordering(
+                    text_lower, table_context, schema, group_by,
+                    whose_span=whose_span,
+                    group_span=(label_resolution[2] if label_resolution is not None else None),
+                )
+            elif unique_count_intent and self._schema_has_explicit_ordering(text_lower):
+                raise SchemaValidationError("unique scalar count ordering is unsupported")
             else:
                 ordering_candidates = (
                     self._schema_resolve_ordering(text_lower, table_context, schema)
@@ -2534,7 +2595,15 @@ class PipelineNL2SQLGenerator:
                     )
                 limit = self._extract_limit(masked_path_text)
             else:
-                limit = self._extract_limit(text_lower)
+                if aggregate_orderings is not None:
+                    masked_aggregate_text = mask_non_executable(text_lower)
+                    if whose_span is not None:
+                        masked_aggregate_text = self._schema_mask_span(masked_aggregate_text, whose_span)
+                    if label_resolution is not None:
+                        masked_aggregate_text = self._schema_mask_span(masked_aggregate_text, label_resolution[2])
+                    limit = self._extract_limit(masked_aggregate_text)
+                else:
+                    limit = self._extract_limit(text_lower)
             render_columns = ["*"] if aggregations and not group_by else columns
             sql, explanation, confidence, evidence = self._build_sql_enhanced(
                 operation,
@@ -2551,6 +2620,7 @@ class PipelineNL2SQLGenerator:
                 orderings=orderings,
                 distinct_count_plan=distinct_count_plan,
                 path_distinct_count_plan=path_distinct_count_plan,
+                aggregate_orderings=aggregate_orderings,
             )
             result = self._apply_confidence_policy(NL2SQLResult(
                 success=sql is not None,
@@ -2760,6 +2830,7 @@ class PipelineNL2SQLGenerator:
         orderings=None,
         distinct_count_plan=None,
         path_distinct_count_plan=None,
+        aggregate_orderings=None,
     ) -> tuple:
         """Build SQL statement from extracted components.
 
@@ -2773,6 +2844,7 @@ class PipelineNL2SQLGenerator:
             orderings=orderings,
             distinct_count_plan=distinct_count_plan,
             path_distinct_count_plan=path_distinct_count_plan,
+            aggregate_orderings=aggregate_orderings,
         )
         return _render_sql_impl(ir)
 
