@@ -211,6 +211,59 @@ def test_composite_count_ordering_runtime_sqlite():
     ]
 
 
+@pytest.mark.parametrize("schema", [
+    make_schema(primary_key=["id"]),
+    composite_schema(primary_key=["tenant_id", "id"]),
+])
+def test_conditions_are_extracted_before_scalar_limit(schema):
+    result = generate("count distinct orders where status = 'x' limit 2", schema)
+
+    assert result.success
+    assert result.sql.count("status = 'x'") == 1
+    assert result.sql.endswith("LIMIT 2")
+
+
+@pytest.mark.parametrize("schema", [
+    make_schema(primary_key=["id"]),
+    composite_schema(primary_key=["tenant_id", "id"]),
+])
+def test_conditions_are_extracted_before_grouped_order_and_limit(schema):
+    result = generate(
+        "count distinct orders per user where status = 'x' "
+        "ordered by count desc limit 2",
+        schema,
+    )
+
+    assert result.success
+    assert result.sql.count("status = 'x'") == 1
+    assert "ORDER BY" in result.sql
+    assert result.sql.endswith("LIMIT 2")
+
+
+@pytest.mark.parametrize("suffix", ["first 5", "前5", "5条", "5个", "5行", "5 rows", "only 5"])
+def test_structural_limit_words_are_extracted_from_scalar_conditions(suffix):
+    result = generate(
+        f"count distinct orders where status = 'x' {suffix}",
+        make_schema(primary_key=["id"]),
+    )
+
+    assert result.success
+    assert result.sql.count("status = 'x'") == 1
+    assert result.sql.endswith("LIMIT 5")
+
+
+@pytest.mark.parametrize("value", ["limit 5", "top 10", "first 5"])
+def test_quoted_condition_values_do_not_become_structural_limits(value):
+    result = generate(
+        f"count distinct orders where status = '{value}'",
+        make_schema(primary_key=["id"]),
+    )
+
+    assert result.success
+    assert f"status = '{value}'" in result.sql
+    assert "LIMIT" not in result.sql
+
+
 @pytest.mark.parametrize("aggregations", [
     [], ["AVG(amount) AS count"], ["COUNT(DISTINCT id) AS cnt"],
     ["COUNT(DISTINCT id) AS count", "SUM(amount) AS total"],

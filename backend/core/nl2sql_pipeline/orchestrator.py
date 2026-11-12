@@ -2412,6 +2412,17 @@ class PipelineNL2SQLGenerator:
                 text_lower, count_metric
             )
             unique_count_intent = bool(unique_count_spans)
+            if unique_count_intent:
+                executable_conditions = mask_non_executable(condition_original)
+                clause_match = re.search(
+                    r"\b(?:order(?:ed)?\s+by|sort(?:ed)?\s+by|top\s+\d+|limit\s+\d+|first\s+\d+|only\s+\d+)\b|前\s*\d+|\b\d+\s*(?:条|个|行|rows?)\b",
+                    executable_conditions,
+                    re.IGNORECASE,
+                )
+                if clause_match is not None:
+                    start = clause_match.start()
+                    condition_text = condition_text[:start] + " " * (len(condition_text) - start)
+                    condition_original = condition_original[:start] + " " * (len(condition_original) - start)
             if zero_count_intent and (
                 not unique_count_intent or multihop_unique_resolution is None
             ):
