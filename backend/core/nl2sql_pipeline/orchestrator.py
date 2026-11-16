@@ -1478,7 +1478,12 @@ class PipelineNL2SQLGenerator:
             r"(?<![\w$.])([A-Za-z_][A-Za-z0-9_$]*)(?=\s*(?:IS\s+NOT|IS|ISN'T|NOT|=|!=|<>|>=|<=|>|<))",
             re.IGNORECASE,
         )
-        return pattern.sub(lambda match: f"{table.name}.{match.group(1)}", condition)
+        masked = mask_non_executable(condition)
+        matches = list(pattern.finditer(masked))
+        for match in reversed(matches):
+            start, end = match.span(1)
+            condition = condition[:start] + f"{table.name}.{match.group(1)}" + condition[end:]
+        return condition
 
     def _schema_parse_whose_one(self, text: str, *, allow_tail: bool = False) -> _SchemaWhoseParsed | None:
         """Parse one schema-safe whose predicate without resolving its owner."""
@@ -2275,6 +2280,9 @@ class PipelineNL2SQLGenerator:
         tail = executable[match_end:]
         if re.search(r"\bjoined\s+with\b|\bjoined\s+on\b", tail, re.IGNORECASE):
             raise SchemaValidationError("physical join chain is too long or mixed")
+        tail_mentions = self._schema_table_mentions(tail, schema)
+        if any(mention.key != before_mentions[0].key for mention in tail_mentions):
+            raise SchemaValidationError("physical chain tail mentions a joined or extra table")
         if re.search(r"\b(?:left|right|full|outer|natural|cross|semi|anti|lateral)\s+join\b", executable, re.IGNORECASE):
             raise SchemaValidationError("unsupported physical join kind")
         if table_hint:
@@ -2601,9 +2609,13 @@ class PipelineNL2SQLGenerator:
             joined_on_span = None
             joined_with_span = None
             chain_span = None
+            chain_executable_text = None
             if physical_chain_resolution is not None:
                 table_context, joins, chain_span = physical_chain_resolution
                 metric_text = self._schema_mask_span(text_lower, chain_span)
+                chain_executable_text = self._schema_mask_span(
+                    mask_non_executable(text_lower), chain_span
+                )
             elif joined_on_resolution is not None:
                 table_context, joins, joined_on_span = joined_on_resolution
                 metric_text = self._schema_mask_span(text_lower, joined_on_span)
@@ -2721,6 +2733,12 @@ class PipelineNL2SQLGenerator:
                 conditions = [*conditions, *whose_conditions]
             if physical_chain_resolution is not None:
                 base_key = table_context.key
+                for item in parsed_whose_list:
+                    if "." not in item.raw_column and any(
+                        schema.canonical_column(schema.table_candidates(join["table"])[0], item.raw_column) is not None
+                        for join in joins
+                    ):
+                        raise SchemaValidationError("physical chain whose column is ambiguous")
                 columns = [
                     f"{table_context.name}.{column}" for column in columns
                 ]
@@ -2764,6 +2782,7 @@ class PipelineNL2SQLGenerator:
             aggregations = self._schema_extract_aggregations(
                 metric_text, table_context, schema, count_metric
             )
+            group_source_text = chain_executable_text or text_lower
             group_by = (
                 []
                 if multihop_unique_resolution is not None
@@ -2774,13 +2793,13 @@ class PipelineNL2SQLGenerator:
                     if unique_count_intent
                     else (
                         self._schema_mask_span(
-                            text_lower,
-                            (re.search(r"\b(?:order(?:ed)?|sort(?:ed)?)\s+by\b|\blimit\b|\btop\s+\d+\b", text_lower, re.IGNORECASE).start(), len(text_lower))
+                            group_source_text,
+                            (re.search(r"\b(?:order(?:ed)?|sort(?:ed)?)\s+by\b|\blimit\b|\btop\s+\d+\b", group_source_text, re.IGNORECASE).start(), len(group_source_text))
                         )
                         if physical_chain_resolution is not None and re.search(
-                            r"\b(?:order(?:ed)?|sort(?:ed)?)\s+by\b|\blimit\b|\btop\s+\d+\b", text_lower, re.IGNORECASE
+                            r"\b(?:order(?:ed)?|sort(?:ed)?)\s+by\b|\blimit\b|\btop\s+\d+\b", group_source_text, re.IGNORECASE
                         )
-                        else text_lower
+                        else group_source_text
                     ),
                     table_context,
                     schema,
@@ -2788,8 +2807,18 @@ class PipelineNL2SQLGenerator:
                 )
             )
             if physical_chain_resolution is not None:
+                for column in group_by:
+                    if "." not in column and any(
+                        schema.canonical_column(schema.table_candidates(join["table"])[0], column) is not None
+                        for join in joins
+                    ) and not re.search(
+                        rf"\b{re.escape(table_context.name)}\.{re.escape(column)}\b",
+                        group_source_text,
+                        re.IGNORECASE,
+                    ):
+                        raise SchemaValidationError("physical chain group column is ambiguous")
                 group_by = [f"{table_context.name}.{column}" for column in group_by]
-            distinct = self._check_distinct(text_lower)
+            distinct = self._check_distinct(group_source_text)
             distinct_count_plan = None
             path_distinct_count_plan = None
             if unique_count_intent:
@@ -2895,11 +2924,21 @@ class PipelineNL2SQLGenerator:
                 pass
             else:
                 ordering_candidates = (
-                    self._schema_resolve_ordering(text_lower, table_context, schema)
-                    if self._schema_has_explicit_ordering(text_lower)
+                    self._schema_resolve_ordering(group_source_text, table_context, schema)
+                    if self._schema_has_explicit_ordering(group_source_text)
                     else []
                 )
                 if physical_chain_resolution is not None:
+                    for column, _ in ordering_candidates:
+                        if "." not in column and any(
+                            schema.canonical_column(schema.table_candidates(join["table"])[0], column) is not None
+                            for join in joins
+                        ) and not re.search(
+                            rf"\b{re.escape(table_context.name)}\.{re.escape(column)}\b",
+                            group_source_text,
+                            re.IGNORECASE,
+                        ):
+                            raise SchemaValidationError("physical chain ordering column is ambiguous")
                     ordering_candidates = [
                         (f"{table_context.name}.{column}", direction)
                         for column, direction in ordering_candidates
@@ -2949,7 +2988,7 @@ class PipelineNL2SQLGenerator:
                 if unique_count_intent:
                     limit = self._extract_limit(masked_unique_text)
                 else:
-                    limit = self._extract_limit(text_lower)
+                    limit = self._extract_limit(group_source_text)
             render_columns = ["*"] if aggregations and not group_by else columns
             sql, explanation, confidence, evidence = self._build_sql_enhanced(
                 operation,

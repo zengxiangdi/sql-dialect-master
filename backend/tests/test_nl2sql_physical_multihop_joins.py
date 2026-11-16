@@ -82,6 +82,56 @@ def test_chain_rejects_joined_owned_or_ambiguous_filters(text):
     assert result.sql is None
 
 
+@pytest.mark.parametrize("text", [
+    "show user status joined with orders joined with shipments with products",
+    "show user status joined with orders joined with shipments who have products",
+    "show user status joined with orders joined with shipments and products",
+    "show user status joined with orders joined with shipments products",
+    "show user status joined with orders joined with shipments join products",
+])
+def test_chain_tail_extra_tables_and_exists_fail_closed(text):
+    result = generate(text, schema())
+    assert result.success is False
+    assert result.sql is None
+
+
+@pytest.mark.parametrize("literal", [
+    "'status = x'", "'x = y'", "'where status = x'", "'distinct'",
+    "'limit 5'", "'order by users.id desc'", "'group by users.id'",
+])
+def test_chain_condition_qualification_preserves_literals(literal):
+    result = generate(
+        f"show user status joined with orders joined with shipments "
+        f"where users.status = {literal}",
+        schema(),
+    )
+    assert result.success
+    assert f"users.status = {literal}" in result.sql
+    assert literal.count("status") == literal.count("status")
+
+
+@pytest.mark.parametrize("text", [
+    "show user status joined with orders joined with shipments where status = 'paid'",
+    "show user status joined with orders joined with shipments group by status",
+    "show user status joined with orders joined with shipments order by status",
+    "show user status joined with orders joined with shipments whose status is active",
+])
+def test_chain_unqualified_shared_columns_fail_closed(text):
+    result = generate(text, schema())
+    assert result.success is False
+
+
+def test_chain_base_qualified_group_and_order_are_allowed():
+    result = generate(
+        "show user status joined with orders joined with shipments "
+        "group by users.status order by users.status",
+        schema(),
+    )
+    assert result.success
+    assert "GROUP BY users.status" in result.sql
+    assert "ORDER BY users.status" in result.sql
+
+
 def test_chain_base_group_aggregate_order_limit():
     result = generate(
         "show users.id and count joined with orders joined with shipments "
