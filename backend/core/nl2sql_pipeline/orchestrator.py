@@ -1661,7 +1661,7 @@ class PipelineNL2SQLGenerator:
             parsed.append(_SchemaWhoseParsed(
                 item.raw_column, item.operator, item.literal, (span_start, end),
             ))
-            if len(parsed) > 3:
+            if len(parsed) > 4:
                 # Resolve canonical duplicates before reporting the bound, but
                 # stop lexical work as soon as the request is certainly invalid.
                 break
@@ -2375,7 +2375,7 @@ class PipelineNL2SQLGenerator:
         expansions = 0
         while queue:
             current, path = queue.pop(0)
-            if len(path) >= 2:
+            if len(path) >= 3:
                 continue
             for edge in schema.relationships:
                 endpoints = {edge.from_table.casefold(), edge.to_table.casefold()}
@@ -2408,7 +2408,7 @@ class PipelineNL2SQLGenerator:
             raise SchemaValidationError("multi-hop target path is missing")
         shortest_length = min(len(path) for path in paths)
         shortest = [path for path in paths if len(path) == shortest_length]
-        if shortest_length != 2 or len(shortest) != 1:
+        if shortest_length not in {2, 3} or len(shortest) != 1:
             raise SchemaValidationError("multi-hop target path is ambiguous or unsupported")
         return subject, tuple(shortest[0]), group_match.span()
 
@@ -2472,6 +2472,12 @@ class PipelineNL2SQLGenerator:
                     include_zero=zero_count_intent,
                     whose_spans=whose_spans,
                 )
+            if unique_whose_scope and len(parsed_whose_list) > (
+                4 if multihop_unique_resolution is not None
+                and len(multihop_unique_resolution[1]) == 3
+                else 3
+            ):
+                raise SchemaValidationError("too many whose predicates for this shape")
             label_resolution = None
             if (
                 joined_on_resolution is None
@@ -2541,8 +2547,12 @@ class PipelineNL2SQLGenerator:
                     if key in seen_predicates:
                         raise SchemaValidationError("duplicate canonical whose predicate")
                     seen_predicates.add(key)
-            if unique_whose_scope and len(parsed_whose_list) > 3:
-                raise SchemaValidationError("too many whose predicates")
+            if unique_whose_scope and len(parsed_whose_list) > (
+                4 if multihop_unique_resolution is not None
+                and len(multihop_unique_resolution[1]) == 3
+                else 3
+            ):
+                raise SchemaValidationError("too many whose predicates for this shape")
             condition_text = text_lower
             condition_original = text
             if joined_on_span is not None:
