@@ -19,6 +19,7 @@ did against the legacy class.
 import logging
 import re
 from dataclasses import dataclass, replace
+from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
 
 import sqlglot
@@ -1081,11 +1082,13 @@ class PipelineNL2SQLGenerator:
         *,
         parsed_whose: _SchemaWhoseParsed | None = None,
         group_span: tuple[int, int] | None = None,
+        whose_spans: tuple[tuple[int, int], ...] = (),
     ) -> tuple[_nl2sql_ir.PathOrderingTerm, ...]:
         """Resolve explicit aggregate/group ordering for a path count."""
         executable = mask_non_executable(text)
         if parsed_whose is not None:
             executable = self._schema_mask_span(executable, parsed_whose.span)
+        executable = self._schema_mask_spans(executable, whose_spans)
         if group_span is not None:
             executable = self._schema_mask_span(executable, group_span)
         explicit = re.search(
@@ -1171,10 +1174,12 @@ class PipelineNL2SQLGenerator:
     def _schema_resolve_aggregate_ordering(
         self, text: str, table: SchemaTableContext, schema: SchemaContext,
         group_by: list[str], *, whose_span=None, group_span=None,
+        whose_spans: tuple[tuple[int, int], ...] = (),
     ) -> tuple[_nl2sql_ir.AggregateOrderingTerm, ...]:
         executable = mask_non_executable(text)
         if whose_span is not None:
             executable = self._schema_mask_span(executable, whose_span)
+        executable = self._schema_mask_spans(executable, whose_spans)
         if group_span is not None:
             executable = self._schema_mask_span(executable, group_span)
         explicit = re.search(r"\b(?:order(?:ed)?|sort(?:ed)?)\s+by\s+", executable, re.IGNORECASE)
@@ -1467,14 +1472,14 @@ class PipelineNL2SQLGenerator:
         start, end = span
         return text[:start] + " " * (end - start) + text[end:]
 
-    def _schema_parse_whose(self, text: str) -> _SchemaWhoseParsed | None:
+    def _schema_parse_whose_one(self, text: str, *, allow_tail: bool = False) -> _SchemaWhoseParsed | None:
         """Parse one schema-safe whose predicate without resolving its owner."""
         executable = mask_non_executable(text)
         match = _SCHEMA_WHOSE_PREFIX.search(executable)
         if match is None:
             return None
         whose_matches = list(_SCHEMA_WHOSE_PREFIX.finditer(executable))
-        if len(whose_matches) != 1:
+        if len(whose_matches) != 1 and not allow_tail:
             raise SchemaValidationError("multiple whose predicates are unsupported")
         original_match = _SCHEMA_WHOSE_PREFIX.match(text, match.start())
         if original_match is None:
@@ -1538,7 +1543,9 @@ class PipelineNL2SQLGenerator:
                         if token is None:
                             raise SchemaValidationError("whose value is not a supported literal")
                         value = token.group(0)
-                        if value.casefold() in _SCHEMA_WHOSE_REJECTED_VALUES:
+                        if value.casefold() in _SCHEMA_WHOSE_REJECTED_VALUES and not (
+                            allow_tail and value.casefold() in {"order", "limit"}
+                        ):
                             raise SchemaValidationError("whose value is a reserved word")
                         after_token = text[position + token.end():].lstrip()
                         if after_token.startswith("("):
@@ -1547,6 +1554,8 @@ class PipelineNL2SQLGenerator:
                         value_end = position + token.end()
 
         operator = raw_operator.casefold()
+        if allow_tail:
+            operator = " ".join(operator.split())
         if literal == "NULL":
             if operator == "is":
                 normalized_operator = "IS"
@@ -1561,10 +1570,10 @@ class PipelineNL2SQLGenerator:
             }.get(operator, raw_operator)
 
         tail = executable[value_end:]
-        if re.search(r"\bor\b|\bwhose\b|[()]", tail, re.IGNORECASE):
+        if not allow_tail and re.search(r"\bor\b|\bwhose\b|[()]", tail, re.IGNORECASE):
             raise SchemaValidationError("complex whose predicates are unsupported")
         stripped_tail = tail.strip()
-        if stripped_tail and not re.match(
+        if not allow_tail and stripped_tail and not re.match(
             r"^(?:and|order(?:ed)?\s+by|sort(?:ed)?\s+by|limit)\b",
             stripped_tail,
             re.IGNORECASE,
@@ -1572,6 +1581,128 @@ class PipelineNL2SQLGenerator:
             raise SchemaValidationError("unexpected text after whose predicate")
         span = (match.start(), value_end)
         return _SchemaWhoseParsed(raw_column, normalized_operator, literal, span)
+
+    def _schema_parse_whose(self, text: str) -> _SchemaWhoseParsed | None:
+        """Keep the original one-whose grammar for general schema requests."""
+        return self._schema_parse_whose_one(text)
+
+    @staticmethod
+    def _schema_whose_suffix_starts(text: str) -> bool:
+        """Recognize a structural suffix without consuming another predicate."""
+        return bool(re.match(
+            r"(?:order(?:ed)?|sort(?:ed)?)\s+by\b|"
+            r"(?:top|limit|first|only)\s+\d+(?![\w$])|"
+            r"前\s*\d+|\d+\s*(?:条|个|行|rows?)(?![\w$])",
+            text, re.IGNORECASE,
+        )) or any(pattern.match(text) is not None for pattern in _SCHEMA_ZERO_COUNT_PATTERNS)
+
+    @staticmethod
+    def _schema_validate_whose_suffix(text: str) -> None:
+        """Accept complete execution suffixes, never discard another filter."""
+        cardinality = r"(?:top|limit|first|only)\s+\d+(?![\w$])|前\s*\d+|\d+\s*(?:条|个|行|rows?)(?![\w$])"
+        identifier = r"[A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*){0,2}"
+        term = rf"{identifier}(?:\s+(?:ascending|descending|asc|desc))?"
+        while text.strip():
+            text = text.strip()
+            separator = re.match(r"(?:and\b|[,，])\s*", text, re.IGNORECASE)
+            if separator is not None:
+                text = text[separator.end():]
+                if not text:
+                    raise SchemaValidationError("incomplete whose suffix")
+            zero_matches = [pattern.match(text) for pattern in _SCHEMA_ZERO_COUNT_PATTERNS]
+            zero_end = max((match.end() for match in zero_matches if match), default=0)
+            if zero_end:
+                text = text[zero_end:]
+                continue
+            order = re.match(r"(?:order(?:ed)?|sort(?:ed)?)\s+by\s+", text, re.IGNORECASE)
+            if order is not None:
+                tail = text[order.end():]
+                boundary = re.search(rf"\b(?:{cardinality})|含\s*[0０零]|\b(?:including|include)\b", tail, re.IGNORECASE)
+                clause = tail[:boundary.start()] if boundary else tail
+                clause = re.sub(r"(?:\s+and|[,，])\s*$", "", clause, flags=re.IGNORECASE).strip()
+                if re.fullmatch(rf"{term}(?:\s*(?:[,，]|\band\b)\s*{term})*", clause, re.IGNORECASE) is None:
+                    raise SchemaValidationError("invalid ordering after whose predicate")
+                text = tail[boundary.start():] if boundary else ""
+                continue
+            limit = re.match(cardinality, text, re.IGNORECASE)
+            if limit is None:
+                raise SchemaValidationError("unexpected text after whose suffix")
+            text = text[limit.end():]
+
+    def _schema_parse_whose_list(self, text: str) -> list[_SchemaWhoseParsed]:
+        """Scan an AND/comma list for unique counts, anchoring every predicate."""
+        executable = mask_non_executable(text)
+        first = re.search(r"\bwhose\b", executable, re.IGNORECASE)
+        if first is None:
+            return []
+        if re.search(r"\bor\b|[()]", executable[first.start():], re.IGNORECASE):
+            raise SchemaValidationError("OR and nested whose predicates are unsupported")
+        parsed: list[_SchemaWhoseParsed] = []
+        offset = first.start()
+        span_start = offset
+        while True:
+            # Masked comments act like whitespace; source offsets never change.
+            while offset < len(text) and executable[offset].isspace():
+                offset += 1
+            marker = re.match(r"whose\b", executable[offset:], re.IGNORECASE)
+            if marker is not None:
+                offset += marker.end()
+                while offset < len(text) and executable[offset].isspace():
+                    offset += 1
+            prefix = "whose "
+            synthetic = prefix + text[offset:]
+            # A later valid whose must never rescue an invalid current term.
+            if _SCHEMA_WHOSE_PREFIX.match(mask_non_executable(synthetic)) is None:
+                raise SchemaValidationError("connector must be followed by a valid predicate")
+            item = self._schema_parse_whose_one(synthetic, allow_tail=True)
+            if item is None:
+                raise SchemaValidationError("whose predicate is invalid")
+            end = offset + item.span[1] - len(prefix)
+            parsed.append(_SchemaWhoseParsed(
+                item.raw_column, item.operator, item.literal, (span_start, end),
+            ))
+            if len(parsed) > 3:
+                # Resolve canonical duplicates before reporting the bound, but
+                # stop lexical work as soon as the request is certainly invalid.
+                break
+            offset = end
+            while offset < len(text) and executable[offset].isspace():
+                offset += 1
+            if offset == len(text):
+                break
+            # Only AND and the two supported commas introduce another term.
+            connector = re.match(r"and\b|[,，]", executable[offset:], re.IGNORECASE)
+            if connector is not None:
+                span_start = offset
+                offset += connector.end()
+                while offset < len(text) and executable[offset].isspace():
+                    offset += 1
+                if offset == len(text):
+                    raise SchemaValidationError("whose connector has no predicate or suffix")
+            elif not self._schema_whose_suffix_starts(executable[offset:]):
+                raise SchemaValidationError("whose predicates require AND or comma")
+            if self._schema_whose_suffix_starts(executable[offset:]):
+                self._schema_validate_whose_suffix(executable[offset:])
+                break
+            if connector is None:
+                raise SchemaValidationError("unexpected text after whose predicate")
+        return parsed
+
+    @staticmethod
+    def _schema_mask_spans(text: str, spans: tuple[tuple[int, int], ...]) -> str:
+        for start, end in spans:
+            text = text[:start] + " " * (end - start) + text[end:]
+        return text
+
+    @staticmethod
+    def _schema_whose_literal_key(literal: str) -> object:
+        # Decimal equality is exact (including 1 == 1.0); never normalize with
+        # the ambient precision, which could round a large identity value.
+        if literal == "NULL":
+            return None
+        if literal.startswith("'"):
+            return literal[1:-1].replace("''", "'")
+        return Decimal(literal)
 
     def _schema_resolve_whose(
         self,
@@ -1583,6 +1714,12 @@ class PipelineNL2SQLGenerator:
         parsed = self._schema_parse_whose(text)
         if parsed is None:
             return None
+        return self._schema_resolve_selected_whose(parsed, table, schema), parsed.span
+
+    @staticmethod
+    def _schema_resolve_selected_whose(
+        parsed: _SchemaWhoseParsed, table: SchemaTableContext, schema: SchemaContext,
+    ) -> str:
         parts = parsed.raw_column.split(".")
         column_name = parts[-1]
         if len(parts) > 1:
@@ -1594,7 +1731,7 @@ class PipelineNL2SQLGenerator:
             if table.has_column_metadata:
                 raise SchemaValidationError("whose column is outside the schema")
             canonical = column_name
-        return f"{canonical} {parsed.operator} {parsed.literal}", parsed.span
+        return f"{canonical} {parsed.operator} {parsed.literal}"
 
     def _schema_resolve_joined_on(
         self,
@@ -2145,6 +2282,7 @@ class PipelineNL2SQLGenerator:
         *,
         include_zero: bool = False,
         whose_span: tuple[int, int] | None = None,
+        whose_spans: tuple[tuple[int, int], ...] = (),
     ) -> tuple[SchemaTableContext, tuple[object, ...], tuple[int, int]] | None:
         """Resolve one bounded two-hop path for a subject-grouped unique count."""
         if not self._schema_unique_count_spans(text, ("count", None)):
@@ -2190,6 +2328,8 @@ class PipelineNL2SQLGenerator:
         masked_group = self._schema_mask_span(executable, group_match.span())
         if whose_span is not None:
             masked_group = self._schema_mask_span(masked_group, whose_span)
+        for span in whose_spans:
+            masked_group = self._schema_mask_span(masked_group, span)
         mentions = self._schema_table_mentions(masked_group, schema)
         target_candidates = tuple(table for table in mentions if table.key != subject.key)
         if len(target_candidates) != 1:
@@ -2308,7 +2448,13 @@ class PipelineNL2SQLGenerator:
         try:
             executable_text = mask_non_executable(text)
             zero_count_intent = self._schema_has_zero_count_intent(text)
-            parsed_whose = self._schema_parse_whose(text)
+            unique_whose_scope = bool(self._schema_unique_count_spans(text, ("count", None)))
+            if unique_whose_scope:
+                parsed_whose_list = self._schema_parse_whose_list(text)
+            else:
+                parsed_whose = self._schema_parse_whose(text)
+                parsed_whose_list = [parsed_whose] if parsed_whose is not None else []
+            whose_spans = tuple(item.span for item in parsed_whose_list)
             joined_on_resolution = self._schema_resolve_joined_on(
                 text, table_hint, schema
             )
@@ -2324,7 +2470,7 @@ class PipelineNL2SQLGenerator:
                     table_hint,
                     schema,
                     include_zero=zero_count_intent,
-                    whose_span=parsed_whose.span if parsed_whose is not None else None,
+                    whose_spans=whose_spans,
                 )
             label_resolution = None
             if (
@@ -2366,26 +2512,37 @@ class PipelineNL2SQLGenerator:
             else:
                 table_context, joins = self._schema_resolve_joins(text, table_hint, schema)
                 metric_text = text_lower
-            whose_resolution = (
-                None
-                if multihop_unique_resolution is not None
-                else self._schema_resolve_whose(text, table_context, schema)
-            )
-            whose_condition = None
+            whose_conditions: list[str] = []
             path_conditions: list[_nl2sql_ir.PathCondition] = []
-            ordinary_conditions: list[str] = []
-            whose_span: tuple[int, int] | None = None
-            if multihop_unique_resolution is not None and parsed_whose is not None:
-                subject, path_steps, _ = multihop_unique_resolution
-                whose_condition, path_condition = self._schema_resolve_path_whose(
-                    parsed_whose,
-                    subject,
-                    path_steps,
-                    schema,
-                )
-                if path_condition is not None:
-                    path_conditions.append(path_condition)
-                whose_span = parsed_whose.span
+            seen_predicates: set[tuple[str, str, str, object]] = set()
+            for item in parsed_whose_list:
+                if multihop_unique_resolution is not None:
+                    subject, path_steps, _ = multihop_unique_resolution
+                    subject_condition, path_condition = self._schema_resolve_path_whose(
+                        item, subject, path_steps, schema,
+                    )
+                    if path_condition is not None:
+                        owner = path_condition.table.casefold()
+                        column = path_condition.column.casefold()
+                        path_conditions.append(path_condition)
+                    else:
+                        if subject_condition is None:
+                            raise SchemaValidationError("whose predicate has no resolved owner")
+                        owner = subject.key
+                        column = subject_condition[:-len(f" {item.operator} {item.literal}")].casefold()
+                        whose_conditions.append(subject_condition)
+                else:
+                    condition = self._schema_resolve_selected_whose(item, table_context, schema)
+                    owner = table_context.key
+                    column = condition[:-len(f" {item.operator} {item.literal}")].casefold()
+                    whose_conditions.append(condition)
+                if unique_whose_scope:
+                    key = (owner, column, item.operator, self._schema_whose_literal_key(item.literal))
+                    if key in seen_predicates:
+                        raise SchemaValidationError("duplicate canonical whose predicate")
+                    seen_predicates.add(key)
+            if unique_whose_scope and len(parsed_whose_list) > 3:
+                raise SchemaValidationError("too many whose predicates")
             condition_text = text_lower
             condition_original = text
             if joined_on_span is not None:
@@ -2394,15 +2551,9 @@ class PipelineNL2SQLGenerator:
             elif joined_with_span is not None:
                 condition_text = self._schema_mask_span(condition_text, joined_with_span)
                 condition_original = self._schema_mask_span(condition_original, joined_with_span)
-            if whose_resolution is not None:
-                whose_condition, whose_span = whose_resolution
-                metric_text = self._schema_mask_span(metric_text, whose_span)
-                condition_text = self._schema_mask_span(condition_text, whose_span)
-                condition_original = self._schema_mask_span(condition_original, whose_span)
-            elif whose_span is not None:
-                metric_text = self._schema_mask_span(metric_text, whose_span)
-                condition_text = self._schema_mask_span(condition_text, whose_span)
-                condition_original = self._schema_mask_span(condition_original, whose_span)
+            metric_text = self._schema_mask_spans(metric_text, whose_spans)
+            condition_text = self._schema_mask_spans(condition_text, whose_spans)
+            condition_original = self._schema_mask_spans(condition_original, whose_spans)
             count_metric = self._schema_resolve_count_metric(
                 text_lower, table_context, schema
             )
@@ -2443,8 +2594,8 @@ class PipelineNL2SQLGenerator:
                 schema,
             )
             ordinary_conditions = list(conditions)
-            if whose_condition is not None:
-                conditions = [*conditions, whose_condition]
+            if whose_conditions:
+                conditions = [*conditions, *whose_conditions]
             parsed = self._parse_text(text_lower, text)
             parsed.update(analysis)
             operation = self._detect_operation(text_lower)
@@ -2532,18 +2683,23 @@ class PipelineNL2SQLGenerator:
                     )
             ordering_candidates: list[tuple[str, str]] = []
             aggregate_orderings = None
-            masked_unique_text = mask_non_executable(text_lower)
-            if whose_span is not None:
-                masked_unique_text = self._schema_mask_span(masked_unique_text, whose_span)
+            masked_unique_text = self._schema_mask_spans(mask_non_executable(text_lower), whose_spans)
             if label_resolution is not None:
                 masked_unique_text = self._schema_mask_span(masked_unique_text, label_resolution[2])
+            if unique_count_intent and re.search(
+                r"\b(?:order(?:ed)?|sort(?:ed)?)\s+by\b", masked_unique_text, re.IGNORECASE,
+            ) and re.search(
+                r"\b(?:first|only)\s+\d+|前\s*\d+|\b\d+\s*(?:条|个|行|rows?)(?![\w$])",
+                masked_unique_text, re.IGNORECASE,
+            ):
+                raise SchemaValidationError("non-top limit aliases cannot combine with ordering")
             if path_distinct_count_plan is not None:
                 path_orderings = self._schema_resolve_path_ordering(
                     text_lower,
                     table_context,
                     schema,
                     path_distinct_count_plan,
-                    parsed_whose=parsed_whose,
+                    whose_spans=whose_spans,
                     group_span=(
                         multihop_unique_resolution[2]
                         if multihop_unique_resolution is not None
@@ -2557,7 +2713,7 @@ class PipelineNL2SQLGenerator:
             elif unique_count_intent and group_by:
                 aggregate_orderings = self._schema_resolve_aggregate_ordering(
                     text_lower, table_context, schema, group_by,
-                    whose_span=whose_span,
+                    whose_spans=whose_spans,
                     group_span=(label_resolution[2] if label_resolution is not None else None),
                 )
             elif unique_count_intent and self._schema_has_explicit_ordering(masked_unique_text):
@@ -2604,12 +2760,7 @@ class PipelineNL2SQLGenerator:
                 orderings = None
                 aggregate_orderings = None
             if path_distinct_count_plan is not None:
-                masked_path_text = mask_non_executable(text_lower)
-                if parsed_whose is not None:
-                    masked_path_text = self._schema_mask_span(
-                        masked_path_text,
-                        parsed_whose.span,
-                    )
+                masked_path_text = self._schema_mask_spans(mask_non_executable(text_lower), whose_spans)
                 if multihop_unique_resolution is not None:
                     masked_path_text = self._schema_mask_span(
                         masked_path_text,

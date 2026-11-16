@@ -291,7 +291,6 @@ def test_twohop_subject_owner_requires_qualification_when_ambiguous():
 
 @pytest.mark.parametrize("text", [
     "count distinct products per user where products.tenant_id = 1",
-    "count distinct products per user whose products.status is active and whose orders.status is active",
     "count distinct products per user whose products.unknown is active",
     "count distinct products per user whose shipments.status is active",
     "count distinct products per user whose products.status in (active)",
@@ -301,6 +300,18 @@ def test_path_filters_fail_closed_for_unsupported_shapes(text):
 
     assert result.success is False
     assert result.sql is None
+
+
+def test_multiple_path_whose_predicates_constrain_count_input():
+    result = generate(
+        "count distinct products per user whose products.status is active "
+        "and whose orders.status is active",
+        twohop_schema(),
+    )
+
+    assert result.success
+    assert "products.status = 'active' AND orders.status = 'active'" in result.sql
+    assert "条件: 2个" in result.explanation
 
 
 def test_zero_filtered_out_subject_and_duplicates_runtime_sqlite():
