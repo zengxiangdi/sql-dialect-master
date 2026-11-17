@@ -85,6 +85,12 @@ def test_chain_rejects_joined_owned_or_ambiguous_filters(text):
 
 @pytest.mark.parametrize("predicate,expected", [
     ("users.status='active'", "users.status = 'active'"),
+    ("users.status is null", "users.status IS NULL"),
+    ("users.status is not null", "users.status IS NOT NULL"),
+    (
+        "users.status is not null and users.id > 0",
+        "users.status IS NOT NULL AND users.id > 0",
+    ),
     ("users.status='active' and users.id>0", "users.status = 'active' AND users.id > 0"),
     ("users.id>0 and users.status='active'", "users.id > 0 AND users.status = 'active'"),
     (
@@ -100,6 +106,26 @@ def test_chain_where_predicates_map_to_their_own_columns(predicate, expected):
 
     assert result.success, result.explanation
     assert result.sql.split("WHERE ", 1)[1] == expected
+
+
+@pytest.mark.parametrize("condition,expected", [
+    ("status IS NULL", "users.status IS NULL"),
+    ("status IS NOT NULL AND id > 0", "users.status IS NOT NULL AND users.id > 0"),
+    ("users.status IS NOT NULL", "users.status IS NOT NULL"),
+    ("status = 'active'", "users.status = 'active'"),
+    (
+        "unknown = 1 AND status = 'status IS NOT NULL' /* id > 0 */",
+        "unknown = 1 AND users.status = 'status IS NOT NULL' /* id > 0 */",
+    ),
+    (
+        "status = 'IS NOT NULL AND OR IN LIKE BETWEEN TRUE FALSE' -- status = 'active'",
+        "users.status = 'IS NOT NULL AND OR IN LIKE BETWEEN TRUE FALSE' -- status = 'active'",
+    ),
+])
+def test_chain_condition_qualification_only_changes_real_unquoted_columns(condition, expected):
+    users = schema().table_candidates("users")[0]
+
+    assert NL2SQLGenerator._schema_qualify_base_condition(condition, users) == expected
 
 
 @pytest.mark.parametrize("predicate", [

@@ -1474,6 +1474,8 @@ class PipelineNL2SQLGenerator:
 
     @staticmethod
     def _schema_qualify_base_condition(condition: str, table: SchemaTableContext) -> str:
+        columns = {column.casefold(): column for column in table.columns}
+        keywords = {"is", "not", "null", "and", "or", "in", "like", "between", "true", "false"}
         pattern = re.compile(
             r"(?<![\w$.])([A-Za-z_][A-Za-z0-9_$]*)(?=\s*(?:IS\s+NOT|IS|ISN'T|NOT|=|!=|<>|>=|<=|>|<))",
             re.IGNORECASE,
@@ -1481,8 +1483,12 @@ class PipelineNL2SQLGenerator:
         masked = mask_non_executable(condition)
         matches = list(pattern.finditer(masked))
         for match in reversed(matches):
+            key = match.group(1).casefold()
+            column = columns.get(key)
+            if column is None or key in keywords:
+                continue
             start, end = match.span(1)
-            condition = condition[:start] + f"{table.name}.{match.group(1)}" + condition[end:]
+            condition = condition[:start] + f"{table.name}.{column}" + condition[end:]
         return condition
 
     def _schema_resolve_chain_where_conditions(
