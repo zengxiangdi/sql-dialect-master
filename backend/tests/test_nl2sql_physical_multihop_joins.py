@@ -6,6 +6,7 @@ import pytest
 import sqlglot
 
 from backend.core.nl2sql import NL2SQLGenerator
+from backend.core.nl2sql_schema import SchemaContext
 from backend.tests.test_nl2sql_three_hop_path import schema
 
 
@@ -78,6 +79,121 @@ def test_chain_allows_base_owned_filters(text):
 ])
 def test_chain_rejects_joined_owned_or_ambiguous_filters(text):
     result = generate(text, schema())
+    assert result.success is False
+    assert result.sql is None
+
+
+@pytest.mark.parametrize("predicate,expected", [
+    ("users.status='active'", "users.status = 'active'"),
+    ("users.status='active' and users.id>0", "users.status = 'active' AND users.id > 0"),
+    ("users.id>0 and users.status='active'", "users.id > 0 AND users.status = 'active'"),
+    (
+        "users.status='active' and users.status!='paid'",
+        "users.status = 'active' AND users.status != 'paid'",
+    ),
+])
+def test_chain_where_predicates_map_to_their_own_columns(predicate, expected):
+    result = generate(
+        "show users.status joined with orders joined with shipments where " + predicate,
+        schema(),
+    )
+
+    assert result.success, result.explanation
+    assert result.sql.split("WHERE ", 1)[1] == expected
+
+
+@pytest.mark.parametrize("predicate", [
+    "status='paid'",
+    "status='paid' and users.id>0",
+    "users.status='active' and status='paid'",
+    "status='paid' and users.status='active'",
+    "status='paid' and users.status='active' and users.id>0",
+    "users.id>0 and status='paid' and users.status='active'",
+    "status='users.status' and users.id>0",
+    "orders.status='paid' and users.status='active'",
+])
+def test_chain_where_cannot_borrow_another_predicate_qualifier(predicate):
+    result = generate(
+        "show users.status joined with orders joined with shipments where " + predicate,
+        schema(),
+    )
+
+    assert result.success is False
+    assert result.sql is None
+
+
+def test_chain_base_only_unqualified_where_column_remains_allowed():
+    context = schema()
+    context = SchemaContext.from_mapping({
+        "tables": [
+            {
+                "name": table.name,
+                "columns": [{"name": column} for column in sorted(table.columns)]
+                + ([{"name": "nickname"}] if table.name == "users" else []),
+                "primary_key": list(table.primary_key),
+            }
+            for table in context.tables
+        ],
+        "relationships": [
+            {
+                "from_table": edge.from_table,
+                "to_table": edge.to_table,
+                "columns": [
+                    {"from_column": left, "to_column": right}
+                    for left, right in edge.column_pairs
+                ],
+            }
+            for edge in context.relationships
+        ],
+    })
+    result = generate(
+        "show users.status joined with orders joined with shipments "
+        "where nickname='bob' and users.id>0",
+        context,
+    )
+
+    assert result.success, result.explanation
+    assert "WHERE users.nickname = 'bob' AND users.id > 0" in result.sql
+
+
+@pytest.mark.parametrize("literal", ["and, users.status = active", "x，y and users.id > 0"])
+def test_chain_where_segment_mapping_preserves_literal_connectors(literal):
+    result = generate(
+        "show users.status joined with orders joined with shipments "
+        f"where users.status='{literal}' and users.id>0",
+        schema(),
+    )
+
+    assert result.success, result.explanation
+    assert f"WHERE users.status = '{literal}' AND users.id > 0" in result.sql
+
+
+@pytest.mark.parametrize("predicates", [
+    "users.status='active' and",
+    "users.status='active' and users.id>0 users.status='paid'",
+    "users.status='active' users.status='paid'",
+    "users.status='active' or users.status='paid'",
+])
+def test_chain_unmappable_where_segments_fail_closed(predicates):
+    result = generate(
+        "show users.status joined with orders joined with shipments where " + predicates,
+        schema(),
+    )
+
+    assert result.success is False
+    assert result.sql is None
+
+
+@pytest.mark.parametrize("extracted", [[], ["status = 'active'", "id > 0"], ["id = 'active'"]])
+def test_chain_where_extraction_count_or_column_mismatch_fails_closed(monkeypatch, extracted):
+    generator = NL2SQLGenerator()
+    monkeypatch.setattr(generator, "_extract_conditions_enhanced", lambda *_: extracted)
+    result = generator.generate(
+        "show users.status joined with orders joined with shipments where users.status='active'",
+        "postgres",
+        schema=schema(),
+    )
+
     assert result.success is False
     assert result.sql is None
 
