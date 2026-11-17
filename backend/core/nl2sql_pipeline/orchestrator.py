@@ -2792,6 +2792,11 @@ class PipelineNL2SQLGenerator:
                 columns = [
                     f"{table_context.name}.{column}" for column in columns
                 ]
+                executable_condition = mask_non_executable(condition_original)
+                where_match = re.search(r"\bwhere\b", executable_condition, re.IGNORECASE)
+                where_clause = executable_condition[where_match.end():] if where_match else ""
+                where_clause = re.split(r"\b(?:group|order|limit|top)\b", where_clause, maxsplit=1, flags=re.IGNORECASE)[0]
+                where_segments = re.split(r"\s+and\s+|[,，]", where_clause, flags=re.IGNORECASE)
                 for condition in base_conditions:
                     lhs = re.match(
                         r"\s*([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)\s+"
@@ -2816,10 +2821,13 @@ class PipelineNL2SQLGenerator:
                             raw_lhs,
                         ) is not None
                         for join in joins
-                    ) and not re.search(
-                        rf"\b{re.escape(table_context.name)}\.{re.escape(raw_lhs)}\b",
-                        condition_original,
-                        re.IGNORECASE,
+                    ) and not any(
+                        re.search(
+                            rf"\b{re.escape(table_context.name)}\.{re.escape(raw_lhs)}\b",
+                            segment,
+                            re.IGNORECASE,
+                        )
+                        for segment in where_segments
                     ):
                         raise SchemaValidationError("physical chain condition is joined-table-owned or ambiguous")
                 conditions = [
@@ -2861,13 +2869,15 @@ class PipelineNL2SQLGenerator:
                 )
             )
             if physical_chain_resolution is not None:
+                group_match = re.search(r"\bgroup(?:ed)?\s+by\b(.+?)(?=\border(?:ed)?\s+by\b|\blimit\b|\btop\s+\d+\b|$)", group_source_text, re.IGNORECASE)
+                group_clause = group_match.group(1) if group_match else ""
                 for column in group_by:
                     if "." not in column and any(
                         schema.canonical_column(schema.table_candidates(join["table"])[0], column) is not None
                         for join in joins
                     ) and not re.search(
                         rf"\b{re.escape(table_context.name)}\.{re.escape(column)}\b",
-                        group_source_text,
+                        group_clause,
                         re.IGNORECASE,
                     ):
                         raise SchemaValidationError("physical chain group column is ambiguous")
@@ -2977,19 +2987,27 @@ class PipelineNL2SQLGenerator:
             elif unique_count_intent:
                 pass
             else:
+                chain_has_explicit_ordering = (
+                    re.search(r"\b(?:order(?:ed)?|sort(?:ed)?)\s+by\b", group_source_text, re.IGNORECASE)
+                    is not None
+                    if physical_chain_resolution is not None
+                    else self._schema_has_explicit_ordering(group_source_text)
+                )
                 ordering_candidates = (
                     self._schema_resolve_ordering(group_source_text, table_context, schema)
-                    if self._schema_has_explicit_ordering(group_source_text)
+                    if chain_has_explicit_ordering
                     else []
                 )
                 if physical_chain_resolution is not None:
+                    order_match = re.search(r"\b(?:order(?:ed)?|sort(?:ed)?)\s+by\b(.+?)(?=\blimit\b|\btop\s+\d+\b|$)", group_source_text, re.IGNORECASE)
+                    order_clause = order_match.group(1) if order_match else ""
                     for column, _ in ordering_candidates:
                         if "." not in column and any(
                             schema.canonical_column(schema.table_candidates(join["table"])[0], column) is not None
                             for join in joins
                         ) and not re.search(
                             rf"\b{re.escape(table_context.name)}\.{re.escape(column)}\b",
-                            group_source_text,
+                            order_clause,
                             re.IGNORECASE,
                         ):
                             raise SchemaValidationError("physical chain ordering column is ambiguous")
