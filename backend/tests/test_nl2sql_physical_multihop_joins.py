@@ -144,6 +144,33 @@ def test_chain_base_group_aggregate_order_limit():
     assert result.sql.endswith("LIMIT 5")
 
 
+@pytest.mark.parametrize("function", ["sum", "avg", "min", "max"])
+def test_chain_base_qualified_aggregates_are_qualified(function):
+    result = generate(
+        f"show {function}(users.id) joined with orders joined with shipments",
+        schema(),
+    )
+    assert result.success
+    assert f"{function.upper()}(users.id)" in result.sql
+
+
+@pytest.mark.parametrize("text", [
+    "show sum(id) joined with orders joined with shipments",
+    "show sum(orders.id) joined with orders joined with shipments",
+    "show avg(orders.id) joined with orders joined with shipments",
+])
+def test_chain_aggregate_ownership_fail_closed(text):
+    result = generate(text, schema())
+    assert result.success is False
+    assert result.sql is None
+
+
+def test_chain_count_aggregate_regression():
+    result = generate("show count(users.id) joined with orders joined with shipments", schema())
+    assert result.success
+    assert "COUNT(users.id) AS count" in result.sql
+
+
 def test_chain_fanout_runtime_sqlite():
     result = generate("show user status joined with orders joined with shipments", schema())
     assert result.success

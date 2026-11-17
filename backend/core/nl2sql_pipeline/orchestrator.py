@@ -1485,6 +1485,56 @@ class PipelineNL2SQLGenerator:
             condition = condition[:start] + f"{table.name}.{match.group(1)}" + condition[end:]
         return condition
 
+    def _schema_resolve_chain_aggregations(
+        self,
+        aggregations: list[str],
+        metric_text: str,
+        table: SchemaTableContext,
+        schema: SchemaContext,
+        joins: list[dict],
+    ) -> list[str]:
+        """Validate and qualify aggregate arguments for a physical chain."""
+        calls = list(re.finditer(
+            r"\b(count|sum|avg|min|max)\s*\(\s*"
+            r"(\*|[A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)\s*\)",
+            mask_non_executable(metric_text),
+            re.IGNORECASE,
+        ))
+        explicit = [aggregation for aggregation in aggregations if "(" in aggregation]
+        if not calls:
+            return aggregations
+        if len(calls) != len(explicit):
+            raise SchemaValidationError("physical chain aggregate references are ambiguous")
+        joined_tables = [schema.table_candidates(join["table"])[0] for join in joins]
+        resolved: list[str] = []
+        call_index = 0
+        for aggregation in aggregations:
+            match = re.match(r"^(COUNT|SUM|AVG|MIN|MAX)\((.*)\)(?:\s+AS\s+(\w+))?$", aggregation, re.IGNORECASE)
+            if match is None:
+                resolved.append(aggregation)
+                continue
+            function, _, alias = match.groups()
+            raw_function, raw_argument = calls[call_index].groups()
+            call_index += 1
+            if raw_argument == "*":
+                resolved.append(f"{function.upper()}(*)" + (f" AS {alias}" if alias else ""))
+                continue
+            parts = raw_argument.split(".")
+            if len(parts) > 1:
+                owners = schema.table_candidates(".".join(parts[:-1]))
+                if len(owners) != 1 or owners[0].key != table.key:
+                    raise SchemaValidationError("physical chain aggregate is not base-owned")
+                owner = owners[0]
+            else:
+                owner = table
+                if any(schema.canonical_column(joined, raw_argument) is not None for joined in joined_tables):
+                    raise SchemaValidationError("physical chain aggregate column is ambiguous")
+            canonical = schema.canonical_column(owner, parts[-1])
+            if canonical is None:
+                raise SchemaValidationError("physical chain aggregate column is outside base schema")
+            resolved.append(f"{function.upper()}({owner.name}.{canonical})" + (f" AS {alias}" if alias else ""))
+        return resolved
+
     def _schema_parse_whose_one(self, text: str, *, allow_tail: bool = False) -> _SchemaWhoseParsed | None:
         """Parse one schema-safe whose predicate without resolving its owner."""
         executable = mask_non_executable(text)
@@ -2782,6 +2832,10 @@ class PipelineNL2SQLGenerator:
             aggregations = self._schema_extract_aggregations(
                 metric_text, table_context, schema, count_metric
             )
+            if physical_chain_resolution is not None:
+                aggregations = self._schema_resolve_chain_aggregations(
+                    aggregations, metric_text, table_context, schema, joins
+                )
             group_source_text = chain_executable_text or text_lower
             group_by = (
                 []
