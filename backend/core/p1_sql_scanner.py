@@ -4,7 +4,12 @@ from __future__ import annotations
 from typing import Iterator, Tuple
 
 
-def executable_segments(sql: str, dialect: str | None = None) -> Iterator[Tuple[int, int]]:
+def executable_segments(
+    sql: str,
+    dialect: str | None = None,
+    *,
+    allow_possessive: bool = False,
+) -> Iterator[Tuple[int, int]]:
     """Yield [start, end) ranges outside strings, quoted identifiers/comments.
 
     MySQL treats ``#`` through end-of-line as a comment.  It is enabled only
@@ -36,6 +41,25 @@ def executable_segments(sql: str, dialect: str | None = None) -> Iterator[Tuple[
                 start = i
                 continue
             ch = sql[i]
+            if (
+                allow_possessive
+                and ch == "'"
+                and i > 0
+                and sql[i - 1].isalnum()
+                and i + 1 < n
+                and sql[i + 1] in "sS"
+                and (
+                    i + 2 == n
+                    or sql[i + 2].isspace()
+                    or sql[i + 2] in ",.!?:)-"
+                )
+                and not (
+                    sql[i - 1] in "eEnNqQ"
+                    and (i < 2 or not sql[i - 2].isalnum())
+                )
+            ):
+                i += 1
+                continue
             if dialect and dialect.lower() == "mysql" and ch == "#":
                 if start < i:
                     yield start, i
@@ -169,10 +193,23 @@ def executable_segments(sql: str, dialect: str | None = None) -> Iterator[Tuple[
         yield start, n
 
 
-def mask_non_executable(sql: str, dialect: str | None = None) -> str:
-    """Replace non-code characters with spaces while preserving positions."""
+def mask_non_executable(
+    sql: str,
+    dialect: str | None = None,
+    *,
+    allow_possessive: bool = False,
+) -> str:
+    """Replace non-code characters with spaces while preserving positions.
+
+    ``allow_possessive`` is reserved for natural-language callers such as
+    NL2SQL. The strict SQL default remains unchanged.
+    """
     masked = list(sql)
-    for start, end in _non_executable_ranges(sql, dialect=dialect):
+    for start, end in _non_executable_ranges(
+        sql,
+        dialect=dialect,
+        allow_possessive=allow_possessive,
+    ):
         for i in range(start, end):
             masked[i] = " "
     return "".join(masked)
@@ -228,10 +265,19 @@ def prepare_sql_for_parser(sql: str, dialect: str | None = None) -> str:
     return "".join(parts)
 
 
-def _non_executable_ranges(sql: str, dialect: str | None = None):
+def _non_executable_ranges(
+    sql: str,
+    dialect: str | None = None,
+    *,
+    allow_possessive: bool = False,
+):
     covered = []
     cursor = 0
-    for start, end in executable_segments(sql, dialect=dialect):
+    for start, end in executable_segments(
+        sql,
+        dialect=dialect,
+        allow_possessive=allow_possessive,
+    ):
         if cursor < start:
             covered.append((cursor, start))
         cursor = end

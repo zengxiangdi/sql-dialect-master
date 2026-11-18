@@ -7,7 +7,7 @@ user-supplied parentheses.
 import re
 from typing import List, Optional, Tuple
 
-from ..p1_sql_scanner import mask_non_executable
+from ..nl2sql_pipeline.scanner import mask_nl2sql_non_executable
 
 
 _COMPARISON_PATTERNS = (
@@ -193,7 +193,7 @@ def _format_set_values(raw_values: str) -> str:
 
 def _comparison_matches(text: str) -> List[Tuple[int, int, str]]:
     matches: List[Tuple[int, int, str]] = []
-    executable = mask_non_executable(text)
+    executable = mask_nl2sql_non_executable(text)
 
     for pattern in _COMPARISON_PATTERNS:
         for match in pattern.finditer(executable):
@@ -268,7 +268,7 @@ def _comparison_matches(text: str) -> List[Tuple[int, int, str]]:
 
 def _status_matches(text: str) -> List[Tuple[int, int, str]]:
     """Extract status predicates without matching quoted values."""
-    executable = mask_non_executable(text)
+    executable = mask_nl2sql_non_executable(text)
     matches: list[Tuple[int, int, str]] = []
     explicit_patterns = [
         (

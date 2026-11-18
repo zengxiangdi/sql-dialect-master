@@ -8,7 +8,7 @@ from ``backend.core.nl2sql_components.mappings``).
 import re
 from typing import Dict, List, Optional
 
-from ..p1_sql_scanner import mask_non_executable
+from ..nl2sql_pipeline.scanner import mask_nl2sql_non_executable
 
 
 # Generated SQL is intended to be reviewed and parameterized by a caller.
@@ -37,7 +37,7 @@ def detect_operation(text: str, keywords: Dict[str, str]) -> str:
     and returns the first matching operation (SELECT/INSERT/UPDATE/DELETE).
     Defaults to SELECT.
     """
-    intent_text = mask_non_executable(text)
+    intent_text = mask_nl2sql_non_executable(text)
     # Deletion-state phrases describe a SELECT predicate. Mask only the
     # phrase so an independent leading "删除" in e.g. "删除已删除用户"
     # remains a genuine DELETE intent.
@@ -59,9 +59,10 @@ def extract_table(text: str, table_patterns: Dict[str, str]) -> str:
     Prefers the longest matching pattern; ties broken by first position.
     Returns the fallback name "table_name" when no pattern matches.
     """
+    executable = mask_nl2sql_non_executable(text)
     tables_found = []
     for pattern, table in table_patterns.items():
-        match = _pattern_match(text, pattern)
+        match = _pattern_match(executable, pattern)
         if match:
             tables_found.append((match.start(), table, len(pattern)))
     if tables_found:
@@ -84,11 +85,12 @@ def extract_table_subject(
     slot even when it is the earliest-matching pattern, so every candidate
     table equal to it is excluded before the first-occurrence sort.
     """
-    candidates = []
+    executable = mask_nl2sql_non_executable(text)
+    candidates: list[tuple[int, str]] = []
     for pattern, table in table_patterns.items():
         if relational_context and table == relational_context:
             continue
-        match = _pattern_match(text, pattern)
+        match = _pattern_match(executable, pattern)
         pos = match.start() if match else -1
         if pos != -1:
             if table in [t for _, t in candidates]:
@@ -102,12 +104,13 @@ def extract_table_subject(
 
 def named_tables(text: str, table_patterns: Dict[str, str]) -> List[str]:
     """Return the distinct table names the text mentions, in order of first appearance."""
+    executable = mask_nl2sql_non_executable(text)
     occurrences = []
     seen = set()
     for pattern, table in table_patterns.items():
         if table in seen:
             continue
-        match = _pattern_match(text, pattern)
+        match = _pattern_match(executable, pattern)
         pos = match.start() if match else -1
         if pos != -1:
             occurrences.append((pos, table))
@@ -122,7 +125,7 @@ def extract_columns(text: str, column_patterns: Dict[str, str]) -> List[str]:
     keyword is present.
     """
     columns = []
-    text = mask_non_executable(text)
+    text = mask_nl2sql_non_executable(text)
     for pattern, column in column_patterns.items():
         if _pattern_match(text, pattern) and column not in columns:
             columns.append(column)
@@ -135,13 +138,14 @@ def extract_limit(text: str) -> Optional[int]:
     Supports Chinese and English cardinality phrasings such as
     '前10', 'top 10', 'limit 10', '10条', '10行'.
     """
+    executable = mask_nl2sql_non_executable(text)
     patterns = [
         r"前\s*(-?\d+)", r"top\s*(-?\d+)", r"limit\s*(-?\d+)",
         r"first\s*(-?\d+)", r"(-?\d+)\s*条", r"(-?\d+)\s*个",
         r"(-?\d+)\s*行", r"(-?\d+)\s*rows?", r"only\s*(-?\d+)",
     ]
     for pattern in patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
+        match = re.search(pattern, executable, re.IGNORECASE)
         if match:
             raw_value = match.group(1)
             # Keep the conversion bounded and deterministic.  Raising here is
@@ -168,4 +172,5 @@ def extract_limit(text: str) -> Optional[int]:
 
 def check_distinct(text: str) -> bool:
     """Check if DISTINCT is requested in the text."""
-    return any(k in text for k in ["去重", "唯一", "不重复", "distinct", "unique"])
+    executable = mask_nl2sql_non_executable(text).casefold()
+    return any(k in executable for k in ["去重", "唯一", "不重复", "distinct", "unique"])

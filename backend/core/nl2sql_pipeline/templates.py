@@ -25,7 +25,9 @@ from ..nl2sql_components.evidence import (
     EvidenceItem,
     GenerationEvidence,
 )
+from ..nl2sql_components.core_extract import check_distinct
 from ..nl2sql_components.mappings import COLUMN_PATTERNS, TABLE_PATTERNS
+from ..nl2sql_pipeline.scanner import mask_nl2sql_non_executable
 from ..nl2sql_components.templates import QueryTemplate
 from .dialect import apply_dialect_adjustments
 from .models import NL2SQLResult
@@ -64,6 +66,7 @@ def generate_from_template(
     )
     columns = column_hints or analysis["columns"] or ["*"]
     numbers = analysis["numbers"]
+    structural_tokens = analysis.get("structural_tokens", analysis["tokens"])
     # Structured evidence trail; weights mirror the heuristic exactly.
     evidence = GenerationEvidence()
     evidence.items.append(
@@ -82,10 +85,21 @@ def generate_from_template(
     external_conditions = extract_conditions_impl(
         text_lower, text_original or text_lower, column_patterns
     )
+    distinct_requested = check_distinct(text_lower)
 
     try:
         if template.name == "top_n_query":
-            n = numbers[0] if numbers else "10"
+            # The first number may belong to a date interval (``last 7
+            # days``). Resolve the row count from the structural TOP/bottom
+            # phrase itself, after masking literals/comments.
+            executable = mask_nl2sql_non_executable(text_lower)
+            top_match = re.search(
+                r"\b(?:top|bottom|lowest|smallest)\s*(-?\d+)\b|"
+                r"(?:前|最低|最少)\s*(-?\d+)",
+                executable,
+                re.IGNORECASE,
+            )
+            n = (top_match.group(1) or top_match.group(2)) if top_match else "10"
             order_col = analysis["columns"][0] if analysis["columns"] else "id"
             # Determine ordering direction based on request text
             request_text = str((match_groups or {}).get("match", "")).lower()
@@ -101,10 +115,7 @@ def generate_from_template(
             # The legacy top_n branch composed ORDER BY + LIMIT first and
             # then a clause-aware merge re-appended WHERE *after* LIMIT,
             # producing unparseable 'LIMIT N\nWHERE ...' output.
-            external_where_parts = [
-                c for c in external_conditions
-                if "DATE_SUB" not in c and "ADD_MONTHS" not in c and "DATE_ADD" not in c
-            ]
+            external_where_parts = list(external_conditions)
             base_sql = f"SELECT *\nFROM {table}"
             if external_where_parts:
                 base_sql += f"\nWHERE {' AND '.join(external_where_parts)}"
@@ -176,7 +187,7 @@ def generate_from_template(
             ))
         elif template.name == "aggregate_query":
             agg_func = "COUNT"
-            for token in analysis["tokens"]:
+            for token in structural_tokens:
                 if token in ["平均", "average", "avg"]:
                     agg_func = "AVG"
                 elif token in ["总和", "sum", "合计"]:
@@ -196,7 +207,7 @@ def generate_from_template(
             col = analysis["columns"][0] if analysis["columns"] else "column"
             value = numbers[0] if numbers else "0"
             op = "="
-            for token in analysis["tokens"]:
+            for token in structural_tokens:
                 if token in ["大于", "超过", "greater", ">"]:
                     op = ">"
                 elif token in ["小于", "低于", "less", "<"]:
@@ -295,7 +306,8 @@ def generate_from_template(
                 )
         elif template.name == "select_with_columns":
             cols = ", ".join(columns) if columns != ["*"] else "*"
-            sql = f"SELECT {cols}\nFROM {table}"
+            distinct_sql = "DISTINCT " if distinct_requested else ""
+            sql = f"SELECT {distinct_sql}{cols}\nFROM {table}"
             explanation_parts.append(f"查询: {cols}")
         else:
             sql = f"SELECT *\nFROM {table}"
@@ -314,7 +326,7 @@ def generate_from_template(
                 continue
             # top_n folded its own external conditions into WHERE above;
             # never re-append them here as a second WHERE.
-            if template.name == "top_n_query" and "DATE_SUB" not in c and "ADD_MONTHS" not in c and "DATE_ADD" not in c:
+            if template.name == "top_n_query":
                 continue
             merged_conditions.append(c)
         if merged_conditions:

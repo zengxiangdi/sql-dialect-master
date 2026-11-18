@@ -15,7 +15,7 @@ from ..nl2sql_components.boolean_conditions import (
     extract_boolean_conditions,
     extract_status_conditions,
 )
-from ..p1_sql_scanner import mask_non_executable
+from ..nl2sql_pipeline.scanner import mask_nl2sql_non_executable
 
 _QUOTED_COMPARISON_PREFIX = re.compile(
     r"(?<![\w$])([A-Za-z_][A-Za-z0-9_$]*)\s*"
@@ -38,7 +38,7 @@ def _quoted_comparisons(
     original: str, column_patterns: Dict[str, str]
 ) -> list[str]:
     quoted = []
-    executable = mask_non_executable(original)
+    executable = mask_nl2sql_non_executable(original)
     known_columns = {value.casefold(): value for value in column_patterns.values()}
     for match in _QUOTED_COMPARISON_PREFIX.finditer(original):
         if executable[match.start():match.end()] != original[match.start():match.end()]:
@@ -103,8 +103,8 @@ def extract_conditions(
         return boolean_conditions
 
     conditions = _quoted_comparisons(original, column_patterns)
-    executable_original = mask_non_executable(original)
-    executable_text = mask_non_executable(text)
+    executable_original = mask_nl2sql_non_executable(original)
+    executable_text = mask_nl2sql_non_executable(text)
     numbers = re.findall(r"-?\d+(?:\.\d*)?", executable_original)
     condition_column = _column_for_text(executable_text, column_patterns)
 
