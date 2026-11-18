@@ -27,7 +27,7 @@ from ..nl2sql_components.evidence import (
 )
 from ..nl2sql_components.core_extract import check_distinct
 from ..nl2sql_components.mappings import COLUMN_PATTERNS, TABLE_PATTERNS
-from ..p1_sql_scanner import mask_non_executable
+from ..nl2sql_pipeline.scanner import mask_nl2sql_non_executable
 from ..nl2sql_components.templates import QueryTemplate
 from .dialect import apply_dialect_adjustments
 from .models import NL2SQLResult
@@ -92,7 +92,7 @@ def generate_from_template(
             # The first number may belong to a date interval (``last 7
             # days``). Resolve the row count from the structural TOP/bottom
             # phrase itself, after masking literals/comments.
-            executable = mask_non_executable(text_lower)
+            executable = mask_nl2sql_non_executable(text_lower)
             top_match = re.search(
                 r"\b(?:top|bottom|lowest|smallest)\s*(-?\d+)\b|"
                 r"(?:前|最低|最少)\s*(-?\d+)",

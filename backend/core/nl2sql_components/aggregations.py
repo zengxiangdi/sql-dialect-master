@@ -8,7 +8,7 @@ COLUMN_PATTERNS to resolve the target column for value aggregates.
 import re
 from typing import Dict, List
 
-from ..p1_sql_scanner import mask_non_executable
+from ..nl2sql_pipeline.scanner import mask_nl2sql_non_executable
 
 
 def extract_aggregations(text: str, column_patterns: Dict[str, str]) -> List[str]:
@@ -19,7 +19,7 @@ def extract_aggregations(text: str, column_patterns: Dict[str, str]) -> List[str
     was requested.
     """
     aggs: List[str] = []
-    executable = mask_non_executable(text)
+    executable = mask_nl2sql_non_executable(text)
     text_lower = executable.lower()
     # Pick the user's named metric column, not the first pattern that
     # happens to sit inside an aggregate keyword: the legacy first-hit

@@ -11,10 +11,40 @@ import pytest
 
 from backend.core.nl2sql import NL2SQLGenerator
 from backend.core.nl2sql_schema import SchemaContext
+from backend.core.nl2sql_pipeline.scanner import mask_nl2sql_non_executable
+from backend.core.p1_sql_scanner import mask_non_executable
 
 
 def generate(text: str, schema: SchemaContext | None = None, dialect: str = "postgres"):
     return NL2SQLGenerator().generate(text, dialect, schema=schema)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT's'",
+        "SELECT's; DROP TABLE users'",
+        "E'abc; DROP TABLE users'",
+        "N'abc; DROP TABLE users'",
+        "q'[abc; DROP TABLE users]'",
+    ],
+)
+def test_shared_sql_scanner_masks_string_literals_by_default(sql: str):
+    masked = mask_non_executable(sql)
+
+    assert len(masked) == len(sql)
+    assert "DROP" not in masked
+    assert masked != sql
+
+
+def test_nl2sql_wrapper_handles_possessives_without_relaxing_sql_literals():
+    prompt = "show yesterday's orders and user's name"
+    masked = mask_nl2sql_non_executable(prompt)
+    assert "yesterday's orders" in masked
+    assert "user's name" in masked
+
+    sql_literal = "SELECT's; DROP TABLE users'"
+    assert mask_nl2sql_non_executable(sql_literal) == mask_non_executable(sql_literal)
 
 
 def products_schema() -> SchemaContext:

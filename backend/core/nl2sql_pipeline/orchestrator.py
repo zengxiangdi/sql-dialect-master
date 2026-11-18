@@ -35,7 +35,7 @@ from ..nl2sql_components.mappings import (
 from ..nl2sql_components.relations import JoinSpec, parse_join_spec
 from ..nl2sql_components.templates import DEFAULT_QUERY_TEMPLATES, QueryTemplate
 from ..nl2sql_components.tokenizer import Tokenizer
-from ..p1_sql_scanner import mask_non_executable
+from ..nl2sql_pipeline.scanner import mask_nl2sql_non_executable
 from ..nl2sql_schema import (
     SchemaContext,
     SchemaTableContext,
@@ -334,7 +334,7 @@ class PipelineNL2SQLGenerator:
                 suggestions=["Please shorten the natural-language query and try again."],
                 evidence=GenerationEvidence(),
             )
-        executable_intent = mask_non_executable(text)
+        executable_intent = mask_nl2sql_non_executable(text)
         ddl_match = _UNSUPPORTED_DDL.search(executable_intent)
         cn_ddl_match = _UNSUPPORTED_CN_DDL.search(executable_intent)
         if ddl_match or cn_ddl_match:
@@ -692,7 +692,7 @@ class PipelineNL2SQLGenerator:
         self, text: str, schema: SchemaContext
     ) -> list[SchemaTableContext]:
         """Find exact schema names and uniquely mapped existing aliases."""
-        executable = mask_non_executable(text)
+        executable = mask_nl2sql_non_executable(text)
         found: dict[str, tuple[int, SchemaTableContext]] = {}
         for table in schema.tables:
             match = self._schema_text_match(executable, table.name)
@@ -717,7 +717,7 @@ class PipelineNL2SQLGenerator:
         ignored_spans: tuple[tuple[int, int], ...] = (),
     ) -> list[str]:
         """Return mapped table names mentioned by the request but absent in schema."""
-        text = mask_non_executable(text)
+        text = mask_nl2sql_non_executable(text)
         for start, end in ignored_spans:
             text = text[:start] + " " * (end - start) + text[end:]
         unknown: list[str] = []
@@ -736,14 +736,14 @@ class PipelineNL2SQLGenerator:
 
     def _schema_entity_counter_tables(self, text: str) -> set[str]:
         """Find entity counters without treating data words as counts."""
-        text = mask_non_executable(text)
+        text = mask_nl2sql_non_executable(text)
         return {
             mapped for pattern, mapped in self.TABLE_PATTERNS.items()
             if re.search(re.escape(pattern) + r"数(?!据|字|组)", text, re.IGNORECASE)
         }
 
     def _schema_aggregation_intent(self, text: str) -> bool:
-        text = mask_non_executable(text)
+        text = mask_nl2sql_non_executable(text)
         return bool(re.search(
             r"\b(?:number\s+of|count(?:\s+of)?|how\s+many|sum|average|avg|maximum|minimum|max|min)\b|"
             r"统计|数量|多少|几个|总数|个数|条数|件数|行数|人数|记录数|"
@@ -947,7 +947,7 @@ class PipelineNL2SQLGenerator:
         projection_source = text
         if suppress_quantity_token:
             projection_source = re.sub(r"数量", " " * len("数量"), projection_source)
-        projection_text = mask_non_executable(self._schema_projection_text(projection_source))
+        projection_text = mask_nl2sql_non_executable(self._schema_projection_text(projection_source))
         candidates: list[tuple[int, int, str]] = []
         column_names = list(table.columns)
         for column in column_names:
@@ -1036,7 +1036,7 @@ class PipelineNL2SQLGenerator:
         schema: SchemaContext,
     ) -> list[tuple[str, str]]:
         """Resolve schema-aware ORDER BY targets without changing no-schema extraction."""
-        executable = mask_non_executable(text)
+        executable = mask_nl2sql_non_executable(text)
         match = re.search(
             r"\b(?:order(?:ed)?|sort(?:ed)?)\s+by\s+",
             executable,
@@ -1107,7 +1107,7 @@ class PipelineNL2SQLGenerator:
         whose_spans: tuple[tuple[int, int], ...] = (),
     ) -> tuple[_nl2sql_ir.PathOrderingTerm, ...]:
         """Resolve explicit aggregate/group ordering for a path count."""
-        executable = mask_non_executable(text)
+        executable = mask_nl2sql_non_executable(text)
         if parsed_whose is not None:
             executable = self._schema_mask_span(executable, parsed_whose.span)
         executable = self._schema_mask_spans(executable, whose_spans)
@@ -1198,7 +1198,7 @@ class PipelineNL2SQLGenerator:
         group_by: list[str], *, whose_span=None, group_span=None,
         whose_spans: tuple[tuple[int, int], ...] = (),
     ) -> tuple[_nl2sql_ir.AggregateOrderingTerm, ...]:
-        executable = mask_non_executable(text)
+        executable = mask_nl2sql_non_executable(text)
         if whose_span is not None:
             executable = self._schema_mask_span(executable, whose_span)
         executable = self._schema_mask_spans(executable, whose_spans)
@@ -1253,7 +1253,7 @@ class PipelineNL2SQLGenerator:
         table: SchemaTableContext,
         schema: SchemaContext,
     ) -> tuple[str, str | None] | None:
-        text = mask_non_executable(text)
+        text = mask_nl2sql_non_executable(text)
         count_intent = bool(re.search(
             r"统计|数量|多少|几个|总数|个数|条数|件数|行数|人数|记录数|"
             r"\bnumber\s+of\b|\bcount(?:\s+of)?\b|\bhow\s+many\b",
@@ -1289,7 +1289,7 @@ class PipelineNL2SQLGenerator:
         """Return explicit unique-count modifiers consumed by schema COUNT."""
         if count_metric is None or count_metric[0] != "count":
             return []
-        executable = mask_non_executable(text)
+        executable = mask_nl2sql_non_executable(text)
         english = re.compile(
             r"\b(?:count(?:\s+of)?|number\s+of)\s+(?:distinct|unique)\b|"
             r"\b(?:distinct|unique)\s+(?:count(?:\s+of)?|number\s+of)\b",
@@ -1307,7 +1307,7 @@ class PipelineNL2SQLGenerator:
     @staticmethod
     def _schema_has_zero_count_intent(text: str) -> bool:
         """Detect explicit inclusion of subjects with no matching targets."""
-        executable = mask_non_executable(text)
+        executable = mask_nl2sql_non_executable(text)
         return any(pattern.search(executable) for pattern in _SCHEMA_ZERO_COUNT_PATTERNS)
 
     @staticmethod
@@ -1342,7 +1342,7 @@ class PipelineNL2SQLGenerator:
     @staticmethod
     def _schema_is_zero_count_suffix(text: str) -> bool:
         """Check whether a trailing phrase is solely an explicit zero marker."""
-        executable = mask_non_executable(text).strip(" \t\r\n,.;，。；、")
+        executable = mask_nl2sql_non_executable(text).strip(" \t\r\n,.;，。；、")
         matches = []
         for pattern in _SCHEMA_ZERO_COUNT_PATTERNS:
             match = pattern.match(executable)
@@ -1372,7 +1372,7 @@ class PipelineNL2SQLGenerator:
         schema: SchemaContext | None = None,
         count_metric: tuple[str, str | None] | None = None,
     ) -> list[str]:
-        executable = mask_non_executable(text)
+        executable = mask_nl2sql_non_executable(text)
         existing = self._extract_aggregations(text)
         if count_metric is not None and count_metric[0] == "sum":
             return [f"SUM({count_metric[1]})"]
@@ -1408,7 +1408,7 @@ class PipelineNL2SQLGenerator:
         schema: SchemaContext,
         aggregations: list[str],
     ) -> list[str]:
-        executable = mask_non_executable(text)
+        executable = mask_nl2sql_non_executable(text)
         lowered = executable.lower()
         match = re.search(
             r"\b(?:group\s+by|grouped\s+by)\s+"
@@ -1448,7 +1448,7 @@ class PipelineNL2SQLGenerator:
 
     @staticmethod
     def _schema_has_explicit_ordering(text: str) -> bool:
-        lowered = mask_non_executable(text).lower()
+        lowered = mask_nl2sql_non_executable(text).lower()
         phrases = (
             "order by", "ordered by", "sort by", "sorted by",
             "ascending", "descending", "asc", "desc", "sort", "sorted",
@@ -1505,7 +1505,7 @@ class PipelineNL2SQLGenerator:
             r"(?<![\w$.])([A-Za-z_][A-Za-z0-9_$]*)(?=\s*(?:IS\s+NOT|IS|ISN'T|NOT|=|!=|<>|>=|<=|>|<))",
             re.IGNORECASE,
         )
-        masked = mask_non_executable(condition)
+        masked = mask_nl2sql_non_executable(condition)
         matches = list(pattern.finditer(masked))
         for match in reversed(matches):
             key = match.group(1).casefold()
@@ -1525,7 +1525,7 @@ class PipelineNL2SQLGenerator:
         joins: list[dict],
     ) -> list[str]:
         """Map each physical-chain WHERE segment to exactly one base condition."""
-        executable = mask_non_executable(original)
+        executable = mask_nl2sql_non_executable(original)
         where = re.search(r"\bwhere\b", executable, re.IGNORECASE)
         if where is None:
             if self._extract_conditions_enhanced(text, original):
@@ -1579,7 +1579,7 @@ class PipelineNL2SQLGenerator:
             if len(extracted) != 1:
                 raise SchemaValidationError("physical chain WHERE segment requires exactly one condition")
             condition = extracted[0]
-            condition_lhs = lhs_pattern.match(mask_non_executable(condition))
+            condition_lhs = lhs_pattern.match(mask_nl2sql_non_executable(condition))
             if condition_lhs is None or condition_lhs.group(1).casefold() != canonical.casefold():
                 raise SchemaValidationError("physical chain WHERE condition does not match its segment")
             conditions.append(condition)
@@ -1597,7 +1597,7 @@ class PipelineNL2SQLGenerator:
         calls = list(re.finditer(
             r"\b(count|sum|avg|min|max)\s*\(\s*"
             r"(\*|[A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)\s*\)",
-            mask_non_executable(metric_text),
+            mask_nl2sql_non_executable(metric_text),
             re.IGNORECASE,
         ))
         explicit = [aggregation for aggregation in aggregations if "(" in aggregation]
@@ -1637,7 +1637,7 @@ class PipelineNL2SQLGenerator:
 
     def _schema_parse_whose_one(self, text: str, *, allow_tail: bool = False) -> _SchemaWhoseParsed | None:
         """Parse one schema-safe whose predicate without resolving its owner."""
-        executable = mask_non_executable(text)
+        executable = mask_nl2sql_non_executable(text)
         match = _SCHEMA_WHOSE_PREFIX.search(executable)
         if match is None:
             return None
@@ -1794,7 +1794,7 @@ class PipelineNL2SQLGenerator:
 
     def _schema_parse_whose_list(self, text: str) -> list[_SchemaWhoseParsed]:
         """Scan an AND/comma list for unique counts, anchoring every predicate."""
-        executable = mask_non_executable(text)
+        executable = mask_nl2sql_non_executable(text)
         first = re.search(r"\bwhose\b", executable, re.IGNORECASE)
         if first is None:
             return []
@@ -1815,7 +1815,7 @@ class PipelineNL2SQLGenerator:
             prefix = "whose "
             synthetic = prefix + text[offset:]
             # A later valid whose must never rescue an invalid current term.
-            if _SCHEMA_WHOSE_PREFIX.match(mask_non_executable(synthetic)) is None:
+            if _SCHEMA_WHOSE_PREFIX.match(mask_nl2sql_non_executable(synthetic)) is None:
                 raise SchemaValidationError("connector must be followed by a valid predicate")
             item = self._schema_parse_whose_one(synthetic, allow_tail=True)
             if item is None:
@@ -1903,7 +1903,7 @@ class PipelineNL2SQLGenerator:
         schema: SchemaContext,
     ) -> tuple[SchemaTableContext, list[dict], tuple[int, int]] | None:
         """Resolve one schema-aware qualified equality after ``joined on``."""
-        executable = mask_non_executable(text)
+        executable = mask_nl2sql_non_executable(text)
         prefixes = list(_SCHEMA_JOINED_ON_PREFIX.finditer(executable))
         if not prefixes:
             return None
@@ -2028,7 +2028,7 @@ class PipelineNL2SQLGenerator:
         schema: SchemaContext,
     ) -> tuple[SchemaTableContext, list[dict], tuple[int, int]] | None:
         """Resolve one relationship-backed physical ``joined with`` clause."""
-        executable = mask_non_executable(text)
+        executable = mask_nl2sql_non_executable(text)
         matches = list(_SCHEMA_JOINED_WITH_PREFIX.finditer(executable))
         if not matches:
             return None
@@ -2112,7 +2112,7 @@ class PipelineNL2SQLGenerator:
         """Return high-confidence unmapped-column suggestions for schema success."""
         if not table.has_column_metadata:
             return list(existing)
-        masked = mask_non_executable(text)
+        masked = mask_nl2sql_non_executable(text)
         schema_tables = {candidate.key for candidate in schema.tables}
         table_aliases = {
             pattern.casefold() for pattern in self.TABLE_PATTERNS
@@ -2396,7 +2396,7 @@ class PipelineNL2SQLGenerator:
         schema: SchemaContext,
     ) -> tuple[SchemaTableContext, list[dict], tuple[int, int]] | None:
         """Resolve an explicit linear INNER ``joined with`` chain."""
-        executable = mask_non_executable(text)
+        executable = mask_nl2sql_non_executable(text)
         marker = re.search(r"\bjoined\s+with\b", executable, re.IGNORECASE)
         if marker is None:
             return None
@@ -2536,7 +2536,7 @@ class PipelineNL2SQLGenerator:
         """Resolve one bounded two-hop path for a subject-grouped unique count."""
         if not self._schema_unique_count_spans(text, ("count", None)):
             return None
-        executable = mask_non_executable(text)
+        executable = mask_nl2sql_non_executable(text)
         group_match = re.search(
             r"\b(?:per|each)\s+([A-Za-z_][A-Za-z0-9_$]*)\b",
             executable,
@@ -2695,7 +2695,7 @@ class PipelineNL2SQLGenerator:
     ) -> NL2SQLResult:
         """Generate through the enhanced path with strict schema resolution."""
         try:
-            executable_text = mask_non_executable(text)
+            executable_text = mask_nl2sql_non_executable(text)
             zero_count_intent = self._schema_has_zero_count_intent(text)
             unique_whose_scope = bool(self._schema_unique_count_spans(text, ("count", None)))
             if unique_whose_scope:
@@ -2764,7 +2764,7 @@ class PipelineNL2SQLGenerator:
                 table_context, joins, chain_span = physical_chain_resolution
                 metric_text = self._schema_mask_span(text_lower, chain_span)
                 chain_executable_text = self._schema_mask_span(
-                    mask_non_executable(text_lower), chain_span
+                    mask_nl2sql_non_executable(text_lower), chain_span
                 )
             elif joined_on_resolution is not None:
                 table_context, joins, joined_on_span = joined_on_resolution
@@ -2844,7 +2844,7 @@ class PipelineNL2SQLGenerator:
             )
             unique_count_intent = bool(unique_count_spans)
             if unique_count_intent:
-                executable_conditions = mask_non_executable(condition_original)
+                executable_conditions = mask_nl2sql_non_executable(condition_original)
                 clause_match = re.search(
                     r"\b(?:order(?:ed)?\s+by|sort(?:ed)?\s+by|top\s+\d+|limit\s+\d+|first\s+\d+|only\s+\d+)\b|前\s*\d+|\b\d+\s*(?:条|个|行|rows?)\b",
                     executable_conditions,
@@ -3014,7 +3014,7 @@ class PipelineNL2SQLGenerator:
                     )
             ordering_candidates: list[tuple[str, str]] = []
             aggregate_orderings = None
-            masked_unique_text = self._schema_mask_spans(mask_non_executable(text_lower), whose_spans)
+            masked_unique_text = self._schema_mask_spans(mask_nl2sql_non_executable(text_lower), whose_spans)
             if label_resolution is not None:
                 masked_unique_text = self._schema_mask_span(masked_unique_text, label_resolution[2])
             if unique_count_intent and re.search(
@@ -3114,7 +3114,7 @@ class PipelineNL2SQLGenerator:
                 orderings = None
                 aggregate_orderings = None
             if path_distinct_count_plan is not None:
-                masked_path_text = self._schema_mask_spans(mask_non_executable(text_lower), whose_spans)
+                masked_path_text = self._schema_mask_spans(mask_nl2sql_non_executable(text_lower), whose_spans)
                 if multihop_unique_resolution is not None:
                     masked_path_text = self._schema_mask_span(
                         masked_path_text,
@@ -3180,7 +3180,7 @@ class PipelineNL2SQLGenerator:
         """Return the placeholder style and ordered placeholders in DML SQL."""
         if not sql:
             return None, []
-        executable_sql = mask_non_executable(sql, dialect=dialect)
+        executable_sql = mask_nl2sql_non_executable(sql, dialect=dialect)
         if not re.match(r"\s*(?:INSERT|UPDATE|DELETE)\b", executable_sql, re.IGNORECASE):
             return None, []
         patterns = {

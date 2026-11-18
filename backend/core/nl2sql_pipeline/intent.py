@@ -11,7 +11,7 @@ from typing import Any, Dict, Optional
 from ..nl2sql_components.core_extract import detect_operation as _detect_operation_impl
 from ..nl2sql_components.mappings import COLUMN_PATTERNS, KEYWORDS, TABLE_PATTERNS
 from ..nl2sql_components.tokenizer import Tokenizer
-from ..p1_sql_scanner import mask_non_executable
+from ..nl2sql_pipeline.scanner import mask_nl2sql_non_executable
 
 
 def analyze_intent(text: str) -> Dict[str, Any]:
@@ -24,7 +24,7 @@ def analyze_intent(text: str) -> Dict[str, Any]:
     """
     tokenizer = Tokenizer()
     tokens = tokenizer.tokenize(text)
-    structural_tokens = tokenizer.tokenize(mask_non_executable(text))
+    structural_tokens = tokenizer.tokenize(mask_nl2sql_non_executable(text))
     numbers = tokenizer.extract_numbers(text)
     quoted = tokenizer.extract_quoted_strings(text)
 
@@ -69,7 +69,7 @@ def parse_text(text_lower: str, original: str) -> dict:
         "order": None,
         "joins": [],
     }
-    executable = mask_non_executable(text_lower)
+    executable = mask_nl2sql_non_executable(text_lower)
     # Word-boundary matching for tables to avoid false positives like "order" matching "orders"
     for pattern, table in TABLE_PATTERNS.items():
         if re.search(r'\b' + re.escape(pattern) + r'\b', executable) and table not in parsed["tables"]:

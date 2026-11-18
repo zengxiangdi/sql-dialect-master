@@ -12,7 +12,7 @@ from typing import Dict, List, Optional, Tuple
 
 from ..nl2sql_components.core_extract import check_distinct, extract_limit
 from ..nl2sql_components.mappings import COLUMN_PATTERNS, TABLE_PATTERNS
-from ..p1_sql_scanner import mask_non_executable
+from ..nl2sql_pipeline.scanner import mask_nl2sql_non_executable
 
 __all__ = [
     "check_distinct",
@@ -32,7 +32,7 @@ def extract_group_by(
     Verbatim move of ``nl2sql_legacy._extract_group_by``; ``column_patterns``
     and ``table_patterns`` replace the instance attributes.
     """
-    text = mask_non_executable(text)
+    text = mask_nl2sql_non_executable(text)
     column_patterns = column_patterns or COLUMN_PATTERNS
     table_patterns = table_patterns or TABLE_PATTERNS
     group_cols: List[str] = []
@@ -78,7 +78,7 @@ def extract_ordering(
     Verbatim move of ``nl2sql_legacy._extract_ordering``; ``column_patterns``
     replaces the instance attribute.
     """
-    text = mask_non_executable(text)
+    text = mask_nl2sql_non_executable(text)
     column_patterns = column_patterns or COLUMN_PATTERNS
     order_col = None
     for pattern, column in column_patterns.items():
