@@ -367,9 +367,24 @@ def normalize_dialect(dialect: str, field_name: str = "dialect") -> str:
 
 # === Request/Response Models with Enhanced Documentation ===
 
+# Keep request-field limits explicit in the OpenAPI schema. The parser
+# setting normally falls back to the transpiler limit during settings
+# validation; the fallback also handles custom settings objects safely.
+API_SQL_MAX_LENGTH = settings.transpiler_max_sql_length
+API_PARSER_SQL_MAX_LENGTH = settings.parser_max_sql_length or API_SQL_MAX_LENGTH
+API_NL2SQL_MAX_LENGTH = settings.nl2sql_max_input_length
+BatchSQLStatement = Annotated[
+    StrictStr,
+    Field(max_length=API_SQL_MAX_LENGTH),
+]
+
 class ConvertRequest(BaseModel):
     """SQL conversion request model."""
-    sql: str = Field(..., description="Source SQL statement to convert")
+    sql: str = Field(
+        ...,
+        max_length=API_SQL_MAX_LENGTH,
+        description="Source SQL statement to convert",
+    )
     source_dialect: str = Field(..., description="Source database dialect")
     target_dialect: str = Field(..., description="Target database dialect")
     pretty: bool = Field(
@@ -415,7 +430,7 @@ class ConvertResponse(BaseModel):
 class BatchConvertRequest(BaseModel):
     """Convert an ordered, bounded list using one dialect pair."""
 
-    statements: List[StrictStr] = Field(
+    statements: List[BatchSQLStatement] = Field(
         ...,
         min_length=1,
         max_length=settings.max_batch_size,
@@ -549,7 +564,11 @@ class SchemaDefinition(BaseModel):
 
 class NL2SQLRequest(BaseModel):
     """Natural language to SQL request model."""
-    text: str = Field(..., description="Natural language query (Chinese or English)")
+    text: str = Field(
+        ...,
+        max_length=API_NL2SQL_MAX_LENGTH,
+        description="Natural language query (Chinese or English)",
+    )
     dialect: str = Field("hive", description="Target SQL dialect")
     table_hint: Optional[str] = Field(None, description="Optional table name hint")
     column_hints: Optional[List[str]] = Field(
@@ -600,15 +619,27 @@ class NL2SQLResponse(BaseModel):
 
 class ParseRequest(BaseModel):
     """SQL parse request model."""
-    sql: str = Field(..., description="SQL statement to parse")
+    sql: str = Field(
+        ...,
+        max_length=API_PARSER_SQL_MAX_LENGTH,
+        description="SQL statement to parse",
+    )
     dialect: str = Field("hive", description="SQL dialect")
 
 
 class DiffRequest(BaseModel):
     """Semantic SQL comparison request."""
 
-    source_sql: str = Field(..., description="Source SQL statement")
-    target_sql: str = Field(..., description="Target SQL statement")
+    source_sql: str = Field(
+        ...,
+        max_length=API_PARSER_SQL_MAX_LENGTH,
+        description="Source SQL statement",
+    )
+    target_sql: str = Field(
+        ...,
+        max_length=API_PARSER_SQL_MAX_LENGTH,
+        description="Target SQL statement",
+    )
     source_dialect: str = Field(..., description="Source SQL dialect")
     target_dialect: str = Field(..., description="Target SQL dialect")
 

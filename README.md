@@ -331,6 +331,16 @@ sql-dialect-master/
 | `/health/deep` | GET | Deep health check |
 | `/api/stats` | GET | Service and dataset statistics |
 
+Request length limits are exposed in the OpenAPI schema. SQL fields for
+conversion and batch items use `SDM_TRANSPILER_MAX_SQL_LENGTH` (default
+100,000 characters); parsing and both semantic-diff SQL fields use
+`SDM_PARSER_MAX_SQL_LENGTH` (defaulting to the same value); NL2SQL text uses
+`SDM_NL2SQL_MAX_INPUT_LENGTH` (default 8,192). Exceeding an individual field
+returns HTTP 422 with `VALIDATION_FAILED`. The aggregate request-body limit
+remains 512 KiB and returns HTTP 413 with `PAYLOAD_TOO_LARGE`. A syntax error
+within a permitted field keeps the endpoint's normal analysis response, such
+as HTTP 200 `parse_error` from semantic diff.
+
 For example, send this JSON body to `POST /api/convert/batch`:
 
 ```json

@@ -194,7 +194,7 @@ def test_llm_success_preserves_input_normalizes_dialect_and_skips_cpu_pool(clien
         (payload(table_hint="users; DROP TABLE users"), 400),
         (payload(text=""), 200),
         (payload(text="   "), 200),
-        (payload(text="x" * (settings.nl2sql_max_input_length + 1)), 200),
+        (payload(text="x" * (settings.nl2sql_max_input_length + 1)), 422),
         (payload(column_hints=["users.id;DROP TABLE users"]), 422),
         (payload(column_hints=["users.id"] * 101), 422),
         (payload(column_hints=[1]), 422),

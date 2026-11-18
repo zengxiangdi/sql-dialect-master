@@ -20,6 +20,17 @@ processing. SQL parsing and transpilation use a default maximum input length of
 100,000 characters from `SDM_TRANSPILER_MAX_SQL_LENGTH`; the parser limit falls
 back to the same value unless `SDM_PARSER_MAX_SQL_LENGTH` is explicitly set.
 
+The API applies these limits to individual request fields before endpoint
+processing: `/api/convert` and each `/api/convert/batch` statement use the
+transpiler limit, `/api/parse` and both `/api/diff` SQL fields use the parser
+limit, and `/api/nl2sql` text uses `SDM_NL2SQL_MAX_INPUT_LENGTH` (default
+8,192). A field that exceeds its limit returns HTTP 422 with
+`error.code=VALIDATION_FAILED`; the OpenAPI schema exposes each `maxLength`.
+The 512 KiB aggregate body guard remains HTTP 413 with
+`error.code=PAYLOAD_TOO_LARGE`. Syntax errors in fields within their limits
+retain endpoint semantics, including `/api/diff` returning its normal HTTP
+200 `parse_error` analysis.
+
 For a single process, the in-memory rate-limit backend is suitable. For several
 workers or instances, use Redis so all workers share one rate-limit counter.
 

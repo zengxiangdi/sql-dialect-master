@@ -486,10 +486,10 @@ class TestEdgeCases:
             "source_dialect": "mysql",
             "target_dialect": "postgres"
         })
-        assert response.status_code == 200
+        assert response.status_code == 422
         data = response.json()
-        if len(huge_sql) > 100000:
-            assert data["success"] is False or "error" in data
+        assert data["success"] is False
+        assert data["error"]["code"] == "VALIDATION_FAILED"
     
     def test_whitespace_only_sql(self):
         """Whitespace-only SQL should be rejected."""
