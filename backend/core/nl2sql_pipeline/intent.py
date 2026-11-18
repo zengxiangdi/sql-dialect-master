@@ -11,6 +11,7 @@ from typing import Any, Dict, Optional
 from ..nl2sql_components.core_extract import detect_operation as _detect_operation_impl
 from ..nl2sql_components.mappings import COLUMN_PATTERNS, KEYWORDS, TABLE_PATTERNS
 from ..nl2sql_components.tokenizer import Tokenizer
+from ..p1_sql_scanner import mask_non_executable
 
 
 def analyze_intent(text: str) -> Dict[str, Any]:
@@ -23,32 +24,34 @@ def analyze_intent(text: str) -> Dict[str, Any]:
     """
     tokenizer = Tokenizer()
     tokens = tokenizer.tokenize(text)
+    structural_tokens = tokenizer.tokenize(mask_non_executable(text))
     numbers = tokenizer.extract_numbers(text)
     quoted = tokenizer.extract_quoted_strings(text)
 
     detected_tables = [
         TABLE_PATTERNS[token]
-        for token in tokens
+        for token in structural_tokens
         if token in TABLE_PATTERNS
     ]
     detected_columns = [
         COLUMN_PATTERNS[token]
-        for token in tokens
+        for token in structural_tokens
         if token in COLUMN_PATTERNS
     ]
     detected_ops = [
         KEYWORDS[token]
-        for token in tokens
+        for token in structural_tokens
         if token in KEYWORDS
     ]
 
     return {
         "tokens": tokens,
+        "structural_tokens": structural_tokens,
         "numbers": numbers,
         "quoted_strings": quoted,
-        "tables": list(set(detected_tables)),
-        "columns": list(set(detected_columns)),
-        "operations": list(set(detected_ops)),
+        "tables": list(dict.fromkeys(detected_tables)),
+        "columns": list(dict.fromkeys(detected_columns)),
+        "operations": list(dict.fromkeys(detected_ops)),
         "is_chinese": tokenizer.is_chinese(text),
         "token_count": len(tokens),
     }
@@ -56,7 +59,7 @@ def analyze_intent(text: str) -> Dict[str, Any]:
 
 def parse_text(text_lower: str, original: str) -> dict:
     """Parse and extract all elements from text (legacy ``_parse_text``)."""
-    parsed = {
+    parsed: dict[str, Any] = {
         "tables": [],
         "columns": [],
         "conditions": [],
@@ -66,13 +69,14 @@ def parse_text(text_lower: str, original: str) -> dict:
         "order": None,
         "joins": [],
     }
+    executable = mask_non_executable(text_lower)
     # Word-boundary matching for tables to avoid false positives like "order" matching "orders"
     for pattern, table in TABLE_PATTERNS.items():
-        if re.search(r'\b' + re.escape(pattern) + r'\b', text_lower) and table not in parsed["tables"]:
+        if re.search(r'\b' + re.escape(pattern) + r'\b', executable) and table not in parsed["tables"]:
             parsed["tables"].append(table)
     # Word-boundary matching for columns
     for pattern, column in COLUMN_PATTERNS.items():
-        if re.search(r'\b' + re.escape(pattern) + r'\b', text_lower) and column not in parsed["columns"]:
+        if re.search(r'\b' + re.escape(pattern) + r'\b', executable) and column not in parsed["columns"]:
             parsed["columns"].append(column)
     numbers = re.findall(r"\d+", original)
     if numbers:

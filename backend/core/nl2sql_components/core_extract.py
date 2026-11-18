@@ -59,9 +59,10 @@ def extract_table(text: str, table_patterns: Dict[str, str]) -> str:
     Prefers the longest matching pattern; ties broken by first position.
     Returns the fallback name "table_name" when no pattern matches.
     """
+    executable = mask_non_executable(text)
     tables_found = []
     for pattern, table in table_patterns.items():
-        match = _pattern_match(text, pattern)
+        match = _pattern_match(executable, pattern)
         if match:
             tables_found.append((match.start(), table, len(pattern)))
     if tables_found:
@@ -84,11 +85,12 @@ def extract_table_subject(
     slot even when it is the earliest-matching pattern, so every candidate
     table equal to it is excluded before the first-occurrence sort.
     """
-    candidates = []
+    executable = mask_non_executable(text)
+    candidates: list[tuple[int, str]] = []
     for pattern, table in table_patterns.items():
         if relational_context and table == relational_context:
             continue
-        match = _pattern_match(text, pattern)
+        match = _pattern_match(executable, pattern)
         pos = match.start() if match else -1
         if pos != -1:
             if table in [t for _, t in candidates]:
@@ -102,12 +104,13 @@ def extract_table_subject(
 
 def named_tables(text: str, table_patterns: Dict[str, str]) -> List[str]:
     """Return the distinct table names the text mentions, in order of first appearance."""
+    executable = mask_non_executable(text)
     occurrences = []
     seen = set()
     for pattern, table in table_patterns.items():
         if table in seen:
             continue
-        match = _pattern_match(text, pattern)
+        match = _pattern_match(executable, pattern)
         pos = match.start() if match else -1
         if pos != -1:
             occurrences.append((pos, table))
@@ -135,13 +138,14 @@ def extract_limit(text: str) -> Optional[int]:
     Supports Chinese and English cardinality phrasings such as
     '前10', 'top 10', 'limit 10', '10条', '10行'.
     """
+    executable = mask_non_executable(text)
     patterns = [
         r"前\s*(-?\d+)", r"top\s*(-?\d+)", r"limit\s*(-?\d+)",
         r"first\s*(-?\d+)", r"(-?\d+)\s*条", r"(-?\d+)\s*个",
         r"(-?\d+)\s*行", r"(-?\d+)\s*rows?", r"only\s*(-?\d+)",
     ]
     for pattern in patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
+        match = re.search(pattern, executable, re.IGNORECASE)
         if match:
             raw_value = match.group(1)
             # Keep the conversion bounded and deterministic.  Raising here is
@@ -168,4 +172,5 @@ def extract_limit(text: str) -> Optional[int]:
 
 def check_distinct(text: str) -> bool:
     """Check if DISTINCT is requested in the text."""
-    return any(k in text for k in ["去重", "唯一", "不重复", "distinct", "unique"])
+    executable = mask_non_executable(text).casefold()
+    return any(k in executable for k in ["去重", "唯一", "不重复", "distinct", "unique"])

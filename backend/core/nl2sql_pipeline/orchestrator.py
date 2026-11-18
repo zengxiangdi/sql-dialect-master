@@ -397,7 +397,7 @@ class PipelineNL2SQLGenerator:
         # generation instead of an uncaught int-conversion exception (500 at
         # the API boundary), and prevents silently dropping the limit.
         try:
-            self._extract_limit(text)
+            self._extract_limit(executable_intent)
         except ValueError as exc:
             return NL2SQLResult(
                 success=False,
@@ -541,7 +541,11 @@ class PipelineNL2SQLGenerator:
                 parsed_elements=parsed,
             ))
 
-        template, match_groups = self._match_templates(text_lower)
+        # Template selection is structural intent detection.  Quoted values
+        # and comments must not make a request look like TOP/aggregate/etc.;
+        # template generation still receives the original text below for
+        # literal-preserving condition extraction.
+        template, match_groups = self._match_templates(executable_intent)
         # If relational keywords detected (D2), bypass templates and use
         # the enhanced path to ensure EXISTS/NOT EXISTS structure instead
         # of a physical JOIN.
@@ -688,18 +692,19 @@ class PipelineNL2SQLGenerator:
         self, text: str, schema: SchemaContext
     ) -> list[SchemaTableContext]:
         """Find exact schema names and uniquely mapped existing aliases."""
+        executable = mask_non_executable(text)
         found: dict[str, tuple[int, SchemaTableContext]] = {}
         for table in schema.tables:
-            match = self._schema_text_match(text, table.name)
+            match = self._schema_text_match(executable, table.name)
             if match:
                 found.setdefault(table.key, (match.start(), table))
         for pattern, mapped_name in self.TABLE_PATTERNS.items():
-            if pattern == "order" and re.search(r"\border\b\s+by\b", text, re.IGNORECASE):
+            if pattern == "order" and re.search(r"\border\b\s+by\b", executable, re.IGNORECASE):
                 continue
             candidates = schema.table_candidates(mapped_name)
             if len(candidates) != 1:
                 continue
-            match = self._schema_text_match(text, pattern)
+            match = self._schema_text_match(executable, pattern)
             if match:
                 table = candidates[0]
                 found.setdefault(table.key, (match.start(), table))
@@ -712,6 +717,7 @@ class PipelineNL2SQLGenerator:
         ignored_spans: tuple[tuple[int, int], ...] = (),
     ) -> list[str]:
         """Return mapped table names mentioned by the request but absent in schema."""
+        text = mask_non_executable(text)
         for start, end in ignored_spans:
             text = text[:start] + " " * (end - start) + text[end:]
         unknown: list[str] = []
@@ -730,12 +736,14 @@ class PipelineNL2SQLGenerator:
 
     def _schema_entity_counter_tables(self, text: str) -> set[str]:
         """Find entity counters without treating data words as counts."""
+        text = mask_non_executable(text)
         return {
             mapped for pattern, mapped in self.TABLE_PATTERNS.items()
             if re.search(re.escape(pattern) + r"数(?!据|字|组)", text, re.IGNORECASE)
         }
 
     def _schema_aggregation_intent(self, text: str) -> bool:
+        text = mask_non_executable(text)
         return bool(re.search(
             r"\b(?:number\s+of|count(?:\s+of)?|how\s+many|sum|average|avg|maximum|minimum|max|min)\b|"
             r"统计|数量|多少|几个|总数|个数|条数|件数|行数|人数|记录数|"
@@ -1028,15 +1036,29 @@ class PipelineNL2SQLGenerator:
         schema: SchemaContext,
     ) -> list[tuple[str, str]]:
         """Resolve schema-aware ORDER BY targets without changing no-schema extraction."""
+        executable = mask_non_executable(text)
         match = re.search(
             r"\b(?:order(?:ed)?|sort(?:ed)?)\s+by\s+",
-            text,
+            executable,
             re.IGNORECASE,
         )
         if match is None:
+            has_top = re.search(r"\btop\s+\d+\b", executable, re.IGNORECASE)
+            has_top_metric = re.search(
+                r"\btop\s+\d+\b.*\bby\b|\bby\b.*\btop\s+\d+\b",
+                executable,
+                re.IGNORECASE,
+            )
+            if has_top is not None and has_top_metric is None:
+                # A bare TOP phrase supplies a row limit.  Keep the schema
+                # path deterministic by using the declared identity column
+                # as its fallback ordering when no metric was requested.
+                if table.primary_key:
+                    return [(table.primary_key[0], "DESC")]
+                return []
             legacy = self._extract_ordering(text)
             return [legacy] if legacy else []
-        tail = text[match.end():]
+        tail = executable[match.end():]
         boundary = re.search(r"\b(?:where|whose|limit)\b", tail, re.IGNORECASE)
         clause = tail[:boundary.start()] if boundary else tail
         if re.search(r"\bor\b|[()\u4e00-\u9fff]", clause, re.IGNORECASE):
@@ -1231,6 +1253,7 @@ class PipelineNL2SQLGenerator:
         table: SchemaTableContext,
         schema: SchemaContext,
     ) -> tuple[str, str | None] | None:
+        text = mask_non_executable(text)
         count_intent = bool(re.search(
             r"统计|数量|多少|几个|总数|个数|条数|件数|行数|人数|记录数|"
             r"\bnumber\s+of\b|\bcount(?:\s+of)?\b|\bhow\s+many\b",
@@ -1349,6 +1372,7 @@ class PipelineNL2SQLGenerator:
         schema: SchemaContext | None = None,
         count_metric: tuple[str, str | None] | None = None,
     ) -> list[str]:
+        executable = mask_non_executable(text)
         existing = self._extract_aggregations(text)
         if count_metric is not None and count_metric[0] == "sum":
             return [f"SUM({count_metric[1]})"]
@@ -1359,8 +1383,8 @@ class PipelineNL2SQLGenerator:
         if table is None or schema is None or not table.has_column_metadata:
             return existing
 
-        group_match = re.search(r"\b(?:group(?:ed)?\s+by|per|each|by)\b", text, re.IGNORECASE)
-        metric_text = text if group_match is None else text[:group_match.start()]
+        group_match = re.search(r"\b(?:group(?:ed)?\s+by|per|each|by)\b", executable, re.IGNORECASE)
+        metric_text = executable if group_match is None else executable[:group_match.start()]
         metric_candidates: list[tuple[int, str]] = []
         for column in table.columns:
             pattern = rf"(?<![\w$]){re.escape(column)}(?![\w$])"
@@ -1384,7 +1408,8 @@ class PipelineNL2SQLGenerator:
         schema: SchemaContext,
         aggregations: list[str],
     ) -> list[str]:
-        lowered = text.lower()
+        executable = mask_non_executable(text)
+        lowered = executable.lower()
         match = re.search(
             r"\b(?:group\s+by|grouped\s+by)\s+"
             r"([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)(.*)$",
@@ -1401,7 +1426,7 @@ class PipelineNL2SQLGenerator:
                     re.IGNORECASE,
                 )
                 match_kind = "aggregation-group"
-        chinese_group_intent = bool(re.search(r"每个|各个|每位|分组|汇总|按[^\s,，。；]+(?:分组|汇总|统计)", text))
+        chinese_group_intent = bool(re.search(r"每个|各个|每位|分组|汇总|按[^\s,，。；]+(?:分组|汇总|统计)", executable))
         if match is None:
             if chinese_group_intent:
                 raise SchemaValidationError("schema group column is not explicitly resolvable")
@@ -1423,7 +1448,7 @@ class PipelineNL2SQLGenerator:
 
     @staticmethod
     def _schema_has_explicit_ordering(text: str) -> bool:
-        lowered = text.lower()
+        lowered = mask_non_executable(text).lower()
         phrases = (
             "order by", "ordered by", "sort by", "sorted by",
             "ascending", "descending", "asc", "desc", "sort", "sorted",

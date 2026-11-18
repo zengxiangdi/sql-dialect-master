@@ -36,6 +36,22 @@ def executable_segments(sql: str, dialect: str | None = None) -> Iterator[Tuple[
                 start = i
                 continue
             ch = sql[i]
+            # Natural-language prompts commonly use an ASCII possessive
+            # (for example, ``yesterday's orders``).  It is executable text
+            # for NL2SQL intent extraction, not the start of a SQL string.
+            # Restrict this exception to a standalone ``'s`` suffix so quoted
+            # SQL literals and malformed embedded apostrophes retain the
+            # scanner's existing behavior.
+            if (
+                ch == "'"
+                and i > 0
+                and sql[i - 1].isalnum()
+                and i + 1 < n
+                and sql[i + 1] in "sS"
+                and (i + 2 == n or not sql[i + 2].isalnum())
+            ):
+                i += 1
+                continue
             if dialect and dialect.lower() == "mysql" and ch == "#":
                 if start < i:
                     yield start, i

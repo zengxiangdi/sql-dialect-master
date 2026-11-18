@@ -8,6 +8,8 @@ COLUMN_PATTERNS to resolve the target column for value aggregates.
 import re
 from typing import Dict, List
 
+from ..p1_sql_scanner import mask_non_executable
+
 
 def extract_aggregations(text: str, column_patterns: Dict[str, str]) -> List[str]:
     """Extract aggregation expressions from text.
@@ -17,14 +19,15 @@ def extract_aggregations(text: str, column_patterns: Dict[str, str]) -> List[str
     was requested.
     """
     aggs: List[str] = []
-    text_lower = text.lower()
+    executable = mask_non_executable(text)
+    text_lower = executable.lower()
     # Pick the user's named metric column, not the first pattern that
     # happens to sit inside an aggregate keyword: the legacy first-hit
     # walk let "average" contain "age" and produced AVG(age).
     named_metrics = [
         column
         for pattern, column in column_patterns.items()
-        if pattern != "age" and pattern in text
+        if pattern != "age" and pattern in executable
     ]
     # Bare "age" is only a metric when it is not the trailing substring
     # of "average": require a non-letter before it so "average" never
@@ -36,9 +39,9 @@ def extract_aggregations(text: str, column_patterns: Dict[str, str]) -> List[str
         named_metrics = [c for c in named_metrics if c != "age"]
     agg_column = named_metrics[0] if named_metrics else None
     col = agg_column or "amount"
-    if any(k in text for k in ["统计", "计数", "数量", "多少", "几个", "count", "total", "how many"]):
+    if any(k in executable for k in ["统计", "计数", "数量", "多少", "几个", "count", "total", "how many"]):
         aggs.append("COUNT(*)")
-    if any(k in text for k in ["求和", "总和", "合计", "总计", "sum", "total of"]):
+    if any(k in executable for k in ["求和", "总和", "合计", "总计", "sum", "total of"]):
         aggs.append(f"SUM({col})")
     if any(k in text_lower for k in ["平均", "均值", "平均值", "average", "avg", "mean"]):
         # "average" contains "age": the average metric is price unless
