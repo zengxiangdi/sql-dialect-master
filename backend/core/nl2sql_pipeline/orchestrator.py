@@ -36,6 +36,7 @@ from ..nl2sql_components.relations import JoinSpec, parse_join_spec
 from ..nl2sql_components.templates import DEFAULT_QUERY_TEMPLATES, QueryTemplate
 from ..nl2sql_components.tokenizer import Tokenizer
 from ..nl2sql_pipeline.scanner import mask_nl2sql_non_executable
+from ..p1_sql_scanner import mask_non_executable
 from ..nl2sql_schema import (
     SchemaContext,
     SchemaTableContext,
@@ -3180,7 +3181,7 @@ class PipelineNL2SQLGenerator:
         """Return the placeholder style and ordered placeholders in DML SQL."""
         if not sql:
             return None, []
-        executable_sql = mask_nl2sql_non_executable(sql, dialect=dialect)
+        executable_sql = mask_non_executable(sql, dialect=dialect)
         if not re.match(r"\s*(?:INSERT|UPDATE|DELETE)\b", executable_sql, re.IGNORECASE):
             return None, []
         patterns = {

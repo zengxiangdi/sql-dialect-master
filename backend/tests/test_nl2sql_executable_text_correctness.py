@@ -23,7 +23,9 @@ def generate(text: str, schema: SchemaContext | None = None, dialect: str = "pos
     "sql",
     [
         "SELECT's'",
+        "SELECT's s'",
         "SELECT's; DROP TABLE users'",
+        "SELECT's s; DROP TABLE x'",
         "E'abc; DROP TABLE users'",
         "N'abc; DROP TABLE users'",
         "q'[abc; DROP TABLE users]'",
