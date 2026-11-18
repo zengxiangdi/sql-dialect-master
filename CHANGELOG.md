@@ -2,6 +2,50 @@
 
 All notable changes to SQL Dialect Master are documented here.
 
+## [1.14.0] - 2026-11-18
+
+### New
+
+- Added zero-count semantics for schema-aware unique target counts: subject
+  identity baselines are preserved with a LEFT JOIN and `COALESCE`, while
+  path filters constrain only the count input.
+- Added target and intermediate filter ownership for distinct target counts,
+  including subject-only zero baselines and source-order path conditions.
+- Added count/group ordering for path counts and grouped single-table unique
+  counts, including zero-count `COALESCE` ordering and deterministic
+  group-identity tie-breakers.
+- Added multiple `whose` predicates for schema-aware unique counts, with
+  optional repeated `whose`, English/Chinese commas, canonical duplicate
+  rejection, structural suffix precedence, and quoted/comment masking.
+- Extended schema-aware unique target paths from two relationship steps to
+  three, including composite endpoint validation and four-predicate
+  three-hop filtering.
+- Added explicit physical multi-hop INNER JOIN chains through ordered
+  `joined with` syntax, covering two or three relationship edges with
+  composite relationship validation and base-owned projection/conditions.
+
+### Fixed
+
+- Preserved one-hop, two-hop, grouped, and previous unique-count behavior
+  outside the new zero/filter/ordering/path semantics.
+- Masked structured predicate, WHERE, ordering, and group spans before path
+  discovery, limit extraction, and condition extraction so quoted values are
+  not interpreted as SQL clauses.
+- Kept direct joins, LEFT/RIGHT direct joins, nested EXISTS, derived path
+  counts, and no-schema output unchanged.
+- Kept missing or ambiguous paths, incomplete composite relationships,
+  invalid ownership, cycles, repeated tables, unsupported join kinds, and
+  unsupported physical-chain shapes fail closed.
+
+### Notes
+
+- Association counts with composite subject identity, multi-hop LEFT/RIGHT
+  joins, joined-table projection/filter ownership, physical-chain
+  `IN`/`BETWEEN`/`LIKE` filters, and other unsupported physical-chain forms
+  remain outside this release.
+- No API, dependency, or lockfile dependency changes; the frontend package
+  version is aligned with the release.
+
 ## [1.13.0] - 2026-11-10
 
 ### New
