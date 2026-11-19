@@ -1,15 +1,12 @@
-#!/usr/bin/env python3
 """P8 NL2SQL pipeline: AST validation (moved UNCHANGED from nl2sql_legacy).
 
 Validates generated SQL against the target-dialect sqlglot parser and
 returns the confidence adjustment (+0.15 / -0.2 / 0.0).
 """
-import sqlglot
 import re
 
 from ..p1_sql_scanner import mask_non_executable
 from ..sql_statements import parse_single_sql
-
 
 _BIND_PARAMETER_PATTERNS = {
     "postgres": re.compile(r"(?<![A-Za-z0-9_$])\$\d+(?![A-Za-z0-9_$])"),
@@ -72,6 +69,8 @@ def validate_sql(sql: str, dialect: str) -> float:
                     raise
                 parse_single_sql(normalized, dialect)
             return 0.15
-    except Exception:
+    # sqlglot dialect readers raise different exception classes; validation
+    # intentionally converts all parser failures to one confidence result.
+    except Exception:  # noqa: BLE001
         return -0.2
     return 0.0

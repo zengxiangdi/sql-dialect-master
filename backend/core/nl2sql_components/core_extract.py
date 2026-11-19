@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Core NL2SQL extraction primitives: operation, table, column, limit, distinct.
 
 These are stateless, dependency-free functions that operate on raw text
@@ -6,10 +5,8 @@ and the shared mapping dicts (KEYWORDS, TABLE_PATTERNS, COLUMN_PATTERNS
 from ``backend.core.nl2sql_components.mappings``).
 """
 import re
-from typing import Dict, List, Optional
 
 from ..nl2sql_pipeline.scanner import mask_nl2sql_non_executable
-
 
 # Generated SQL is intended to be reviewed and parameterized by a caller.
 # Refuse unbounded/absurd row counts before integer conversion (which can
@@ -17,7 +14,7 @@ from ..nl2sql_pipeline.scanner import mask_nl2sql_non_executable
 MAX_NL2SQL_LIMIT = 1_000_000
 
 
-def _pattern_match(text: str, pattern: str) -> Optional[re.Match]:
+def _pattern_match(text: str, pattern: str) -> re.Match | None:
     """Match an NL2SQL mapping as a token when it is an English identifier.
 
     Substring matching turns ``update`` into the ``date`` column and can
@@ -30,7 +27,7 @@ def _pattern_match(text: str, pattern: str) -> Optional[re.Match]:
     return re.search(expression, text, re.IGNORECASE)
 
 
-def detect_operation(text: str, keywords: Dict[str, str]) -> str:
+def detect_operation(text: str, keywords: dict[str, str]) -> str:
     """Detect SQL operation type from text.
 
     Scans the keyword mapping for operation keywords present in the text
@@ -53,7 +50,7 @@ def detect_operation(text: str, keywords: Dict[str, str]) -> str:
     return "SELECT"
 
 
-def extract_table(text: str, table_patterns: Dict[str, str]) -> str:
+def extract_table(text: str, table_patterns: dict[str, str]) -> str:
     """Extract a single table name from text.
 
     Prefers the longest matching pattern; ties broken by first position.
@@ -72,8 +69,8 @@ def extract_table(text: str, table_patterns: Dict[str, str]) -> str:
 
 
 def extract_table_subject(
-    text: str, table_patterns: Dict[str, str], relational_context: str = ""
-) -> Optional[str]:
+    text: str, table_patterns: dict[str, str], relational_context: str = ""
+) -> str | None:
     """Extract the subject table (first appearing in text) for D2 relational queries.
 
     For queries like 'users who have orders', returns 'users' (the subject)
@@ -102,7 +99,7 @@ def extract_table_subject(
     return None
 
 
-def named_tables(text: str, table_patterns: Dict[str, str]) -> List[str]:
+def named_tables(text: str, table_patterns: dict[str, str]) -> list[str]:
     """Return the distinct table names the text mentions, in order of first appearance."""
     executable = mask_nl2sql_non_executable(text)
     occurrences = []
@@ -118,7 +115,7 @@ def named_tables(text: str, table_patterns: Dict[str, str]) -> List[str]:
     return [t for _, t in sorted(occurrences)]
 
 
-def extract_columns(text: str, column_patterns: Dict[str, str]) -> List[str]:
+def extract_columns(text: str, column_patterns: dict[str, str]) -> list[str]:
     """Extract column names from text.
 
     Returns a list of distinct column names, or ["*"] when no column
@@ -132,7 +129,7 @@ def extract_columns(text: str, column_patterns: Dict[str, str]) -> List[str]:
     return columns if columns else ["*"]
 
 
-def extract_limit(text: str) -> Optional[int]:
+def extract_limit(text: str) -> int | None:
     """Extract LIMIT value from text.
 
     Supports Chinese and English cardinality phrasings such as

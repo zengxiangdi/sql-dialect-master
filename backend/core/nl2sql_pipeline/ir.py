@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """P8 NL2SQL pipeline: Query IR.
 
 The IR is the structured intermediate representation produced by the
@@ -8,7 +7,6 @@ call, plus the ``evidence`` accumulator, so the migration is
 behavior-preserving.
 """
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple, Union
 
 from ..nl2sql_components.evidence import GenerationEvidence
 
@@ -84,38 +82,38 @@ class QueryIR:
 
     operation: str
     table: str
-    columns: List[str]
-    conditions: Union[List[str], str]
-    aggregations: List[str]
-    group_by: List[str]
-    ordering: Optional[Tuple[str, str]]
-    limit: Optional[int]
-    joins: List[Dict]
+    columns: list[str]
+    conditions: list[str] | str
+    aggregations: list[str]
+    group_by: list[str]
+    ordering: tuple[str, str] | None
+    limit: int | None
+    joins: list[dict]
     distinct: bool
     dialect: str
     evidence: GenerationEvidence = field(default_factory=GenerationEvidence)
-    orderings: Optional[List[Tuple[str, str]]] = None
-    distinct_count_plan: Optional[DistinctCountPlan] = None
-    path_distinct_count_plan: Optional[PathDistinctCountPlan] = None
-    aggregate_orderings: Optional[tuple[AggregateOrderingTerm, ...]] = None
+    orderings: list[tuple[str, str]] | None = None
+    distinct_count_plan: DistinctCountPlan | None = None
+    path_distinct_count_plan: PathDistinctCountPlan | None = None
+    aggregate_orderings: tuple[AggregateOrderingTerm, ...] | None = None
 
 
 def build_ir(
     operation: str,
     table: str,
-    columns: List[str],
-    conditions: Union[List[str], str],
-    aggregations: List[str],
-    group_by: List[str],
-    ordering: Optional[Tuple[str, str]],
-    limit: Optional[int],
-    joins: List[Dict],
+    columns: list[str],
+    conditions: list[str] | str,
+    aggregations: list[str],
+    group_by: list[str],
+    ordering: tuple[str, str] | None,
+    limit: int | None,
+    joins: list[dict],
     distinct: bool,
     dialect: str,
-    orderings: Optional[List[Tuple[str, str]]] = None,
-    distinct_count_plan: Optional[DistinctCountPlan] = None,
-    path_distinct_count_plan: Optional[PathDistinctCountPlan] = None,
-    aggregate_orderings: Optional[tuple[AggregateOrderingTerm, ...]] = None,
+    orderings: list[tuple[str, str]] | None = None,
+    distinct_count_plan: DistinctCountPlan | None = None,
+    path_distinct_count_plan: PathDistinctCountPlan | None = None,
+    aggregate_orderings: tuple[AggregateOrderingTerm, ...] | None = None,
 ) -> QueryIR:
     """Thin positional-arg adapter mirroring the legacy call site.
 

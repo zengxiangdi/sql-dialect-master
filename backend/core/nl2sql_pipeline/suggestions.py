@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """P8 NL2SQL pipeline: suggestion generation (moved from nl2sql_legacy).
 
 ``generate_suggestions`` is a verbatim move of

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """P8 NL2SQL pipeline: intent analysis (moved from nl2sql_legacy).
 
 Holds the tokenization / semantic-analysis step (``analyze_intent``)
@@ -6,7 +5,7 @@ and the text-parsing helpers (``parse_text``, ``detect_operation``)
 that feed the resolution stages.
 """
 import re
-from typing import Any, Dict, Optional
+from typing import Any
 
 from ..nl2sql_components.core_extract import detect_operation as _detect_operation_impl
 from ..nl2sql_components.mappings import COLUMN_PATTERNS, KEYWORDS, TABLE_PATTERNS
@@ -14,7 +13,7 @@ from ..nl2sql_components.tokenizer import Tokenizer
 from ..nl2sql_pipeline.scanner import mask_nl2sql_non_executable
 
 
-def analyze_intent(text: str) -> Dict[str, Any]:
+def analyze_intent(text: str) -> dict[str, Any]:
     """Tokenize text and perform semantic analysis.
 
     Returns the same dict shape the legacy

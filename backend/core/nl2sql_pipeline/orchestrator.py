@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """P8 NL2SQL pipeline: orchestrator (moved from nl2sql_legacy).
 
 ``PipelineNL2SQLGenerator`` is the canonical base class the facade
@@ -20,7 +19,7 @@ import logging
 import re
 from dataclasses import dataclass, replace
 from decimal import Decimal
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import sqlglot
 
@@ -29,33 +28,47 @@ from ..nl2sql_components.boolean_conditions import extract_boolean_conditions
 from ..nl2sql_components.evidence import GenerationEvidence
 from ..nl2sql_components.mappings import (
     COLUMN_PATTERNS as MAPPING_COLUMN_PATTERNS,
+)
+from ..nl2sql_components.mappings import (
     KEYWORDS as MAPPING_KEYWORDS,
+)
+from ..nl2sql_components.mappings import (
     TABLE_PATTERNS as MAPPING_TABLE_PATTERNS,
 )
 from ..nl2sql_components.relations import JoinSpec, parse_join_spec
 from ..nl2sql_components.templates import DEFAULT_QUERY_TEMPLATES, QueryTemplate
 from ..nl2sql_components.tokenizer import Tokenizer
 from ..nl2sql_pipeline.scanner import mask_nl2sql_non_executable
-from ..p1_sql_scanner import mask_non_executable
 from ..nl2sql_schema import (
     SchemaContext,
     SchemaTableContext,
     SchemaValidationError,
     validate_schema_references,
 )
+from ..p1_sql_scanner import mask_non_executable
 from ..sql_statements import parse_single_sql
 from . import ir as _nl2sql_ir
 from .aggregations import extract_aggregations as _pipeline_extract_aggregations
 from .clause_extract import (
     check_distinct as _pipeline_check_distinct,
+)
+from .clause_extract import (
     extract_group_by as _pipeline_extract_group_by,
+)
+from .clause_extract import (
     extract_limit as _pipeline_extract_limit,
+)
+from .clause_extract import (
     extract_ordering as _pipeline_extract_ordering,
 )
 from .dialect import apply_dialect_adjustments as _apply_dialect_adjustments_impl
 from .intent import (
     analyze_intent as _analyze_intent,
+)
+from .intent import (
     detect_operation as _detect_operation,
+)
+from .intent import (
     parse_text as _parse_text_impl,
 )
 from .models import NL2SQLResult
@@ -64,16 +77,30 @@ from .renderer import add_limit as _add_limit_impl
 from .renderer import render_sql as _render_sql_impl
 from .resolution import (
     extract_columns as _pipeline_extract_columns,
+)
+from .resolution import (
     extract_joins as _pipeline_extract_joins,
+)
+from .resolution import (
     extract_table as _pipeline_extract_table,
+)
+from .resolution import (
     extract_table_subject as _pipeline_extract_table_subject,
+)
+from .resolution import (
     guess_join_key as _pipeline_guess_join_key,
+)
+from .resolution import (
     has_relational_keyword as _pipeline_has_relational_keyword,
+)
+from .resolution import (
     named_tables as _pipeline_named_tables,
 )
 from .suggestions import generate_suggestions as _pipeline_generate_suggestions
 from .templates import (
     generate_from_template as _pipeline_generate_from_template,
+)
+from .templates import (
     template_suggestions as _pipeline_template_suggestions,
 )
 from .validation import validate_sql as _validate_sql_impl
@@ -207,12 +234,12 @@ class PipelineNL2SQLGenerator:
 
     def _init_query_templates(self) -> None:
         """Initialize prioritized query templates from the canonical module."""
-        self.query_templates: List[QueryTemplate] = list(DEFAULT_QUERY_TEMPLATES)
+        self.query_templates: list[QueryTemplate] = list(DEFAULT_QUERY_TEMPLATES)
         self.query_templates.sort(key=lambda template: template.priority, reverse=True)
 
     def _match_templates(
         self, text: str
-    ) -> Tuple[Optional[QueryTemplate], Optional[Dict[str, Any]]]:
+    ) -> tuple[QueryTemplate | None, dict[str, Any] | None]:
         """Try to match input text against query templates.
 
         Explicit INSERT/UPDATE/DELETE requests bypass template matching and
@@ -232,7 +259,7 @@ class PipelineNL2SQLGenerator:
                 return template, match_result
         return None, None
 
-    def _tokenize_and_analyze(self, text: str) -> Dict[str, Any]:
+    def _tokenize_and_analyze(self, text: str) -> dict[str, Any]:
         """Tokenize text and perform semantic analysis.
 
         Delegates to ``nl2sql_pipeline.intent.analyze_intent``.
@@ -242,11 +269,11 @@ class PipelineNL2SQLGenerator:
     def _generate_from_template(
         self,
         template: QueryTemplate,
-        match_groups: Dict[str, Any],
-        analysis: Dict[str, Any],
+        match_groups: dict[str, Any],
+        analysis: dict[str, Any],
         dialect: str,
-        table_hint: Optional[str],
-        column_hints: Optional[List[str]],
+        table_hint: str | None,
+        column_hints: list[str] | None,
         text_lower: str = "",
         text_original: str = "",
     ) -> NL2SQLResult:
@@ -266,9 +293,9 @@ class PipelineNL2SQLGenerator:
         self,
         template: QueryTemplate,
         table: str,
-        columns: List[str],
+        columns: list[str],
         dialect: str,
-    ) -> List[str]:
+    ) -> list[str]:
         """Generate suggestions specific to template-based generation.
 
         Delegates to ``nl2sql_pipeline.templates.template_suggestions``.
@@ -278,9 +305,9 @@ class PipelineNL2SQLGenerator:
     def generate(
         self,
         text: str,
-        dialect: str = None,
-        table_hint: str = None,
-        column_hints: List[str] = None,
+        dialect: str | None = None,
+        table_hint: str | None = None,
+        column_hints: list[str] | None = None,
         schema: SchemaContext | None = None,
     ) -> NL2SQLResult:
         """Generate SQL from natural language text."""
@@ -338,8 +365,11 @@ class PipelineNL2SQLGenerator:
         executable_intent = mask_nl2sql_non_executable(text)
         ddl_match = _UNSUPPORTED_DDL.search(executable_intent)
         cn_ddl_match = _UNSUPPORTED_CN_DDL.search(executable_intent)
-        if ddl_match or cn_ddl_match:
-            operation = ddl_match.group(1).upper() if ddl_match else cn_ddl_match.group(0)
+        if ddl_match is not None or cn_ddl_match is not None:
+            if ddl_match is not None:
+                operation = ddl_match.group(1).upper()
+            else:
+                operation = cn_ddl_match.group(0) if cn_ddl_match is not None else "DDL"
             return NL2SQLResult(
                 success=False,
                 input_text=text,
@@ -501,6 +531,7 @@ class PipelineNL2SQLGenerator:
             parsed.update(analysis)
             operation = self._detect_operation(text_lower)
             cn_rel_table = self._cn_relation_table(text_lower)
+            table: str
             if self._has_relational_keyword(text_lower):
                 # Relational subject: 'users who have orders where price = 5'
                 # must yield FROM users, not FROM orders.
@@ -525,8 +556,10 @@ class PipelineNL2SQLGenerator:
             )
             if sql is None:
                 suggestions = [
-                    "Specify the relationship between tables, e.g., "
-                    "'users.id = invoices.user_id'",
+                    (
+                        "Specify the relationship between tables, e.g., "
+                        "'users.id = invoices.user_id'"
+                    ),
                 ]
             else:
                 suggestions = self._generate_suggestions(text, sql, dialect)
@@ -562,7 +595,7 @@ class PipelineNL2SQLGenerator:
             if len(self._named_tables(text_lower)) >= 2:
                 template = None
                 logger.debug("NL2SQL: multi-table select captured by select template, bypassing")
-        if template:
+        if template and match_groups is not None:
             result = self._generate_from_template(
                 template, match_groups, analysis, dialect,
                 table_hint, column_hints, text_lower, text,
@@ -599,14 +632,13 @@ class PipelineNL2SQLGenerator:
             # a relational connective (D2/CN 有<relation>的<subject>), the
             # outer FROM is the subject table, not the relation table the
             # connective names.
-            table = (
-                table_hint
-                or (
-                    self._extract_table_subject(text_lower, cn_rel_table)
-                    if self._has_relational_keyword(text_lower)
-                    else named_tables[0]
-                )
-            )
+            if table_hint is not None:
+                table = table_hint
+            elif self._has_relational_keyword(text_lower):
+                subject_table = self._extract_table_subject(text_lower, cn_rel_table)
+                table = subject_table if subject_table is not None else str(named_tables[0])
+            else:
+                table = str(named_tables[0])
             unresolved = [j for j in joins if j.get("condition") is None]
             if unresolved:
                 pair_desc = " ⟷ ".join(
@@ -626,8 +658,10 @@ class PipelineNL2SQLGenerator:
                     confidence=0.0,
                     evidence=GenerationEvidence(),
                     suggestions=[
-                        "Specify the relationship between tables, e.g., "
-                        "'users.id = invoices.user_id'",
+                        (
+                            "Specify the relationship between tables, e.g., "
+                            "'users.id = invoices.user_id'"
+                        ),
                     ],
                 ))
         else:
@@ -647,8 +681,10 @@ class PipelineNL2SQLGenerator:
         )
         if sql is None:
             suggestions = [
-                "Specify the relationship between tables, e.g., "
-                "'users.id = invoices.user_id'",
+                (
+                    "Specify the relationship between tables, e.g., "
+                    "'users.id = invoices.user_id'"
+                ),
             ]
         else:
             suggestions = self._generate_suggestions(text, sql, dialect)
@@ -680,7 +716,7 @@ class PipelineNL2SQLGenerator:
         )
 
     @staticmethod
-    def _schema_text_match(text: str, pattern: str) -> Optional[re.Match]:
+    def _schema_text_match(text: str, pattern: str) -> re.Match | None:
         if pattern.isascii():
             return re.search(
                 r"(?<![\w$])" + re.escape(pattern) + r"(?![\w$])",
@@ -900,7 +936,7 @@ class PipelineNL2SQLGenerator:
     def _schema_resolve_table(
         self,
         text: str,
-        table_hint: Optional[str],
+        table_hint: str | None,
         schema: SchemaContext,
     ) -> SchemaTableContext:
         if table_hint:
@@ -908,10 +944,10 @@ class PipelineNL2SQLGenerator:
             if len(candidates) == 1:
                 return candidates[0]
             raise SchemaValidationError("table hint is not a unique schema table")
-        candidates = self._schema_table_mentions(text, schema)
-        if len(candidates) == 1:
-            return candidates[0]
-        if not candidates:
+        mentioned_tables = self._schema_table_mentions(text, schema)
+        if len(mentioned_tables) == 1:
+            return mentioned_tables[0]
+        if not mentioned_tables:
             if len(schema.tables) == 1:
                 return schema.tables[0]
             raise SchemaValidationError("no schema table matched the request")
@@ -921,7 +957,7 @@ class PipelineNL2SQLGenerator:
         self,
         text: str,
         table: SchemaTableContext,
-        column_hints: Optional[List[str]],
+        column_hints: list[str] | None,
         schema: SchemaContext,
         suppress_quantity_token: bool = False,
     ) -> list[str]:
@@ -1000,9 +1036,9 @@ class PipelineNL2SQLGenerator:
 
         columns = self._extract_columns(projection_text)
         if columns == ["*"]:
-            for candidate in table.columns:
-                if self._schema_text_match(projection_text, candidate):
-                    columns.append(candidate)
+            for candidate_column in table.columns:
+                if self._schema_text_match(projection_text, candidate_column):
+                    columns.append(candidate_column)
             if len(columns) > 1:
                 columns.remove("*")
         if not table.has_column_metadata:
@@ -1418,15 +1454,18 @@ class PipelineNL2SQLGenerator:
             re.IGNORECASE,
         )
         match_kind = "group"
-        if match is None and aggregations:
-            if not re.search(r"\b(?:ordered|sorted|order|sort)\s+by\b", lowered):
-                match = re.search(
-                    r"\b(?:per|each|by)\s+"
-                    r"([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)(.*)$",
-                    lowered,
-                    re.IGNORECASE,
-                )
-                match_kind = "aggregation-group"
+        if (
+            match is None
+            and aggregations
+            and not re.search(r"\b(?:ordered|sorted|order|sort)\s+by\b", lowered)
+        ):
+            match = re.search(
+                r"\b(?:per|each|by)\s+"
+                r"([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)(.*)$",
+                lowered,
+                re.IGNORECASE,
+            )
+            match_kind = "aggregation-group"
         chinese_group_intent = bool(re.search(r"每个|各个|每位|分组|汇总|按[^\s,，。；]+(?:分组|汇总|统计)", executable))
         if match is None:
             if chinese_group_intent:
@@ -1615,7 +1654,7 @@ class PipelineNL2SQLGenerator:
                 resolved.append(aggregation)
                 continue
             function, _, alias = match.groups()
-            raw_function, raw_argument = calls[call_index].groups()
+            _, raw_argument = calls[call_index].groups()
             call_index += 1
             if raw_argument == "*":
                 resolved.append(f"{function.upper()}(*)" + (f" AS {alias}" if alias else ""))
@@ -1900,7 +1939,7 @@ class PipelineNL2SQLGenerator:
     def _schema_resolve_joined_on(
         self,
         text: str,
-        table_hint: Optional[str],
+        table_hint: str | None,
         schema: SchemaContext,
     ) -> tuple[SchemaTableContext, list[dict], tuple[int, int]] | None:
         """Resolve one schema-aware qualified equality after ``joined on``."""
@@ -2025,7 +2064,7 @@ class PipelineNL2SQLGenerator:
     def _schema_resolve_joined_with(
         self,
         text: str,
-        table_hint: Optional[str],
+        table_hint: str | None,
         schema: SchemaContext,
     ) -> tuple[SchemaTableContext, list[dict], tuple[int, int]] | None:
         """Resolve one relationship-backed physical ``joined with`` clause."""
@@ -2209,16 +2248,16 @@ class PipelineNL2SQLGenerator:
                     or lowered in schema_columns
                 ):
                     continue
-                canonical = mapped_aliases.get(lowered)
-                if canonical is not None and canonical.casefold() in schema_columns:
+                mapped_canonical: str | None = mapped_aliases.get(lowered)
+                if mapped_canonical is not None and mapped_canonical.casefold() in schema_columns:
                     continue
-                if canonical is None and (
+                if mapped_canonical is None and (
                     "_" not in token and lowered not in _SCHEMA_DIAGNOSTIC_COLUMN_ALLOWLIST
                 ):
                     continue
                 add_warning(
                     projection_marker.end() + token_match.start(),
-                    canonical or token,
+                    mapped_canonical or token,
                     projection=True,
                 )
 
@@ -2233,7 +2272,7 @@ class PipelineNL2SQLGenerator:
     def _schema_resolve_joins(
         self,
         text: str,
-        table_hint: Optional[str],
+        table_hint: str | None,
         schema: SchemaContext,
     ) -> tuple[SchemaTableContext, list[dict]]:
         mentions = self._schema_table_mentions(text, schema)
@@ -2249,13 +2288,13 @@ class PipelineNL2SQLGenerator:
             cn_relation = self._cn_relation_table(text.lower())
             if cn_relation:
                 relation_candidates = schema.table_candidates(cn_relation)
-                subject_candidates = [
+                subject_candidates_list = [
                     table for table in mentions
                     if not relation_candidates or table.key != relation_candidates[0].key
                 ]
-                if len(subject_candidates) != 1:
+                if len(subject_candidates_list) != 1:
                     raise SchemaValidationError("relationship subject is ambiguous")
-                subject = subject_candidates[0]
+                subject = subject_candidates_list[0]
             else:
                 subject = mentions[0]
 
@@ -2351,6 +2390,8 @@ class PipelineNL2SQLGenerator:
                 join_type = "RIGHT"
                 join_spec = JoinSpec(kind="RIGHT", matched_text="right outer join")
             else:
+                if join_spec is None:
+                    raise SchemaValidationError("unsupported schema-aware join type")
                 if join_spec.kind not in {"JOIN", "INNER", "LEFT", "RIGHT"}:
                     raise SchemaValidationError("unsupported schema-aware join type")
                 join_type = "INNER" if join_spec.kind == "JOIN" else join_spec.kind
@@ -2393,7 +2434,7 @@ class PipelineNL2SQLGenerator:
     def _schema_resolve_physical_join_chain(
         self,
         text: str,
-        table_hint: Optional[str],
+        table_hint: str | None,
         schema: SchemaContext,
     ) -> tuple[SchemaTableContext, list[dict], tuple[int, int]] | None:
         """Resolve an explicit linear INNER ``joined with`` chain."""
@@ -2462,7 +2503,9 @@ class PipelineNL2SQLGenerator:
             return " AND ".join(f"{left.name}.{a} = {right.name}.{b}" for a, b in pairs)
 
         joins: list[dict] = []
-        for left, right in zip(tables, tables[1:]):
+        from itertools import pairwise
+
+        for left, right in pairwise(tables):
             edges = schema.relationship_candidates(left.name, right.name)
             if len(edges) != 1:
                 raise SchemaValidationError("physical chain relationship is missing or ambiguous")
@@ -2480,7 +2523,7 @@ class PipelineNL2SQLGenerator:
         self,
         parsed: _SchemaWhoseParsed,
         subject: SchemaTableContext,
-        path_steps: tuple[object, ...],
+        path_steps: tuple[_nl2sql_ir.PathStep, ...],
         schema: SchemaContext,
     ) -> tuple[str | None, _nl2sql_ir.PathCondition | None]:
         """Resolve one whose predicate against the validated path tables."""
@@ -2503,13 +2546,13 @@ class PipelineNL2SQLGenerator:
             if owner.key not in {table.key for table in path_tables}:
                 raise SchemaValidationError("whose column table is outside the path")
         else:
-            owners = [
+            owner_candidates = [
                 table for table in path_tables
                 if schema.canonical_column(table, column_name) is not None
             ]
-            if len(owners) != 1:
+            if len(owner_candidates) != 1:
                 raise SchemaValidationError("whose column owner is ambiguous or unknown")
-            owner = owners[0]
+            owner = owner_candidates[0]
 
         canonical = schema.canonical_column(owner, column_name)
         if canonical is None:
@@ -2527,13 +2570,13 @@ class PipelineNL2SQLGenerator:
     def _schema_resolve_multihop_unique_path(
         self,
         text: str,
-        table_hint: Optional[str],
+        table_hint: str | None,
         schema: SchemaContext,
         *,
         include_zero: bool = False,
         whose_span: tuple[int, int] | None = None,
         whose_spans: tuple[tuple[int, int], ...] = (),
-    ) -> tuple[SchemaTableContext, tuple[object, ...], tuple[int, int]] | None:
+    ) -> tuple[SchemaTableContext, tuple[_nl2sql_ir.PathStep, ...], tuple[int, int]] | None:
         """Resolve one bounded two-hop path for a subject-grouped unique count."""
         if not self._schema_unique_count_spans(text, ("count", None)):
             return None
@@ -2597,11 +2640,12 @@ class PipelineNL2SQLGenerator:
                 pair[0].casefold() for pair in pairs
             }.issuperset(column.casefold() for column in left.primary_key):
                 return False
-            if len(right.primary_key) > 1 and not {
-                pair[1].casefold() for pair in pairs
-            }.issuperset(column.casefold() for column in right.primary_key):
-                return False
-            return True
+            return not (
+                len(right.primary_key) > 1
+                and not {
+                    pair[1].casefold() for pair in pairs
+                }.issuperset(column.casefold() for column in right.primary_key)
+            )
 
         def oriented_step(edge, left: SchemaTableContext, right: SchemaTableContext):
             if edge.from_table.casefold() == left.key:
@@ -2620,8 +2664,8 @@ class PipelineNL2SQLGenerator:
                 raise SchemaValidationError("direct relationship does not cover composite identity")
             return subject, (oriented_step(direct[0], subject, target),), group_match.span()
 
-        queue: list[tuple[SchemaTableContext, list[object]]] = [(subject, [])]
-        paths: list[list[object]] = []
+        queue: list[tuple[SchemaTableContext, list[_nl2sql_ir.PathStep]]] = [(subject, [])]
+        paths: list[list[_nl2sql_ir.PathStep]] = []
         expansions = 0
         while queue:
             current, path = queue.pop(0)
@@ -2689,8 +2733,8 @@ class PipelineNL2SQLGenerator:
         text: str,
         text_lower: str,
         dialect: str,
-        table_hint: Optional[str],
-        column_hints: Optional[List[str]],
+        table_hint: str | None,
+        column_hints: list[str] | None,
         analysis: dict,
         schema: SchemaContext,
     ) -> NL2SQLResult:
@@ -2911,6 +2955,18 @@ class PipelineNL2SQLGenerator:
                     aggregations, metric_text, table_context, schema, joins
                 )
             group_source_text = chain_executable_text or text_lower
+            group_source_for_group = group_source_text
+            if not unique_count_intent and physical_chain_resolution is not None:
+                group_clause_match = re.search(
+                    r"\b(?:order(?:ed)?|sort(?:ed)?)\s+by\b|\blimit\b|\btop\s+\d+\b",
+                    group_source_text,
+                    re.IGNORECASE,
+                )
+                if group_clause_match is not None:
+                    group_source_for_group = self._schema_mask_span(
+                        group_source_text,
+                        (group_clause_match.start(), len(group_source_text)),
+                    )
             group_by = (
                 []
                 if multihop_unique_resolution is not None
@@ -2919,16 +2975,7 @@ class PipelineNL2SQLGenerator:
                 else self._schema_resolve_group_by(
                     self._schema_mask_clause_tail(text_lower)
                     if unique_count_intent
-                    else (
-                        self._schema_mask_span(
-                            group_source_text,
-                            (re.search(r"\b(?:order(?:ed)?|sort(?:ed)?)\s+by\b|\blimit\b|\btop\s+\d+\b", group_source_text, re.IGNORECASE).start(), len(group_source_text))
-                        )
-                        if physical_chain_resolution is not None and re.search(
-                            r"\b(?:order(?:ed)?|sort(?:ed)?)\s+by\b|\blimit\b|\btop\s+\d+\b", group_source_text, re.IGNORECASE
-                        )
-                        else group_source_text
-                    ),
+                    else group_source_for_group,
                     table_context,
                     schema,
                     aggregations,
@@ -3008,11 +3055,12 @@ class PipelineNL2SQLGenerator:
                         exclude_null_identity=True,
                     )
                 distinct = False
-            if any(join.get("path") for join in joins):
-                if conditions or aggregations or group_by or label_resolution is not None or distinct:
-                    raise SchemaValidationError(
-                        "multi-hop paths cannot be combined with filters or aggregation"
-                    )
+            if any(join.get("path") for join in joins) and (
+                conditions or aggregations or group_by or label_resolution is not None or distinct
+            ):
+                raise SchemaValidationError(
+                    "multi-hop paths cannot be combined with filters or aggregation"
+                )
             ordering_candidates: list[tuple[str, str]] = []
             aggregate_orderings = None
             masked_unique_text = self._schema_mask_spans(mask_nl2sql_non_executable(text_lower), whose_spans)
@@ -3177,7 +3225,7 @@ class PipelineNL2SQLGenerator:
             )
 
     @staticmethod
-    def _parameter_metadata(sql: Optional[str], dialect: str) -> tuple[str | None, list[str]]:
+    def _parameter_metadata(sql: str | None, dialect: str) -> tuple[str | None, list[str]]:
         """Return the placeholder style and ordered placeholders in DML SQL."""
         if not sql:
             return None, []
@@ -3235,7 +3283,7 @@ class PipelineNL2SQLGenerator:
 
     def _extract_table_subject(
         self, text: str, relational_context: str = ""
-    ) -> Optional[str]:
+    ) -> str | None:
         """Extract the subject table (first appearing in text) for D2 relational queries.
 
         Delegates to ``nl2sql_pipeline.resolution.extract_table_subject``;
@@ -3282,14 +3330,14 @@ class PipelineNL2SQLGenerator:
         """
         return _pipeline_extract_group_by(text, self.COLUMN_PATTERNS, self.TABLE_PATTERNS)
 
-    def _extract_ordering(self, text: str) -> Optional[Tuple[str, str]]:
+    def _extract_ordering(self, text: str) -> tuple[str, str] | None:
         """Extract ORDER BY clause from text.
 
         Delegates to ``nl2sql_pipeline.clause_extract.extract_ordering``.
         """
         return _pipeline_extract_ordering(text, self.COLUMN_PATTERNS)
 
-    def _extract_limit(self, text: str) -> Optional[int]:
+    def _extract_limit(self, text: str) -> int | None:
         """Extract LIMIT value from text.
 
         Delegates to ``nl2sql_pipeline.clause_extract.extract_limit``.
@@ -3309,13 +3357,14 @@ class PipelineNL2SQLGenerator:
         """Return the CN relational connective's table (orders, products, ...)
         when present in ``text``; otherwise ""."""
         import re as _re
+
         from ..nl2sql_components.relations import _CN_REL_TABLES
         for modifier, rel_table in _CN_REL_TABLES.items():
             if _re.search(r"(?:有|没有任何|没有)" + _re.escape(modifier), text):
                 return rel_table
         return ""
 
-    def _guess_join_key(self, table1: str, table2: str) -> Optional[str]:
+    def _guess_join_key(self, table1: str, table2: str) -> str | None:
         """Guess the join key between two tables.
 
         Delegates to ``nl2sql_pipeline.resolution.guess_join_key``.

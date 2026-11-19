@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """NL2SQL Components Package - Modular components for NL2SQL generation.
 
 This package provides modular components for natural language to SQL
@@ -41,32 +40,25 @@ from .templates import DEFAULT_QUERY_TEMPLATES, QueryTemplate
 from .tokenizer import JIEBA_AVAILABLE, Tokenizer
 
 __all__ = [
-    # tokenizer
-    "Tokenizer",
-    "JIEBA_AVAILABLE",
-    # templates
-    "QueryTemplate",
+    "COLUMN_PATTERNS",
     "DEFAULT_QUERY_TEMPLATES",
-    # mappings
+    "JIEBA_AVAILABLE",
     "KEYWORDS",
     "TABLE_PATTERNS",
-    "COLUMN_PATTERNS",
-    # core_extract
+    "JoinSpec",
+    "QueryTemplate",
+    "Tokenizer",
+    "check_distinct",
     "detect_operation",
+    "extract_aggregations",
+    "extract_boolean_conditions",
+    "extract_columns",
+    "extract_joins",
+    "extract_limit",
     "extract_table",
     "extract_table_subject",
-    "named_tables",
-    "extract_columns",
-    "extract_limit",
-    "check_distinct",
-    # relations
-    "extract_joins",
     "guess_join_key",
     "has_relational_keyword",
-    "JoinSpec",
+    "named_tables",
     "parse_join_spec",
-    # aggregations
-    "extract_aggregations",
-    # boolean conditions
-    "extract_boolean_conditions",
 ]

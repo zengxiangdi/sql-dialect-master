@@ -1,13 +1,10 @@
-#!/usr/bin/env python3
 """Language mappings for NL2SQL.
 
 Contains Chinese-English keyword mappings for tables, columns, and SQL operations.
 """
-from typing import Dict
-
 
 # Chinese-English keyword mappings
-KEYWORDS: Dict[str, str] = {
+KEYWORDS: dict[str, str] = {
     # Query operations
     "查询": "SELECT", "获取": "SELECT", "查找": "SELECT", "显示": "SELECT", "列出": "SELECT",
     "select": "SELECT", "get": "SELECT", "find": "SELECT", "show": "SELECT", "list": "SELECT", "fetch": "SELECT",
@@ -85,7 +82,7 @@ KEYWORDS: Dict[str, str] = {
 }
 
 # Common table patterns (expanded)
-TABLE_PATTERNS: Dict[str, str] = {
+TABLE_PATTERNS: dict[str, str] = {
     # Users
     "用户": "users", "user": "users", "users": "users", "会员": "users", "member": "users",
     "账户": "accounts", "account": "accounts", "accounts": "accounts",
@@ -126,7 +123,7 @@ TABLE_PATTERNS: Dict[str, str] = {
 }
 
 # Column patterns (expanded)
-COLUMN_PATTERNS: Dict[str, str] = {
+COLUMN_PATTERNS: dict[str, str] = {
     # Identity
     "id": "id", "编号": "id", "标识": "id", "主键": "id",
     "uuid": "uuid", "guid": "guid",

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """P8 NL2SQL pipeline: predicate extraction (moved from nl2sql_legacy).
 
 ``extract_conditions`` is a verbatim move of
@@ -9,7 +8,6 @@ date / time / status rules are unchanged; the only difference is that
 the instance attribute.
 """
 import re
-from typing import Dict, List, Optional
 
 from ..nl2sql_components.boolean_conditions import (
     extract_boolean_conditions,
@@ -24,7 +22,7 @@ _QUOTED_COMPARISON_PREFIX = re.compile(
 )
 
 
-def _column_for_text(text: str, column_patterns: Dict[str, str]) -> Optional[str]:
+def _column_for_text(text: str, column_patterns: dict[str, str]) -> str | None:
     for pattern, column in sorted(column_patterns.items(), key=lambda item: -len(item[0])):
         expression = re.escape(pattern)
         if not re.search(r"[\u4e00-\u9fff]", pattern):
@@ -35,7 +33,7 @@ def _column_for_text(text: str, column_patterns: Dict[str, str]) -> Optional[str
 
 
 def _quoted_comparisons(
-    original: str, column_patterns: Dict[str, str]
+    original: str, column_patterns: dict[str, str]
 ) -> list[str]:
     quoted = []
     executable = mask_nl2sql_non_executable(original)
@@ -89,7 +87,7 @@ def _quoted_comparisons(
 def extract_conditions(
     text: str,
     original: str,
-    column_patterns: Dict[str, str],
+    column_patterns: dict[str, str],
 ) -> list:
     """Extract WHERE conditions with enhanced parsing including boolean expressions.
 
@@ -222,10 +220,9 @@ def extract_conditions(
             conditions.append(f"{col} {op} {numbers[0]}")
             break
 
-    if any(keyword in executable_text for keyword in ["之间", "范围", "between", "from...to"]):
-        if len(numbers) >= 2:
-            col = condition_column or "column"
-            conditions.append(f"{col} BETWEEN {numbers[0]} AND {numbers[1]}")
+    if any(keyword in executable_text for keyword in ["之间", "范围", "between", "from...to"]) and len(numbers) >= 2:
+        col = condition_column or "column"
+        conditions.append(f"{col} BETWEEN {numbers[0]} AND {numbers[1]}")
 
     if any(keyword in executable_text for keyword in ["包含", "含有", "contains", "like", "includes"]):
         text_match = re.search(

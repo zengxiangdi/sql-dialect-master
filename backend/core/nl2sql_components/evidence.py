@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Evidence-based confidence model for NL2SQL generation.
 
 Replaces opaque ``confidence += 0.1`` heuristic increments with a
@@ -16,7 +15,6 @@ same inputs.  Consumers can inspect the items list to understand
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional
 
 
 @dataclass
@@ -32,7 +30,7 @@ class EvidenceItem:
     evidence_id: str
     label: str
     weight: float
-    detail: Optional[str] = None
+    detail: str | None = None
 
 
 @dataclass
@@ -46,7 +44,7 @@ class GenerationEvidence:
     Use ``GenerationEvidence.score`` as the ``confidence`` value and
     pass ``GenerationEvidence.items`` as the evidence trail.
     """
-    items: List[EvidenceItem] = field(default_factory=list)
+    items: list[EvidenceItem] = field(default_factory=list)
 
     @property
     def score(self) -> float:
@@ -103,20 +101,20 @@ EVIDENCE_PARSE_FAIL = "target_parse_fail"
 EVIDENCE_TEMPLATE_MATCHED = "template_matched"
 
 __all__ = [
-    "EvidenceItem",
-    "GenerationEvidence",
-    "EVIDENCE_TABLE_KNOWN",
-    "EVIDENCE_TABLE_UNKNOWN",
+    "EVIDENCE_AGGREGATION_PRESENT",
     "EVIDENCE_COLUMNS_EXPLICIT",
     "EVIDENCE_COLUMNS_WILDCARD",
     "EVIDENCE_CONDITIONS_PRESENT",
+    "EVIDENCE_GROUP_BY",
     "EVIDENCE_JOIN_KNOWN",
     "EVIDENCE_JOIN_UNKNOWN",
-    "EVIDENCE_AGGREGATION_PRESENT",
-    "EVIDENCE_GROUP_BY",
-    "EVIDENCE_ORDERING",
     "EVIDENCE_LIMIT",
-    "EVIDENCE_PARSE_OK",
+    "EVIDENCE_ORDERING",
     "EVIDENCE_PARSE_FAIL",
+    "EVIDENCE_PARSE_OK",
+    "EVIDENCE_TABLE_KNOWN",
+    "EVIDENCE_TABLE_UNKNOWN",
     "EVIDENCE_TEMPLATE_MATCHED",
+    "EvidenceItem",
+    "GenerationEvidence",
 ]
