@@ -7,6 +7,7 @@ annotated-types==0.8.0
 anyio==4.15.1
     # via
     #   httpx
+    #   httpx2
     #   starlette
 backports-tarfile==1.2.0 ; python_full_version < '3.12' and platform_machine != 'ppc64le' and platform_machine != 's390x'
     # via jaraco-context
@@ -54,13 +55,22 @@ filelock==4.2.4
 h11==0.16.0
     # via
     #   httpcore
+    #   httpcore2
     #   uvicorn
 httpcore==1.0.9
     # via httpx
+httpcore2==2.16.2 ; sys_platform != 'emscripten'
+    # via httpx2
 httpx==0.28.1
     # via
     #   -c constraints.txt
     #   -r requirements.in
+httpx2==2.16.2
+    # via
+    #   -c constraints.txt
+    #   -r requirements.in
+httpx2-jsfetch==1.0 ; python_full_version >= '3.12' and sys_platform == 'emscripten'
+    # via httpx2
 hypothesis==6.168.0
     # via -r requirements.in
 id==1.6.1
@@ -69,6 +79,7 @@ idna==3.19
     # via
     #   anyio
     #   httpx
+    #   httpx2
     #   requests
 importlib-metadata==9.0.1 ; python_full_version < '3.12' and platform_machine != 'ppc64le' and platform_machine != 's390x'
     # via keyring
@@ -99,7 +110,9 @@ more-itertools==11.2.1 ; platform_machine != 'ppc64le' and platform_machine != '
     #   jaraco-classes
     #   jaraco-functools
 msgpack==1.2.3
-    # via cachecontrol
+    # via
+    #   -c constraints.txt
+    #   cachecontrol
 mypy==1.20.2
     # via -r requirements.in
 mypy-extensions==1.1.0
@@ -203,8 +216,11 @@ sqlglot==30.18.0
     # via
     #   -c constraints.txt
     #   -r requirements.in
-starlette==1.6.0
-    # via fastapi
+starlette==1.7.0
+    # via
+    #   -c constraints.txt
+    #   -r requirements.in
+    #   fastapi
 stevedore==5.9.1
     # via bandit
 tomli==2.4.1
@@ -213,6 +229,10 @@ tomli==2.4.1
     #   pip-audit
 tomli-w==1.2.0
     # via pip-audit
+truststore==0.10.5 ; sys_platform != 'emscripten'
+    # via
+    #   httpcore2
+    #   httpx2
 twine==7.0.0
     # via -r requirements.in
 typing-extensions==4.16.0
@@ -220,6 +240,7 @@ typing-extensions==4.16.0
     #   anyio
     #   cyclonedx-python-lib
     #   fastapi
+    #   httpx2
     #   mypy
     #   pydantic
     #   pydantic-core

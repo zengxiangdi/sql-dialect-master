@@ -29,6 +29,12 @@ Thank you for your interest in contributing to SQL Dialect Master! We welcome co
    .venv/bin/python -m pip install -e . --no-deps
    ```
 
+   The `dev` extra and `requirements-lock.txt` include `httpx2` for
+   Starlette's TestClient. The runtime LLM client continues to use `httpx`;
+   `httpx2` is not a production dependency. The locked baseline uses
+   Starlette 1.7.0, which fixes TestClient's deprecated AnyIO
+   `BlockingPortal` import, with FastAPI 0.141.1 and AnyIO 4.15.1.
+
 ## 🏗️ Project Architecture
 
 - **Backend**: Uses FastAPI and `sqlglot`.
@@ -63,6 +69,9 @@ We use `pytest` for testing. Please ensure all tests pass before submitting a PR
 
 # Check test coverage
 .venv/bin/python -m pytest --cov=backend
+
+# Treat dependency deprecations as failures (including Starlette's category)
+.venv/bin/python -m pytest -q -W error::DeprecationWarning -W error::starlette.exceptions.StarletteDeprecationWarning
 ```
 
 ## 📝 Coding Guidelines
