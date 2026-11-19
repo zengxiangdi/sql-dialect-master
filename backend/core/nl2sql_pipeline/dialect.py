@@ -1,11 +1,10 @@
-#!/usr/bin/env python3
 """P8 NL2SQL pipeline: dialect rewriter (moved UNCHANGED from nl2sql_legacy).
 
 Regex-based, executable-region-aware dialect adjustment.  In P8 this module
 is a verbatim move; AST-based rewriting is deferred to a future phase.
 """
 import re
-from typing import Callable
+from collections.abc import Callable
 
 from ..p1_sql_scanner import executable_segments
 

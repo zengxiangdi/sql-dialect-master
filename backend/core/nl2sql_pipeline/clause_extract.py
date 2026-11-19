@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """P8 NL2SQL pipeline: clause extraction (moved from nl2sql_legacy).
 
 Holds the ``extract_group_by`` and ``extract_ordering`` stage functions
@@ -8,7 +7,6 @@ Holds the ``extract_group_by`` and ``extract_ordering`` stage functions
 primitives the legacy class already delegated to.
 """
 import re
-from typing import Dict, List, Optional, Tuple
 
 from ..nl2sql_components.core_extract import check_distinct, extract_limit
 from ..nl2sql_components.mappings import COLUMN_PATTERNS, TABLE_PATTERNS
@@ -24,9 +22,9 @@ __all__ = [
 
 def extract_group_by(
     text: str,
-    column_patterns: Optional[Dict[str, str]] = None,
-    table_patterns: Optional[Dict[str, str]] = None,
-) -> List[str]:
+    column_patterns: dict[str, str] | None = None,
+    table_patterns: dict[str, str] | None = None,
+) -> list[str]:
     """Extract GROUP BY columns from text.
 
     Verbatim move of ``nl2sql_legacy._extract_group_by``; ``column_patterns``
@@ -35,7 +33,7 @@ def extract_group_by(
     text = mask_nl2sql_non_executable(text)
     column_patterns = column_patterns or COLUMN_PATTERNS
     table_patterns = table_patterns or TABLE_PATTERNS
-    group_cols: List[str] = []
+    group_cols: list[str] = []
     patterns = [
         r"按(.+?)(分组|汇总|统计)",
         r"group\s*by\s*(\w+)",
@@ -71,8 +69,8 @@ def extract_group_by(
 
 def extract_ordering(
     text: str,
-    column_patterns: Optional[Dict[str, str]] = None,
-) -> Optional[Tuple[str, str]]:
+    column_patterns: dict[str, str] | None = None,
+) -> tuple[str, str] | None:
     """Extract ORDER BY clause from text.
 
     Verbatim move of ``nl2sql_legacy._extract_ordering``; ``column_patterns``

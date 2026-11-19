@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """P8 NL2SQL pipeline: SQL renderer (extracted from nl2sql_legacy).
 
 ``render_sql`` is the renamed, pure-function form of the legacy
@@ -8,7 +7,6 @@ positional args and returns the same 4-tuple
 ``(sql, explanation, confidence, evidence)``.
 """
 import re
-from typing import Dict, List, Optional, Tuple, Union
 
 from ..nl2sql_components.evidence import (
     EVIDENCE_AGGREGATION_PRESENT,
@@ -34,10 +32,9 @@ from .ir import (
 )
 from .validation import validate_sql
 
-
 # ── Pure helper functions (moved verbatim from nl2sql_legacy) ───────────────
 
-def join_sql_kind(join: Dict) -> str:
+def join_sql_kind(join: dict) -> str:
     """Return the SQL JOIN keyword for a physical join record.
 
     A structured ``join_spec`` from the relations module wins; an
@@ -99,7 +96,7 @@ def _safe_identifier(value: str) -> bool:
     return isinstance(value, str) and _SAFE_IDENTIFIER.fullmatch(value) is not None
 
 
-def _render_plan_failure(reason: str) -> Tuple[None, str, float, GenerationEvidence]:
+def _render_plan_failure(reason: str) -> tuple[None, str, float, GenerationEvidence]:
     return None, f"Derived distinct count plan rejected: {reason}", 0.0, GenerationEvidence()
 
 
@@ -127,7 +124,7 @@ def _render_aggregate_orderings(
 
 def _render_distinct_count_plan(
     ir: QueryIR,
-) -> Tuple[Optional[str], str, float, GenerationEvidence]:
+) -> tuple[str | None, str, float, GenerationEvidence]:
     """Render a validated composite-identity count through a derived table."""
     plan: DistinctCountPlan = ir.distinct_count_plan  # type: ignore[assignment]
     if ir.operation != "SELECT":
@@ -157,7 +154,7 @@ def _render_distinct_count_plan(
     if not projection:
         return _render_plan_failure("derived projection is empty")
 
-    conditions = ir.conditions
+    conditions: list[str] | str = ir.conditions
     inner_conditions = (
         [condition for condition in conditions if condition.strip()]
         if isinstance(conditions, list)
@@ -378,7 +375,7 @@ def _render_zero_path_distinct_count_plan(
     ir: QueryIR,
     plan: PathDistinctCountPlan,
     target_table: str,
-) -> Tuple[Optional[str], str, float, GenerationEvidence]:
+) -> tuple[str | None, str, float, GenerationEvidence]:
     """Render a subject baseline left-joined to distinct target counts."""
     path_tables = {
         step.to_table.casefold()
@@ -536,7 +533,7 @@ def _render_zero_path_distinct_count_plan(
 
 def _render_path_distinct_count_plan(
     ir: QueryIR,
-) -> Tuple[Optional[str], str, float, GenerationEvidence]:
+) -> tuple[str | None, str, float, GenerationEvidence]:
     """Render a bounded inner-join path and count distinct terminal targets."""
     plan: PathDistinctCountPlan = ir.path_distinct_count_plan  # type: ignore[assignment]
     if ir.operation != "SELECT":
@@ -569,7 +566,7 @@ def _render_path_distinct_count_plan(
         ):
             return _render_plan_failure("path step is invalid")
         table_names.append(step.to_table)
-    if len(set(name.casefold() for name in table_names)) != len(table_names):
+    if len({name.casefold() for name in table_names}) != len(table_names):
         return _render_plan_failure("path repeats a table")
     target_table = table_names[-1]
     if plan.include_zero:
@@ -590,11 +587,11 @@ def _render_path_distinct_count_plan(
     ]
     inner_sql = f"SELECT DISTINCT {', '.join(inner_projection)}\nFROM {plan.subject_table}"
     for step in plan.path_steps:
-        conditions = " AND ".join(
+        join_conditions = " AND ".join(
             f"{step.from_table}.{from_column} = {step.to_table}.{to_column}"
             for from_column, to_column in step.column_pairs
         )
-        inner_sql += f"\nJOIN {step.to_table} ON {conditions}"
+        inner_sql += f"\nJOIN {step.to_table} ON {join_conditions}"
 
     conditions = ir.conditions
     inner_conditions = (
@@ -693,7 +690,7 @@ def _render_path_distinct_count_plan(
 
 # ── Renderer ────────────────────────────────────────────────────────────────
 
-def render_sql(ir: QueryIR) -> Tuple[Optional[str], str, float, GenerationEvidence]:
+def render_sql(ir: QueryIR) -> tuple[str | None, str, float, GenerationEvidence]:
     """Build SQL statement from the Query IR.
 
     Fail-closed: any join entry with ``condition is None`` (an

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """P8 NL2SQL pipeline: template generation (moved from nl2sql_legacy).
 
 Contains the per-template SQL string builder (``generate_from_template``)
@@ -10,8 +9,9 @@ pure stage functions from ``renderer`` / ``dialect`` / ``validation``
 """
 import logging
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any
 
+from ..nl2sql_components.core_extract import check_distinct
 from ..nl2sql_components.evidence import (
     EVIDENCE_AGGREGATION_PRESENT,
     EVIDENCE_CONDITIONS_PRESENT,
@@ -25,10 +25,9 @@ from ..nl2sql_components.evidence import (
     EvidenceItem,
     GenerationEvidence,
 )
-from ..nl2sql_components.core_extract import check_distinct
 from ..nl2sql_components.mappings import COLUMN_PATTERNS, TABLE_PATTERNS
-from ..nl2sql_pipeline.scanner import mask_nl2sql_non_executable
 from ..nl2sql_components.templates import QueryTemplate
+from ..nl2sql_pipeline.scanner import mask_nl2sql_non_executable
 from .dialect import apply_dialect_adjustments
 from .models import NL2SQLResult
 from .predicates import extract_conditions as extract_conditions_impl
@@ -41,15 +40,15 @@ logger = logging.getLogger(__name__)
 
 def generate_from_template(
     template: QueryTemplate,
-    match_groups: Dict[str, Any],
-    analysis: Dict[str, Any],
+    match_groups: dict[str, Any],
+    analysis: dict[str, Any],
     dialect: str,
-    table_hint: Optional[str],
-    column_hints: Optional[List[str]],
+    table_hint: str | None,
+    column_hints: list[str] | None,
     text_lower: str = "",
     text_original: str = "",
-    table_patterns: Optional[Dict[str, str]] = None,
-    column_patterns: Optional[Dict[str, str]] = None,
+    table_patterns: dict[str, str] | None = None,
+    column_patterns: dict[str, str] | None = None,
 ) -> NL2SQLResult:
     """Generate SQL from a matched template.
 
@@ -262,8 +261,10 @@ def generate_from_template(
                     confidence=0.0,
                     evidence=GenerationEvidence(),
                     suggestions=[
-                        "Specify the relationship between tables, "
-                        "e.g., 'users.id = invoices.user_id'"
+                        (
+                            "Specify the relationship between tables, "
+                            "e.g., 'users.id = invoices.user_id'"
+                        )
                     ],
                     parsed_elements=analysis,
                 )
@@ -299,8 +300,10 @@ def generate_from_template(
                     confidence=0.0,
                     evidence=GenerationEvidence(),
                     suggestions=[
-                        "Specify the relationship between tables, "
-                        "e.g., 'users.id = invoices.user_id'"
+                        (
+                            "Specify the relationship between tables, "
+                            "e.g., 'users.id = invoices.user_id'"
+                        )
                     ],
                     parsed_elements=analysis,
                 )
@@ -318,7 +321,7 @@ def generate_from_template(
         # that own their WHERE clause (time_range/condition) already
         # folded the external conditions in above; this step then
         # de-duplicates instead of appending a second WHERE.
-        merged_conditions: List[str] = []
+        merged_conditions: list[str] = []
         for c in external_conditions:
             base = c.split(" AND ")[0] if " AND " in c else c
             base = base.strip()
@@ -391,7 +394,9 @@ def generate_from_template(
             suggestions=suggestions,
             parsed_elements=analysis,
         )
-    except Exception as exc:
+    # Template generation is a fail-closed boundary around heterogeneous
+    # parser/renderer failures; preserve that contract explicitly.
+    except Exception as exc:  # noqa: BLE001
         logger.warning("Template generation failed: %s", exc)
         return NL2SQLResult(
             success=False,
@@ -406,9 +411,9 @@ def generate_from_template(
 def template_suggestions(
     template: QueryTemplate,
     table: str,
-    columns: List[str],
+    columns: list[str],
     dialect: str,
-) -> List[str]:
+) -> list[str]:
     """Generate suggestions specific to template-based generation."""
     suggestions = []
     if table == "table_name":

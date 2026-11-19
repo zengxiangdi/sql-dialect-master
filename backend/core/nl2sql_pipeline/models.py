@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """P8 NL2SQL pipeline: result model.
 
 ``NL2SQLResult`` is the single canonical result dataclass.  It is re-exported

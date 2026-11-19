@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """NL2SQL relation extraction: joins, join-key inference, relational keywords.
 
 The join-key knowledge base (``JOIN_KEY_PATTERNS``) is the single
@@ -8,11 +7,10 @@ conditions.
 """
 import re
 from dataclasses import dataclass
-from typing import Dict, List, Optional
 
 # Canonical join-key knowledge base.
 # Pairs are stored both ways so lookups are order-independent.
-JOIN_KEY_PATTERNS: Dict[tuple, str] = {
+JOIN_KEY_PATTERNS: dict[tuple, str] = {
     ("users", "orders"): "users.id = orders.user_id",
     ("orders", "users"): "orders.user_id = users.id",
     ("users", "transactions"): "users.id = transactions.user_id",
@@ -58,7 +56,7 @@ _EXISTS_KEYWORDS = [
 # Explicit physical JOIN keywords, each mapped to its structured kind.
 # Matched as whole words / substrings against the full text — never as
 # "the first token of the sentence" (the legacy split()[0] bug).
-_JOIN_KIND_KEYWORDS: Dict[str, str] = {
+_JOIN_KIND_KEYWORDS: dict[str, str] = {
     "left join": "LEFT",
     "右连接": "RIGHT",
     "right join": "RIGHT",
@@ -82,7 +80,7 @@ class JoinSpec:
     matched_text: str
 
 
-def parse_join_spec(text: str) -> Optional[JoinSpec]:
+def parse_join_spec(text: str) -> JoinSpec | None:
     """Parse an explicit physical-join keyword into a structured JoinSpec.
 
     Returns ``None`` when the text carries no physical-join intent
@@ -110,7 +108,7 @@ def parse_join_spec(text: str) -> Optional[JoinSpec]:
     return None
 
 
-def guess_join_key(table1: str, table2: str) -> Optional[str]:
+def guess_join_key(table1: str, table2: str) -> str | None:
     """Return the canonical join condition between two tables, or None.
 
     None means the relationship is unknown; the caller must not
@@ -133,8 +131,8 @@ _CN_REL_TABLES = {
 
 def extract_joins(
     text: str,
-    table_patterns: Dict[str, str],
-) -> List[Dict]:
+    table_patterns: dict[str, str],
+) -> list[dict]:
     """Extract structured join contexts from text.
 
     Detects relational existence patterns (e.g. "users who have orders")
@@ -152,7 +150,7 @@ def extract_joins(
     # EN word-boundary matching stays for ASCII patterns; CJK patterns have
     # no word boundaries, so they match by direct occurrence — this is what
     # lets '用户' / '订单' register inside a Chinese sentence.
-    table_occurrences = []
+    table_occurrences: list[tuple[int, str]] = []
     text_lower = text.lower()
     for pattern, table in table_patterns.items():
         if pattern == "order" and re.search(r"\border\b\s+by\b", text, re.IGNORECASE):

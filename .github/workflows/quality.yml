@@ -33,8 +33,14 @@ jobs:
       - name: Ruff correctness checks
         run: ruff check backend/core backend/api --select E9,F --ignore F401
 
+      - name: Ruff NL2SQL default checks
+        run: ruff check backend/core/nl2sql_pipeline backend/core/nl2sql_components
+
       - name: Progressive mypy checks
         run: .venv/bin/python -m mypy
+
+      - name: Mypy NL2SQL directories
+        run: .venv/bin/python -m mypy backend/core/nl2sql_pipeline backend/core/nl2sql_components
 
       - name: Bandit security scan
         run: |

@@ -5,10 +5,8 @@ predicates while preserving normal SQL AND-over-OR precedence and
 user-supplied parentheses.
 """
 import re
-from typing import List, Optional, Tuple
 
 from ..nl2sql_pipeline.scanner import mask_nl2sql_non_executable
-
 
 _COMPARISON_PATTERNS = (
     re.compile(
@@ -191,8 +189,8 @@ def _format_set_values(raw_values: str) -> str:
     return ", ".join(values)
 
 
-def _comparison_matches(text: str) -> List[Tuple[int, int, str]]:
-    matches: List[Tuple[int, int, str]] = []
+def _comparison_matches(text: str) -> list[tuple[int, int, str]]:
+    matches: list[tuple[int, int, str]] = []
     executable = mask_nl2sql_non_executable(text)
 
     for pattern in _COMPARISON_PATTERNS:
@@ -258,7 +256,7 @@ def _comparison_matches(text: str) -> List[Tuple[int, int, str]]:
     matches.extend(_status_matches(text))
 
     matches.sort(key=lambda item: (item[0], item[1]))
-    deduped: List[Tuple[int, int, str]] = []
+    deduped: list[tuple[int, int, str]] = []
     for item in matches:
         if deduped and item[0] == deduped[-1][0] and item[1] <= deduped[-1][1]:
             continue
@@ -266,10 +264,10 @@ def _comparison_matches(text: str) -> List[Tuple[int, int, str]]:
     return deduped
 
 
-def _status_matches(text: str) -> List[Tuple[int, int, str]]:
+def _status_matches(text: str) -> list[tuple[int, int, str]]:
     """Extract status predicates without matching quoted values."""
     executable = mask_nl2sql_non_executable(text)
-    matches: list[Tuple[int, int, str]] = []
+    matches: list[tuple[int, int, str]] = []
     explicit_patterns = [
         (
             re.compile(
@@ -346,13 +344,13 @@ def extract_status_conditions(text: str) -> list[str]:
     return [condition for _, _, condition in _status_matches(text)]
 
 
-def extract_boolean_conditions(text: str) -> Optional[List[str]]:
+def extract_boolean_conditions(text: str) -> list[str] | None:
     """Return one boolean SQL expression preserving connector precedence/grouping."""
     matches = _comparison_matches(text)
     if len(matches) < 2:
         return None
 
-    tokens: List[str] = []
+    tokens: list[str] = []
     prefix = text[: matches[0][0]]
     tokens.extend(char for char in prefix if char in "()")
 

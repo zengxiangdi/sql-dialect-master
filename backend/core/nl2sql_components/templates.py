@@ -1,12 +1,12 @@
-#!/usr/bin/env python3
 """Query Template module for NL2SQL.
 
 Provides pattern-based SQL generation using prioritized templates.
 """
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Optional, Dict, Any, Callable
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -51,8 +51,8 @@ class QueryTemplate:
     pattern: str
     sql_template: str
     priority: int = 50
-    extractor: Optional[Callable] = None
-    _compiled_pattern: re.Pattern = field(init=False, repr=False, default=None)
+    extractor: Callable | None = None
+    _compiled_pattern: re.Pattern[str] | None = field(init=False, repr=False, default=None)
 
     def __post_init__(self):
         """Pre-compile regex pattern for better performance."""
@@ -62,7 +62,7 @@ class QueryTemplate:
             logger.warning(f"Failed to compile pattern for template {self.name}: {e}")
             self._compiled_pattern = None
 
-    def match(self, text: str) -> Optional[Dict[str, Any]]:
+    def match(self, text: str) -> dict[str, Any] | None:
         """Try to match this template against input text."""
         normalized = text.lower()
         blockers = _TEMPLATE_BLOCKERS.get(self.name, ())

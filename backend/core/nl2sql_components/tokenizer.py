@@ -1,12 +1,11 @@
-#!/usr/bin/env python3
 """Tokenizer module for NL2SQL.
 
 Provides smart tokenization with Chinese and English support,
 optimized for natural language SQL generation.
 """
-import re
 import logging
-from typing import List
+import re
+from typing import ClassVar
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -44,7 +43,7 @@ class Tokenizer:
     
     # Common Chinese compound words that should not be split
     # These are keywords important for NL2SQL
-    CHINESE_COMPOUNDS = [
+    CHINESE_COMPOUNDS: ClassVar[list[str]] = [
         # Comparison operators
         "大于", "小于", "等于", "不等于", "大于等于", "小于等于", "超过", "低于",
         # Aggregations
@@ -67,7 +66,7 @@ class Tokenizer:
     ]
     
     @staticmethod
-    def tokenize(text: str) -> List[str]:
+    def tokenize(text: str) -> list[str]:
         """Tokenize text into words/tokens.
         
         Uses jieba for Chinese if available, otherwise falls back to
@@ -94,7 +93,7 @@ class Tokenizer:
         return [t.strip() for t in tokens if t.strip()]
     
     @staticmethod
-    def _tokenize_chinese_fallback(text: str) -> List[str]:
+    def _tokenize_chinese_fallback(text: str) -> list[str]:
         """Fallback Chinese tokenization that preserves compound words.
         
         Uses a greedy longest-match approach for known compound words.
@@ -143,7 +142,7 @@ class Tokenizer:
         return tokens
     
     @staticmethod
-    def extract_numbers(text: str) -> List[str]:
+    def extract_numbers(text: str) -> list[str]:
         """Extract numbers, preserving a simple Chinese boolean comparison tail."""
         numbers = Tokenizer._RE_NUMBERS.findall(text)
         if "且" in text and len(numbers) >= 2:
@@ -177,7 +176,7 @@ class Tokenizer:
         return numbers
     
     @staticmethod
-    def extract_quoted_strings(text: str) -> List[str]:
+    def extract_quoted_strings(text: str) -> list[str]:
         """Extract quoted strings from text."""
         return Tokenizer._RE_QUOTED.findall(text)
     

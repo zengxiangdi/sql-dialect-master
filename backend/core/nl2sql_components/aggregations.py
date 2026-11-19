@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """NL2SQL aggregation extraction.
 
 Extracts aggregate function calls (COUNT, SUM, AVG, MAX, MIN) from
@@ -6,19 +5,18 @@ natural-language text using keyword matching. Uses the shared
 COLUMN_PATTERNS to resolve the target column for value aggregates.
 """
 import re
-from typing import Dict, List
 
 from ..nl2sql_pipeline.scanner import mask_nl2sql_non_executable
 
 
-def extract_aggregations(text: str, column_patterns: Dict[str, str]) -> List[str]:
+def extract_aggregations(text: str, column_patterns: dict[str, str]) -> list[str]:
     """Extract aggregation expressions from text.
 
     Returns a list of SQL aggregate expressions, e.g.
     ['COUNT(*)', 'SUM(amount)']. An empty list means no aggregation
     was requested.
     """
-    aggs: List[str] = []
+    aggs: list[str] = []
     executable = mask_nl2sql_non_executable(text)
     text_lower = executable.lower()
     # Pick the user's named metric column, not the first pattern that
@@ -32,9 +30,8 @@ def extract_aggregations(text: str, column_patterns: Dict[str, str]) -> List[str
     # Bare "age" is only a metric when it is not the trailing substring
     # of "average": require a non-letter before it so "average" never
     # self-matches, while "average age" still does.
-    if re.search(r"(?<![a-z])age", text_lower):
-        if "age" not in named_metrics:
-            named_metrics.append("age")
+    if re.search(r"(?<![a-z])age", text_lower) and "age" not in named_metrics:
+        named_metrics.append("age")
     if "price" in text_lower:
         named_metrics = [c for c in named_metrics if c != "age"]
     agg_column = named_metrics[0] if named_metrics else None
