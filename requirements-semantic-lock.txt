@@ -6,6 +6,8 @@ psycopg[binary]==3.3.5
     # via -r requirements-semantic.in
 psycopg-binary==3.3.5 ; implementation_name != 'pypy'
     # via psycopg
+pytz==2026.6
+    # via -r requirements-semantic.in
 typing-extensions==4.16.0 ; python_full_version < '3.13'
     # via
     #   -c requirements-lock.txt
