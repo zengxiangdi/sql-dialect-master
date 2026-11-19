@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 import secrets
 from collections.abc import Callable
+from typing import Any, Protocol
 
 from fastapi import Request
 from fastapi.responses import PlainTextResponse, Response
@@ -19,6 +21,8 @@ from prometheus_client.core import CounterMetricFamily, GaugeMetricFamily
 
 from backend.core.config import settings
 from backend.core.metadata import PROJECT_VERSION
+
+logger = logging.getLogger(__name__)
 
 REGISTRY = CollectorRegistry(auto_describe=True)
 
@@ -83,9 +87,17 @@ NL2SQL_LLM_FALLBACKS = Counter(
     registry=REGISTRY,
 )
 
-_transpiler_provider: Callable[[], object] | None = None
-_worker_provider: Callable[[], object] | None = None
-_limiter_provider: Callable[[], object] | None = None
+class _StatsProvider(Protocol):
+    def get_stats(self) -> dict[str, Any]: ...
+
+
+class _WorkerStatsProvider(Protocol):
+    def stats(self) -> dict[str, int]: ...
+
+
+_transpiler_provider: Callable[[], _StatsProvider] | None = None
+_worker_provider: Callable[[], _WorkerStatsProvider] | None = None
+_limiter_provider: Callable[[], _StatsProvider] | None = None
 
 
 def configure_runtime_metrics(*, transpiler_provider=None, worker_provider=None, limiter_provider=None) -> None:
@@ -110,7 +122,7 @@ class RuntimeCollector:
                     yield CounterMetricFamily("sdm_transpile_cache_evictions_total", "Transpiler cache evictions", value=cache.get("evictions", 0))
                     yield GaugeMetricFamily("sdm_transpile_cache_size", "Current transpiler cache size", value=cache.get("size", 0))
             except Exception:
-                pass
+                logger.debug("Failed to collect transpiler runtime metrics", exc_info=True)
 
         if _worker_provider is not None:
             try:
@@ -120,7 +132,7 @@ class RuntimeCollector:
                 yield CounterMetricFamily("sdm_api_worker_rejections_total", "API worker capacity rejections", value=stats["rejections"])
                 yield CounterMetricFamily("sdm_api_request_timeouts_total", "API request timeouts", value=stats["timeouts"])
             except Exception:
-                pass
+                logger.debug("Failed to collect worker runtime metrics", exc_info=True)
 
         if _limiter_provider is not None:
             try:
@@ -128,7 +140,7 @@ class RuntimeCollector:
                 if stats.get("backend") == "memory":
                     yield GaugeMetricFamily("sdm_rate_limit_active_clients", "Active in-memory rate-limit clients", value=stats.get("active_clients", 0))
             except Exception:
-                pass
+                logger.debug("Failed to collect rate-limit runtime metrics", exc_info=True)
 
 
 REGISTRY.register(RuntimeCollector())

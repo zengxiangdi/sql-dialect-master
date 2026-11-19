@@ -10,13 +10,18 @@ import threading
 import time
 import uuid
 import weakref
-from datetime import datetime
-from typing import Any
+from datetime import UTC, datetime
+from typing import Any, TypedDict
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
+
+
+def _now_iso() -> str:
+    """Return a UTC timestamp while preserving the existing naive ISO shape."""
+    return datetime.now(UTC).replace(tzinfo=None).isoformat()
 
 from backend.core.config import settings
 
@@ -24,7 +29,12 @@ _READINESS_CACHE_TTL_SECONDS = 5.0
 _READINESS_TIMEOUT_SECONDS = 3.0
 _READINESS_LOCKS: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = weakref.WeakKeyDictionary()
 _READINESS_LOCKS_GUARD = threading.Lock()
-_READINESS_CACHE = {"checks": None, "cached_at": 0.0}
+class _ReadinessCache(TypedDict):
+    checks: dict[str, dict[str, Any]] | None
+    cached_at: float
+
+
+_READINESS_CACHE: _ReadinessCache = {"checks": None, "cached_at": 0.0}
 _HEALTH_PROBE_PATHS = {"/ready", "/health/deep"}
 
 # The probe cache intentionally expires quickly so readiness reflects a
@@ -172,7 +182,7 @@ async def _get_checks() -> dict[str, dict[str, Any]]:
             return cached_checks
         try:
             checks = await asyncio.wait_for(asyncio.to_thread(_run_checks), timeout=_READINESS_TIMEOUT_SECONDS)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.error("Readiness probe timed out after %.1fs", _READINESS_TIMEOUT_SECONDS)
             checks = {name: {"status": "error", "code": "probe_timeout"} for name in ("transpiler", "functions", "types", "nl2sql")}
         except Exception:
@@ -200,7 +210,7 @@ async def readiness_response(request: Request) -> JSONResponse:
             "version": _api_version(),
             "probe": "readiness",
             "checks": checks,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": _now_iso(),
         },
     )
 
@@ -215,7 +225,7 @@ async def deep_health_response(request: Request) -> JSONResponse:
             "status": "✅ healthy" if healthy else "❌ unhealthy",
             "version": _api_version(),
             "checks": checks,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": _now_iso(),
         },
     )
 
