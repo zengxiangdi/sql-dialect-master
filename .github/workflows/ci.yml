@@ -143,8 +143,12 @@ jobs:
         env:
           SDM_TEST_POSTGRES_DSN: postgresql://postgres:postgres@127.0.0.1:5432/sql_dialect_test
         run: |
-          pytest backend/tests/test_runtime_semantics.py -q
-          pytest backend/tests/semantic/test_runtime_semantics.py -q
-          pytest backend/tests/semantic/test_duckdb_runtime.py -q
-          pytest backend/tests/semantic/test_d3_date_runtime.py -q
-          pytest backend/tests/semantic/test_postgres_runtime.py -q
+          pytest \
+            backend/tests/test_runtime_semantics.py \
+            backend/tests/semantic/test_runtime_semantics.py \
+            backend/tests/semantic/test_duckdb_runtime.py \
+            backend/tests/semantic/test_d3_date_runtime.py \
+            backend/tests/semantic/test_postgres_runtime.py \
+            -q --junitxml="$RUNNER_TEMP/semantic.xml"
+          python scripts/verify_semantic_evidence.py \
+            --junit "$RUNNER_TEMP/semantic.xml" --ci

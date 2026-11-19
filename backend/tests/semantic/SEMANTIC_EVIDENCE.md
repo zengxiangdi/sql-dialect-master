@@ -53,6 +53,21 @@ Local PostgreSQL absence is not equivalent to successful PostgreSQL
 CI execution. The acceptance evidence for PostgreSQL Tier A claims
 must cite the CI `semantic-runtime` run, not a local skip.
 
+## CI skip gate
+
+The CI `semantic-runtime` job writes one JUnit report for the five runtime
+modules and runs `scripts/verify_semantic_evidence.py --ci` against it. Any
+skip in a Tier A module fails the job, including missing DuckDB/psycopg
+dependencies or an unavailable PostgreSQL service. This keeps a green CI run
+from silently losing native runtime evidence.
+
+The only current skip whitelist is the explicit
+`Source SQL not executable in DuckDB:` / `Target SQL not executable in
+DuckDB:` compatibility limitation in the universal DuckDB runtime corpus.
+Those cases are documented Tier B/C compatibility coverage, not native Tier A
+claims. Local runs may additionally pass PostgreSQL-unavailable skips as
+environment class B by omitting the script's `--ci` flag.
+
 ## Construct → engine → tier map
 
 | Construct | PostgreSQL native | DuckDB native | Other dialects |
