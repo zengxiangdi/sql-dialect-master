@@ -88,7 +88,7 @@ def main() -> None:
         "databricks",
     ]
     dialect_block = re.search(
-        r"SUPPORTED_DIALECTS:\s*List\[str\]\s*=\s*\[(.*?)\]\n\nclass DialectCategory",
+        r"SUPPORTED_DIALECTS:\s*(?:List\[str\]|list\[str\])\s*=\s*\[(.*?)\]\n\nclass DialectCategory",
         config,
         re.DOTALL,
     )
