@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """NL2SQL legacy module — P8 import-compatibility shim.
 
 All implementation has moved to ``backend.core.nl2sql_pipeline``.  This

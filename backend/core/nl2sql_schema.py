@@ -6,14 +6,13 @@ and LLM generation.
 """
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-import re
 from typing import cast
 
 from sqlglot import exp
 from sqlglot.optimizer.scope import Scope, traverse_scope
-
 
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
 
@@ -103,7 +102,7 @@ class SchemaContext:
     ] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
-    def from_mapping(cls, mapping: Mapping[str, object] | None) -> "SchemaContext":
+    def from_mapping(cls, mapping: Mapping[str, object] | None) -> SchemaContext:
         """Build a normalized context without importing API/Pydantic models."""
         if mapping is None:
             return cls()
@@ -222,7 +221,7 @@ class SchemaContext:
                 try:
                     from_column = ".".join(_identifier_parts(raw_relationship.get("from_column")))
                     to_column = ".".join(_identifier_parts(raw_relationship.get("to_column")))
-                    column_pairs = ((from_column, to_column),)
+                    column_pairs: tuple[tuple[str, str], ...] = ((from_column, to_column),)
                 except SchemaValidationError:
                     valid = False
                     continue
@@ -406,8 +405,8 @@ def validate_schema_references(
     ) -> set[str] | None:
         if isinstance(source, exp.Table):
             name = _schema_reference_name(source.parts)
-            columns = table_columns[name]
-            return columns or None
+            table_source_columns = table_columns[name]
+            return table_source_columns or None
         scope_id = id(source)
         if scope_id in output_cache:
             return output_cache[scope_id]

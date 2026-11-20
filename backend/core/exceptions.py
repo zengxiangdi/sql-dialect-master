@@ -32,7 +32,7 @@ class SDMException(Exception):
 
     error_code = ErrorCode.UNKNOWN
 
-    def __init__(self, message: str, details: dict = None):
+    def __init__(self, message: str, details: dict | None = None):
         super().__init__(message)
         self.message = message
         self.details = details or {}
@@ -54,7 +54,7 @@ class UnsupportedDialectError(SDMException):
 
     error_code = ErrorCode.UNSUPPORTED_DIALECT
 
-    def __init__(self, dialect: str, supported: list = None):
+    def __init__(self, dialect: str, supported: list | None = None):
         message = f"Unsupported dialect: {dialect}"
         if supported:
             message += f". Supported: {', '.join(supported)}"
@@ -66,7 +66,13 @@ class TranspileError(SDMException):
 
     error_code = ErrorCode.TRANSPILE_FAILED
 
-    def __init__(self, message: str, source_sql: str = None, source_dialect: str = None, target_dialect: str = None):
+    def __init__(
+        self,
+        message: str,
+        source_sql: str | None = None,
+        source_dialect: str | None = None,
+        target_dialect: str | None = None,
+    ):
         details = {
             "source_sql": source_sql[:200] if source_sql else None,
             "source_dialect": source_dialect,
@@ -80,7 +86,7 @@ class ParseError(SDMException):
 
     error_code = ErrorCode.PARSE_FAILED
 
-    def __init__(self, message: str, sql: str = None, dialect: str = None):
+    def __init__(self, message: str, sql: str | None = None, dialect: str | None = None):
         details = {"sql": sql[:200] if sql else None, "dialect": dialect}
         super().__init__(message, details)
 
@@ -90,7 +96,7 @@ class SecurityViolationError(SDMException):
 
     error_code = ErrorCode.SECURITY_VIOLATION
 
-    def __init__(self, message: str, pattern: str = None):
+    def __init__(self, message: str, pattern: str | None = None):
         details = {"pattern": pattern}
         super().__init__(message, details)
 
@@ -100,7 +106,7 @@ class ValidationError(SDMException):
 
     error_code = ErrorCode.VALIDATION_FAILED
 
-    def __init__(self, message: str, field: str = None, value: str = None):
+    def __init__(self, message: str, field: str | None = None, value: str | None = None):
         details = {"field": field, "value": value}
         super().__init__(message, details)
 
@@ -122,6 +128,6 @@ class RuleConflictError(SDMException):
 
     error_code = ErrorCode.RULE_CONFLICT
 
-    def __init__(self, message: str, rule1: str = None, rule2: str = None):
+    def __init__(self, message: str, rule1: str | None = None, rule2: str | None = None):
         details = {"rule1": rule1, "rule2": rule2}
         super().__init__(message, details)

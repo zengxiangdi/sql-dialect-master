@@ -1,18 +1,17 @@
-#!/usr/bin/env python3
 """Post-processor for dialect-specific SQL transformations.
 
 Uses the rule engine for declarative transformations and handles
 complex cases that require custom logic.
 """
 import logging
-from typing import Tuple, List, Callable
+from collections.abc import Callable
 
 import sqlglot
 from sqlglot import exp
 
-from .rules import rule_engine, RuleEngine
 from .function_call_scanner import replace_function_calls
 from .p1_sql_scanner import mask_non_executable
+from .rules import RuleEngine, rule_engine
 
 logger = logging.getLogger(__name__)
 
@@ -20,10 +19,10 @@ logger = logging.getLogger(__name__)
 class PostProcessor:
     """Apply dialect-specific fixes after sqlglot transpilation."""
 
-    def __init__(self, engine: RuleEngine = None):
+    def __init__(self, engine: RuleEngine | None = None):
         self.engine = engine or rule_engine
 
-    def process(self, sql: str, source: str, target: str) -> Tuple[str, List[str]]:
+    def process(self, sql: str, source: str, target: str) -> tuple[str, list[str]]:
         result = sql
         all_notes = []
         result, rule_notes = self.engine.apply_rules(result, source, target)
@@ -34,7 +33,7 @@ class PostProcessor:
         all_notes.extend(warnings)
         return result, all_notes
 
-    def _apply_custom_transformations(self, sql: str, source: str, target: str) -> Tuple[str, List[str]]:
+    def _apply_custom_transformations(self, sql: str, source: str, target: str) -> tuple[str, list[str]]:
         result = sql
         notes = []
         if source == "oracle" and target in ("hive", "spark", "databricks"):
@@ -46,7 +45,7 @@ class PostProcessor:
         """Replace function calls using the shared quote/comment-aware scanner."""
         return replace_function_calls(sql, function_name, replacer)
 
-    def _check_warnings(self, sql: str, source: str, target: str) -> List[str]:
+    def _check_warnings(self, sql: str, source: str, target: str) -> list[str]:
         warnings = []
         sql_upper = mask_non_executable(sql).upper()
         if source == "hive" and "INSERT OVERWRITE" in sql_upper and target in ("mysql", "postgres", "tsql", "oracle"):
@@ -61,7 +60,7 @@ class PostProcessor:
             warnings.append("WARNING: Materialized view syntax and refresh mechanisms vary by database.")
         return warnings
 
-    def _convert_listagg_to_array_join(self, sql: str) -> Tuple[str, List[str]]:
+    def _convert_listagg_to_array_join(self, sql: str) -> tuple[str, list[str]]:
         """Convert Oracle LISTAGG→Hive-family aggregated output to ARRAY_JOIN(COLLECT_LIST(...)).
 
         sqlglot transpiles Oracle LISTAGG to GROUP_CONCAT for hive/spark/databricks,

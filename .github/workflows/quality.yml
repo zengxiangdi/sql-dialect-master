@@ -42,6 +42,18 @@ jobs:
       - name: Mypy NL2SQL directories
         run: .venv/bin/python -m mypy backend/core/nl2sql_pipeline backend/core/nl2sql_components
 
+      - name: Ruff remaining core checks
+        run: >-
+          ruff check backend/core
+          --exclude backend/core/nl2sql_pipeline
+          --exclude backend/core/nl2sql_components
+
+      - name: Mypy remaining core checks
+        run: >-
+          .venv/bin/python -m mypy backend/core
+          --exclude backend/core/nl2sql_pipeline
+          --exclude backend/core/nl2sql_components
+
       - name: Bandit security scan
         run: |
           # Reviewed static-analysis exceptions:

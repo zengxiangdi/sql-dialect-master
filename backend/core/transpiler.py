@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """SQL Transpiler - Convert SQL between different database dialects."""
 import asyncio
 import copy
@@ -8,7 +7,7 @@ import logging
 import re
 import threading
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, cast
 
 import sqlglot
 from sqlglot import exp
@@ -59,7 +58,7 @@ def _dml_without_where(sql: str, parsed_statements=None):
     if parsed_statements is None:
         try:
             parsed_statements = sqlglot.parse(sql)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - security AST fallback is fail closed
             logger.debug("Security AST parse fallback: %s", exc)
             return []
     result = []
@@ -102,17 +101,17 @@ class TranspileResult:
     """
     success: bool
     source_sql: str
-    target_sql: Optional[str] = None
+    target_sql: str | None = None
     source_dialect: str = ""
     target_dialect: str = ""
-    error: Optional[str] = None
-    error_code: Optional[str] = None
-    compatibility_notes: List[str] = field(default_factory=list)
-    transformations: List[str] = field(default_factory=list)
-    warnings: List[str] = field(default_factory=list)
+    error: str | None = None
+    error_code: str | None = None
+    compatibility_notes: list[str] = field(default_factory=list)
+    transformations: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
     target_validation_state: str = "target_valid"
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "success": self.success,
             "source_sql": self.source_sql,
@@ -227,15 +226,18 @@ class _ConstructEvidence:
     dialect: str
     masked_upper: str
     _parsed: bool = field(default=False, init=False, repr=False)
-    _tree: Optional[exp.Expression] = field(default=None, init=False, repr=False)
+    _tree: exp.Expression | None = field(default=None, init=False, repr=False)
 
-    def parse_one(self) -> Optional[exp.Expression]:
+    def parse_one(self) -> exp.Expression | None:
         """Return the evidence AST, parsing at most once and failing closed."""
         if not self._parsed:
             self._parsed = True
             try:
-                self._tree = sqlglot.parse_one(self.sql, read=self.dialect)
-            except Exception:
+                self._tree = cast(
+                    exp.Expression,
+                    sqlglot.parse_one(self.sql, read=self.dialect),
+                )
+            except Exception:  # noqa: BLE001 - evidence parsing must fail closed
                 self._tree = None
         return self._tree
 
@@ -321,7 +323,7 @@ def _contains_type_construct(
     sql: str,
     dialect: str,
     construct: str,
-    evidence: Optional[_ConstructEvidence] = None,
+    evidence: _ConstructEvidence | None = None,
 ) -> bool:
     """AST evidence that ``sql`` (in ``dialect``) contains the TYPE construct.
 
@@ -344,7 +346,8 @@ def _contains_type_construct(
     # retain a narrow raw-text candidate as a prefilter; the AST check below
     # still decides whether the brackets are an actual type declaration.
     if construct == "ARRAY" and not token_present:
-        bracket_safe_sql = sql.translate(str.maketrans({"[": "{", "]": "}"}))
+        translation: dict[str, str | int | None] = {"[": "{", "]": "}"}
+        bracket_safe_sql = sql.translate(str.maketrans(translation))
         bracket_safe_upper = mask_non_executable(
             bracket_safe_sql, dialect=dialect
         ).upper()
@@ -375,7 +378,7 @@ def _contains_clause_construct(
     dialect: str,
     construct: str,
     masked_upper: str = "",
-    evidence: Optional[_ConstructEvidence] = None,
+    evidence: _ConstructEvidence | None = None,
 ) -> bool:
     """AST evidence that ``sql`` (in ``dialect``) contains the clause keyword.
 
@@ -471,7 +474,7 @@ def _contains_construct(
     sql: str,
     dialect: str,
     construct: str,
-    evidence: Optional[_ConstructEvidence] = None,
+    evidence: _ConstructEvidence | None = None,
 ) -> bool:
     """Boundary-aware construct detection on executable-masked text.
 
@@ -566,7 +569,7 @@ def _rule_signature_value(rule, field: str):
     return value
 
 
-def _callable_cache_identity(fn) -> Optional[str]:
+def _callable_cache_identity(fn) -> str | None:
     """Process-local payload identity for a callable signature field.
 
     The transpiler cache is an in-memory, per-instance TTL cache (see
@@ -656,9 +659,9 @@ class SQLTranspiler:
         logger.info(f"Transpiling SQL: {source} -> {target}, length={len(sql)}")
         logger.debug(f"Input SQL: {sql[:200]}{'...' if len(sql) > 200 else ''}")
 
-        security_warnings: List[str] = []
-        multiple_statements: Optional[bool] = None
-        executable_sql: Optional[str] = None
+        security_warnings: list[str] = []
+        multiple_statements: bool | None = None
+        executable_sql: str | None = None
         security_enabled = settings.security_check_enabled
         self._security_enabled = security_enabled
         if security_enabled:
@@ -734,22 +737,22 @@ class SQLTranspiler:
 
         try:
             parser_sql = prepare_sql_for_parser(sql, source)
-            ast_notes: List[str] = []
-            semantic_blockers: List[str] = []
+            ast_notes: list[str] = []
+            semantic_blockers: list[str] = []
             if source == "clickhouse" and target == "postgres":
-                ast = sqlglot.parse_one(sql, read="clickhouse")
+                ast = cast(exp.Expression, sqlglot.parse_one(sql, read="clickhouse"))
                 ast, group_notes = self._ast_grouparray_to_arrayagg(ast, target)
                 ast_notes.extend(group_notes)
                 ast, arrayjoin_notes = self._ast_clickhouse_array_join_to_unnest(ast, target)
                 ast_notes.extend(arrayjoin_notes)
                 transpiled = ast.sql(dialect="postgres", pretty=pretty)
             elif source == "oracle" and target in ("postgres", "mysql", "hive", "spark"):
-                ast = sqlglot.parse_one(sql, read="oracle")
+                ast = cast(exp.Expression, sqlglot.parse_one(sql, read="oracle"))
                 ast, rownum_notes = self._ast_rownum_to_limit(ast, target)
                 ast_notes.extend(rownum_notes)
                 transpiled = ast.sql(dialect=target, pretty=pretty)
             elif source == "duckdb" and target in ("hive", "spark"):
-                ast = sqlglot.parse_one(sql, read="duckdb")
+                ast = cast(exp.Expression, sqlglot.parse_one(sql, read="duckdb"))
                 ast, list_notes = self._ast_duckdb_list_to_array(ast, target)
                 ast_notes.extend(list_notes)
                 transpiled = ast.sql(dialect=target, pretty=pretty)
@@ -793,7 +796,7 @@ class SQLTranspiler:
                     )
 
                 if needs_mysql_ast:
-                    ast = sqlglot.parse_one(parser_sql, read="mysql")
+                    ast = cast(exp.Expression, sqlglot.parse_one(parser_sql, read="mysql"))
                     if target == "oracle":
                         ast, now_notes = self._ast_mysql_now_to_sysdate(ast, target)
                         ast_notes.extend(now_notes)
@@ -1002,8 +1005,8 @@ class SQLTranspiler:
             if self._cache_enabled:
                 self._cache.set(cache_key, copy.deepcopy(result.to_dict()))
             return result
-        except Exception as e:
-            logger.error(f"Transpile failed: {source} -> {target}, error={str(e)}")
+        except Exception as e:  # noqa: BLE001 - transpiler public error boundary
+            logger.error(f"Transpile failed: {source} -> {target}, error={e!s}")
             return TranspileResult(
                 success=False, source_sql=sql, source_dialect=source, target_dialect=target,
                 error=str(e), error_code=ErrorCode.TRANSPILE_FAILED.value
@@ -1021,10 +1024,10 @@ class SQLTranspiler:
         try:
             statements = sqlglot.parse(prepare_sql_for_parser(sql, dialect), read=dialect) if dialect else sqlglot.parse(sql)
             return not _is_single_statement_stream(statements) and len(statements) > 1
-        except Exception:
+        except Exception:  # noqa: BLE001 - statement-count parser fallback
             return False
 
-    def _ast_rownum_to_limit(self, ast: exp.Expression, target: str) -> Tuple[exp.Expression, List[str]]:
+    def _ast_rownum_to_limit(self, ast: exp.Expression, target: str) -> tuple[exp.Expression, list[str]]:
         """AST-first ROWNUM -> LIMIT migration (G6-A1).
 
         Operates purely on the parsed AST (no string scanning). Migrates the
@@ -1081,7 +1084,7 @@ class SQLTranspiler:
         note = f"ROWNUM <= {bound.this} converted to LIMIT {bound.this} (AST)"
         return ast, [note]
 
-    def _ast_grouparray_to_arrayagg(self, ast: exp.Expression, target: str) -> Tuple[exp.Expression, List[str]]:
+    def _ast_grouparray_to_arrayagg(self, ast: exp.Expression, target: str) -> tuple[exp.Expression, list[str]]:
         """AST-first groupArray → ARRAY_AGG migration (clickhouse → postgres, G6-R2).
 
         Walks the parsed AST and replaces every ``exp.AnonymousAggFunc`` whose
@@ -1370,13 +1373,13 @@ class SQLTranspiler:
                 notes.append("Converted JSON_ARRAYAGG(JSON_OBJECT(...)) to TO_JSON(COLLECT_LIST(NAMED_STRUCT(...)))")
                 return exp.Anonymous(this="TO_JSON", expressions=[collect])
             if target == "trino":
-                obj = exp.JSONObject(
+                obj_trino = exp.JSONObject(
                     expressions=[
                         exp.JSONKeyValue(this=pairs[i], expression=pairs[i + 1])
                         for i in range(0, len(pairs), 2)
                     ]
                 )
-                array = exp.Anonymous(this="ARRAY_AGG", expressions=[obj])
+                array = exp.Anonymous(this="ARRAY_AGG", expressions=[obj_trino])
                 cast = exp.Cast(this=array, to=exp.DataType.build("JSON"))
                 notes.append("Converted JSON_ARRAYAGG(JSON_OBJECT(...)) to JSON_FORMAT(CAST(ARRAY_AGG(JSON_OBJECT(...)) AS JSON))")
                 return exp.Anonymous(this="JSON_FORMAT", expressions=[cast])
@@ -1449,11 +1452,8 @@ class SQLTranspiler:
                 decimals = node.args.get("decimals")
                 if decimals is not None:
                     existing_cast = node.this if isinstance(node.this, exp.Cast) else None
-                    existing_type = (
-                        existing_cast.args.get("to").this
-                        if existing_cast is not None and existing_cast.args.get("to") is not None
-                        else None
-                    )
+                    existing_to = existing_cast.args.get("to") if existing_cast is not None else None
+                    existing_type = existing_to.this if existing_to is not None else None
                     already_numeric = existing_type == exp.DataType.Type.DECIMAL
                     if already_numeric:
                         return node
@@ -1562,7 +1562,7 @@ class SQLTranspiler:
                 self._rule_cache_snapshot_version = hashlib.sha256(
                     payload.encode("utf-8")
                 ).hexdigest()[:16]
-            return self._rule_cache_snapshot_version
+            return self._rule_cache_snapshot_version or ""
 
     def _cache_key(self, sql: str, source: str, target: str, pretty: bool, validate: bool = True,) -> str:
         """Build a bounded cache key for a transpilation request.
@@ -1591,7 +1591,7 @@ class SQLTranspiler:
         target: str,
         source_sql: str = "",
         final_sql: str = "",
-    ) -> List[str]:
+    ) -> list[str]:
         """Compatibility notes, split by semantic responsibility.
 
         **Source-construct advisories** (class A) are detected from
@@ -1680,30 +1680,28 @@ class SQLTranspiler:
             notes.append("PIVOT/UNPIVOT syntax varies by database")
 
         # Class B (dynamic): conversion claims, verified by the final SQL.
-        if _contains_construct(
-            source_upper, source_sql, source, "LATERAL VIEW", source_evidence
-        ) and target not in ["hive", "spark", "databricks"]:
-            if _contains_construct(
-                final_upper, final_sql, target, "UNNEST", final_evidence
-            ) or _contains_construct(
-                final_upper, final_sql, target, "JSON_TABLE", final_evidence
-            ):
-                notes.append("LATERAL VIEW is Hive/Spark specific, converted to UNNEST/JSON_TABLE")
+        if (
+            _contains_construct(source_upper, source_sql, source, "LATERAL VIEW", source_evidence)
+            and target not in ["hive", "spark", "databricks"]
+            and (
+                _contains_construct(final_upper, final_sql, target, "UNNEST", final_evidence)
+                or _contains_construct(final_upper, final_sql, target, "JSON_TABLE", final_evidence)
+            )
+        ):
+            notes.append("LATERAL VIEW is Hive/Spark specific, converted to UNNEST/JSON_TABLE")
         if (
             _contains_construct(source_upper, source_sql, source, "CONNECT BY", source_evidence)
             and target != "oracle"
+            and _contains_construct(final_upper, final_sql, target, "WITH RECURSIVE", final_evidence)
         ):
-            if _contains_construct(
-                final_upper, final_sql, target, "WITH RECURSIVE", final_evidence
-            ):
-                notes.append("CONNECT BY is Oracle specific, converted to WITH RECURSIVE")
+            notes.append("CONNECT BY is Oracle specific, converted to WITH RECURSIVE")
         return notes
 
-    def _generate_warnings(self, sql: str, source: str, target: str) -> List[str]:
+    def _generate_warnings(self, sql: str, source: str, target: str) -> list[str]:
         return self._generate_warnings_masked(mask_non_executable(sql, dialect=source), source, target)
 
     @staticmethod
-    def _generate_warnings_masked(masked_sql: str, source: str, target: str) -> List[str]:
+    def _generate_warnings_masked(masked_sql: str, source: str, target: str) -> list[str]:
         sql_upper = masked_sql.upper()
         warnings = []
         if "DROP TABLE" in sql_upper or "TRUNCATE" in sql_upper:
@@ -1717,17 +1715,23 @@ class SQLTranspiler:
             warnings.append("💡 CROSS JOIN can produce large result sets")
         if sql_upper.count("JOIN") > 5:
             warnings.append("💡 Query has many JOINs - consider query optimization")
-        if source == "hive" and target in ["mysql", "postgres", "oracle"]:
-            if "DISTRIBUTE BY" in sql_upper or "CLUSTER BY" in sql_upper:
-                warnings.append("⚠️ DISTRIBUTE BY/CLUSTER BY are Hive-specific hints, removed in target")
-            if "SORT BY" in sql_upper:
-                warnings.append("⚠️ SORT BY is Hive-specific, converted to ORDER BY")
-        if source in ["hive", "spark"] and target in ["mysql", "postgres"]:
-            if "COLLECT_LIST" in sql_upper or "COLLECT_SET" in sql_upper:
-                warnings.append("💡 Array aggregation converted - verify result format")
+        if (
+            source == "hive"
+            and target in ["mysql", "postgres", "oracle"]
+            and ("DISTRIBUTE BY" in sql_upper or "CLUSTER BY" in sql_upper)
+        ):
+            warnings.append("⚠️ DISTRIBUTE BY/CLUSTER BY are Hive-specific hints, removed in target")
+        if source == "hive" and target in ["mysql", "postgres", "oracle"] and "SORT BY" in sql_upper:
+            warnings.append("⚠️ SORT BY is Hive-specific, converted to ORDER BY")
+        if (
+            source in ["hive", "spark"]
+            and target in ["mysql", "postgres"]
+            and ("COLLECT_LIST" in sql_upper or "COLLECT_SET" in sql_upper)
+        ):
+            warnings.append("💡 Array aggregation converted - verify result format")
         return warnings
 
-    def _validate_output(self, sql: str, dialect: str) -> Optional[str]:
+    def _validate_output(self, sql: str, dialect: str) -> str | None:
         """Validate target SQL, preserving the original error-only interface."""
         error, _, _ = self._validate_output_detailed(sql, dialect)
         return error
@@ -1746,7 +1750,7 @@ class SQLTranspiler:
             return False
         try:
             tree = sqlglot.parse_one(sql, read="mysql")
-        except Exception:
+        except Exception:  # noqa: BLE001 - GROUP_CONCAT guard is fail closed
             # Unparseable output is already caught by _validate_output_detailed.
             return False
         for gc in tree.find_all(exp.GroupConcat):
@@ -1757,7 +1761,7 @@ class SQLTranspiler:
 
     def _validate_output_detailed(
         self, sql: str, dialect: str
-    ) -> tuple[Optional[str], Optional[str], str]:
+    ) -> tuple[str | None, str | None, str]:
         """Validate target SQL with a generic-parser compatibility fallback.
 
         Returns ``(error, warning, target_validation_state)`` where
@@ -1770,11 +1774,11 @@ class SQLTranspiler:
         try:
             sqlglot.parse_one(sql, read=dialect)
             return None, None, "target_valid"
-        except Exception as target_error:
+        except Exception as target_error:  # noqa: BLE001 - target parser fallback
             target_message = str(target_error)[:100]
             try:
                 sqlglot.parse_one(sql)
-            except Exception:
+            except Exception:  # noqa: BLE001 - generic parser fallback
                 return (
                     f"⚠️ Output SQL may have syntax issues: {target_message}",
                     None,
@@ -1794,7 +1798,7 @@ class SQLTranspiler:
         sql: str,
         dialect: str | None = None,
         block_dangerous: bool | None = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Validate SQL using the canonical scanner and AST checks.
 
         ``block_dangerous`` is an optional per-call override used by the
@@ -1807,7 +1811,12 @@ class SQLTranspiler:
             if block_dangerous is None
             else bool(block_dangerous)
         )
-        result = {"blocked": False, "reason": None, "warnings": [], "executable_sql": None}
+        result: dict[str, Any] = {
+            "blocked": False,
+            "reason": None,
+            "warnings": [],
+            "executable_sql": None,
+        }
         executable_sql = mask_non_executable(sql, dialect=dialect)
         result["executable_sql"] = executable_sql
 
@@ -1815,9 +1824,9 @@ class SQLTranspiler:
         # The read dialect is part of the cache key because the DML check has
         # historically used sqlglot's generic parser while dangerous/system
         # checks use the request dialect.
-        parsed_cache: Dict[Tuple[str, Optional[str]], Optional[list]] = {}
+        parsed_cache: dict[tuple[str, str | None], list | None] = {}
 
-        def parse_cached(statement: str, read: str | None) -> Optional[list]:
+        def parse_cached(statement: str, read: str | None) -> list | None:
             key = (statement, read)
             if key not in parsed_cache:
                 try:
@@ -1826,7 +1835,7 @@ class SQLTranspiler:
                         if read
                         else sqlglot.parse(statement)
                     )
-                except Exception:
+                except Exception:  # noqa: BLE001 - security parser is fail closed
                     parsed_cache[key] = None
             return parsed_cache[key]
 
@@ -1922,14 +1931,14 @@ class SQLTranspiler:
                 result["warnings"].append(f"⚠️ {message}")
         return result
 
-    def batch_transpile(self, statements: List[str], source: str, target: str, pretty: bool = True) -> List[TranspileResult]:
+    def batch_transpile(self, statements: list[str], source: str, target: str, pretty: bool = True) -> list[TranspileResult]:
         if not isinstance(statements, list):
             raise ValidationError("statements must be a list", field="statements", value=type(statements).__name__)
         if len(statements) > settings.max_batch_size:
             raise ValidationError(f"Batch contains {len(statements)} statements; maximum is {settings.max_batch_size}", field="statements", value=str(len(statements)))
         return [self.transpile(sql, source, target, pretty) for sql in statements]
 
-    async def batch_transpile_async(self, statements: List[str], source: str, target: str, pretty: bool = True, max_concurrent: int = 10) -> List[TranspileResult]:
+    async def batch_transpile_async(self, statements: list[str], source: str, target: str, pretty: bool = True, max_concurrent: int = 10) -> list[TranspileResult]:
         if not isinstance(statements, list):
             raise ValidationError("statements must be a list", field="statements", value=type(statements).__name__)
         if len(statements) > settings.max_batch_size:
@@ -1945,10 +1954,10 @@ class SQLTranspiler:
 
         return await asyncio.gather(*(limited_transpile(sql) for sql in statements))
 
-    def get_supported_dialects(self) -> List[str]:
+    def get_supported_dialects(self) -> list[str]:
         return SUPPORTED_DIALECTS.copy()
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         return {
             "supported_dialects": len(SUPPORTED_DIALECTS),
             "dialects": SUPPORTED_DIALECTS,

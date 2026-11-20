@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import re
-from typing import Iterable, Optional
+from collections.abc import Iterable
 
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)*$")
 
 
-def validate_column_hints(column_hints: Optional[Iterable[str]]) -> Optional[str]:
+def validate_column_hints(column_hints: Iterable[str] | None) -> str | None:
     """Return a stable validation error for unsafe or malformed column hints."""
     if column_hints is None:
         return None

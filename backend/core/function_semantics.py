@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Semantics-aware function equivalence metadata for SQL dialect conversion.
 
 The existing function catalog answers "is there syntax for this function?".
@@ -9,10 +8,9 @@ Only explicitly-reviewed functions and dialect pairs are classified as
 semantic equivalence. Unreviewed pairs remain ``unknown`` instead of being
 inferred from syntax availability or fuzzy matching.
 """
-from typing import Any, Dict, Tuple
+from typing import Any
 
-
-FunctionKey = Tuple[str, str, str]
+FunctionKey = tuple[str, str, str]
 
 
 _SEMANTIC_STATUS = {
@@ -26,7 +24,7 @@ _SEMANTIC_STATUS = {
 # Explicit metadata for the initial high-risk cross-dialect corpus.
 # Keep this registry intentionally small: additions require semantic review and
 # a regression test rather than being inferred from functions_db.json syntax.
-_FUNCTION_SEMANTICS: Dict[str, Dict[str, Any]] = {
+_FUNCTION_SEMANTICS: dict[str, dict[str, Any]] = {
     "DATEDIFF": {
         "argument_semantics": "calendar-day difference; argument order and/or unit syntax is dialect-sensitive",
         "return_shape": "scalar integer-like value",
@@ -104,10 +102,10 @@ _FUNCTION_SEMANTICS: Dict[str, Dict[str, Any]] = {
 class FunctionSemanticRegistry:
     """Resolve explicit semantic equivalence for reviewed SQL functions."""
 
-    def __init__(self, semantics: Dict[str, Dict[str, Any]] = None) -> None:
+    def __init__(self, semantics: dict[str, dict[str, Any]] | None = None) -> None:
         self._semantics = semantics if semantics is not None else _FUNCTION_SEMANTICS
 
-    def resolve(self, function: str, source: str, target: str) -> Dict[str, Any]:
+    def resolve(self, function: str, source: str, target: str) -> dict[str, Any]:
         """Return an explicit semantic classification for a function pair."""
         function_name = function.upper().strip()
         source_dialect = source.lower().strip()
@@ -143,6 +141,6 @@ class FunctionSemanticRegistry:
             "notes": metadata.get("notes", ""),
         }
 
-    def get_metadata(self, function: str) -> Dict[str, Any]:
+    def get_metadata(self, function: str) -> dict[str, Any]:
         """Return reviewed metadata without inferring semantic equivalence."""
         return self._semantics.get(function.upper().strip(), {})

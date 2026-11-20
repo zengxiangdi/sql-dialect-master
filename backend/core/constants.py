@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Application constants for SQL Dialect Master.
 
 Centralizes all magic numbers and hardcoded values for better maintainability.
