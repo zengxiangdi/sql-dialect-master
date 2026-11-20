@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Middleware for SQL Dialect Master API.
 
 Provides rate limiting, request-size protection, logging, and security headers.
@@ -9,22 +8,31 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Dict
+from datetime import UTC, datetime
+from typing import Any, cast
 
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse
-from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.concurrency import run_in_threadpool
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from backend.core.exceptions import ErrorCode
 
 from .client_identity import resolve_client_ip
 from .metrics import record_rate_limit_rejection
-from .rate_limit_store import InMemoryRateLimitStore, RateLimitStore, create_rate_limit_store
+from .rate_limit_store import (
+    InMemoryRateLimitStore,
+    RateLimitStore,
+    create_rate_limit_store,
+)
 from .readiness import health_probe_response
 
 logger = logging.getLogger(__name__)
+
+
+def _now_iso() -> str:
+    """Return a UTC timestamp while preserving the existing naive ISO shape."""
+    return datetime.now(UTC).replace(tzinfo=None).isoformat()
 DEFAULT_MAX_REQUEST_BODY_BYTES = 512 * 1024
 
 
@@ -43,7 +51,12 @@ class RateLimitEntry:
 class RateLimiter:
     """Rate limiter backed by a local or shared store."""
 
-    def __init__(self, requests_per_window: int = 100, window_seconds: int = 60, store: RateLimitStore = None):
+    def __init__(
+        self,
+        requests_per_window: int = 100,
+        window_seconds: int = 60,
+        store: RateLimitStore | None = None,
+    ):
         if requests_per_window <= 0:
             raise ValueError("requests_per_window must be positive")
         if window_seconds <= 0:
@@ -60,7 +73,7 @@ class RateLimiter:
     def is_allowed(self, client_id: str) -> tuple:
         return self._store.check(client_id, self._requests_per_window, self._window_seconds)
 
-    def get_stats(self) -> Dict:
+    def get_stats(self) -> dict:
         stats = self._store.stats()
         stats.update({"requests_per_window": self._requests_per_window, "window_seconds": self._window_seconds})
         return stats
@@ -69,7 +82,14 @@ class RateLimiter:
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """Rate limiting middleware with a bounded request-body guard."""
 
-    def __init__(self, app, limiter: RateLimiter = None, enabled: bool = True, max_body_bytes: int = DEFAULT_MAX_REQUEST_BODY_BYTES, trusted_proxies: tuple = ()):
+    def __init__(
+        self,
+        app,
+        limiter: RateLimiter | None = None,
+        enabled: bool = True,
+        max_body_bytes: int = DEFAULT_MAX_REQUEST_BODY_BYTES,
+        trusted_proxies: tuple = (),
+    ):
         super().__init__(app)
         if max_body_bytes <= 0:
             raise ValueError("max_body_bytes must be positive")
@@ -91,18 +111,18 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             try:
                 declared_length = int(content_length)
             except ValueError:
-                return JSONResponse(status_code=400, content={"success": False, "error": {"code": 400, "message": "Invalid Content-Length"}, "timestamp": datetime.now().isoformat()})
+                return JSONResponse(status_code=400, content={"success": False, "error": {"code": 400, "message": "Invalid Content-Length"}, "timestamp": _now_iso()})
             if declared_length < 0:
-                return JSONResponse(status_code=400, content={"success": False, "error": {"code": 400, "message": "Invalid Content-Length"}, "timestamp": datetime.now().isoformat()})
+                return JSONResponse(status_code=400, content={"success": False, "error": {"code": 400, "message": "Invalid Content-Length"}, "timestamp": _now_iso()})
             if declared_length > self.max_body_bytes:
-                return JSONResponse(status_code=413, content={"success": False, "error": {"code": 413, "message": "Request body exceeds the maximum allowed size", "max_bytes": self.max_body_bytes}, "timestamp": datetime.now().isoformat()})
+                return JSONResponse(status_code=413, content={"success": False, "error": {"code": 413, "message": "Request body exceeds the maximum allowed size", "max_bytes": self.max_body_bytes}, "timestamp": _now_iso()})
 
         total = 0
         chunks = []
         async for chunk in request.stream():
             total += len(chunk)
             if total > self.max_body_bytes:
-                return JSONResponse(status_code=413, content={"success": False, "error": {"code": 413, "message": "Request body exceeds the maximum allowed size", "max_bytes": self.max_body_bytes}, "timestamp": datetime.now().isoformat()})
+                return JSONResponse(status_code=413, content={"success": False, "error": {"code": 413, "message": "Request body exceeds the maximum allowed size", "max_bytes": self.max_body_bytes}, "timestamp": _now_iso()})
             chunks.append(chunk)
         request._body = b"".join(chunks)
         return None
@@ -138,7 +158,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 logger.warning("Rate limit exceeded for client: %s", _sanitize_log_value(client_id))
                 return JSONResponse(
                     status_code=429,
-                    content={"success": False, "error": {"code": 429, "message": "Rate limit exceeded", "retry_after": reset_time}, "timestamp": datetime.now().isoformat()},
+                    content={"success": False, "error": {"code": 429, "message": "Rate limit exceeded", "retry_after": reset_time}, "timestamp": _now_iso()},
                     headers={"X-RateLimit-Limit": str(self.limiter._requests_per_window), "X-RateLimit-Remaining": "0", "X-RateLimit-Reset": str(reset_time), "Retry-After": str(reset_time)},
                 )
 
@@ -237,10 +257,10 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
         raw_body = b""
         try:
             if hasattr(response, "body"):
-                raw_body = response.body
+                raw_body = bytes(response.body)
             else:
                 chunks = []
-                async for chunk in response.body_iterator:
+                async for chunk in cast(Any, response).body_iterator:
                     chunks.append(chunk)
                 raw_body = b"".join(chunks)
             # GZipMiddleware is inside this middleware.  Error responses over
@@ -336,7 +356,7 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
         normalized = {
             "success": False,
             "error": error,
-            "timestamp": payload.get("timestamp", datetime.now().isoformat()) if isinstance(payload, dict) else datetime.now().isoformat(),
+            "timestamp": payload.get("timestamp", _now_iso()) if isinstance(payload, dict) else _now_iso(),
             "request_id": request_id,
         }
         headers = dict(response.headers)
@@ -354,7 +374,7 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
         request.state.request_id = request_id
         status_code = 500
         error = None
-        log_data = {"event": "request_start", "request_id": request_id, "method": _sanitize_log_value(request.method), "path": _sanitize_log_value(request.url.path), "query": _sanitize_log_value(str(request.query_params)), "client": _sanitize_log_value(resolve_client_ip(request, self.trusted_proxies)), "timestamp": datetime.now().isoformat()}
+        log_data: dict[str, object] = {"event": "request_start", "request_id": request_id, "method": _sanitize_log_value(request.method), "path": _sanitize_log_value(request.url.path), "query": _sanitize_log_value(str(request.query_params)), "client": _sanitize_log_value(resolve_client_ip(request, self.trusted_proxies)), "timestamp": _now_iso()}
         logger.info(json.dumps(log_data))
         try:
             response = await call_next(request)
@@ -365,7 +385,7 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
             raise
         finally:
             process_time = time.perf_counter() - start_time
-            log_data = {"event": "request_end", "request_id": request_id, "method": _sanitize_log_value(request.method), "path": _sanitize_log_value(request.url.path), "status_code": status_code, "process_time_ms": round(process_time * 1000, 2), "error": error, "timestamp": datetime.now().isoformat()}
+            log_data = {"event": "request_end", "request_id": request_id, "method": _sanitize_log_value(request.method), "path": _sanitize_log_value(request.url.path), "status_code": status_code, "process_time_ms": round(process_time * 1000, 2), "error": error, "timestamp": _now_iso()}
             (logger.warning if status_code >= 400 else logger.info)(json.dumps(log_data))
         response.headers["X-Request-ID"] = request_id
         return response

@@ -58,7 +58,7 @@ class BoundedWorkerPool:
         wrapped.add_done_callback(lambda completed: None if completed.cancelled() else completed.exception())
         try:
             return await asyncio.wait_for(asyncio.shield(wrapped), timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             with self._stats_lock:
                 self._timeouts += 1
             raise

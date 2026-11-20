@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """FastAPI Backend for SQL Dialect Master.
 
 Enterprise-grade multi-database SQL conversion API:
@@ -11,17 +10,17 @@ Enterprise-grade multi-database SQL conversion API:
 Exact counts are derived from the canonical data files at runtime —
 see backend.core.metadata — and must not be restated here.
 """
-import asyncio
 import atexit
 import copy
 import logging
 import time
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import asdict
-from datetime import datetime
+from datetime import UTC, datetime
 from functools import lru_cache
 from threading import Lock
-from typing import Annotated, Any, Dict, List, Optional
+from typing import Annotated, Any, cast
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.exception_handlers import request_validation_exception_handler
@@ -53,11 +52,11 @@ from backend.core.functions_lookup import FunctionEncyclopedia
 from backend.core.nl2sql import NL2SQLGenerator, NL2SQLResult
 from backend.core.nl2sql_components.evidence import EvidenceItem, GenerationEvidence
 from backend.core.nl2sql_llm import LLMError, LLMN2SQLClient, validate_llm_sql
+from backend.core.nl2sql_pipeline.orchestrator import SAFE_TABLE_HINT
 from backend.core.nl2sql_schema import (
     MAX_SCHEMA_RELATIONSHIP_COLUMN_PAIRS,
     SchemaContext,
 )
-from backend.core.nl2sql_pipeline.orchestrator import SAFE_TABLE_HINT
 from backend.core.parser import SUPPORTED_DIALECTS, SQLParser
 from backend.core.semantic_diff import diff_sql_ast
 from backend.core.transpiler import SQLTranspiler
@@ -67,11 +66,16 @@ from backend.core.type_mapping import TypeMapper
 # Keep an INFO fallback for defensive compatibility with custom settings
 # objects, while normal AppSettings values are resolved from SDM_LOG_LEVEL.
 _log_level = getattr(logging, settings.log_level.upper(), logging.INFO)
-logger = setup_logging(level=_log_level, log_file=settings.log_file or None)
+logger = setup_logging(level=_log_level, log_file=settings.log_file or "")
 api_logger = logging.getLogger(__name__)
+
+
+def _now_iso() -> str:
+    """Return a UTC timestamp while preserving the existing naive ISO shape."""
+    return datetime.now(UTC).replace(tzinfo=None).isoformat()
 _worker_pool: BoundedWorkerPool | None = None
 _worker_pool_lock = Lock()
-_worker_pool_exit_hook = None
+_worker_pool_exit_hook: Callable[[], None] | None = None
 
 
 def _get_worker_pool() -> BoundedWorkerPool:
@@ -161,7 +165,7 @@ async def _run_cpu_bound(func, *args):
             detail=str(exc),
             headers={"Retry-After": "1"},
         ) from exc
-    except asyncio.TimeoutError as exc:
+    except TimeoutError as exc:
         raise HTTPException(
             status_code=504,
             detail="Request processing timed out",
@@ -261,7 +265,7 @@ from backend.api.middleware import (
     SecurityHeadersMiddleware,
     StructuredLoggingMiddleware,
 )
-from backend.core.exceptions import SDMException, UnsupportedDialectError, ErrorCode
+from backend.core.exceptions import ErrorCode, SDMException, UnsupportedDialectError
 
 # Configure CORS from the centralized Pydantic settings source.
 ALLOWED_ORIGINS = [origin.strip() for origin in settings.allowed_origins.split(",") if origin.strip()]
@@ -405,14 +409,14 @@ class ConvertResponse(BaseModel):
     """SQL conversion response model."""
     success: bool = Field(..., description="Whether conversion was successful")
     source_sql: str = Field(..., description="Original SQL statement")
-    target_sql: Optional[str] = Field(None, description="Converted SQL statement")
+    target_sql: str | None = Field(None, description="Converted SQL statement")
     source_dialect: str = Field(..., description="Source dialect")
     target_dialect: str = Field(..., description="Target dialect")
-    error: Optional[str] = Field(None, description="Error message if conversion failed")
-    error_code: Optional[str] = Field(None, description="Stable machine-readable error category")
-    compatibility_notes: List[str] = Field(default_factory=list, description="Compatibility notes")
-    transformations: List[str] = Field(default_factory=list, description="Applied transformations")
-    warnings: List[str] = Field(default_factory=list, description="Conversion warnings")
+    error: str | None = Field(None, description="Error message if conversion failed")
+    error_code: str | None = Field(None, description="Stable machine-readable error category")
+    compatibility_notes: list[str] = Field(default_factory=list, description="Compatibility notes")
+    transformations: list[str] = Field(default_factory=list, description="Applied transformations")
+    warnings: list[str] = Field(default_factory=list, description="Conversion warnings")
     target_validation_state: str = Field(
         "target_valid",
         description=(
@@ -424,13 +428,13 @@ class ConvertResponse(BaseModel):
             '"invalid": neither parser accepts the output.'
         ),
     )
-    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat(), description="Response timestamp")
+    timestamp: str = Field(default_factory=lambda: _now_iso(), description="Response timestamp")
 
 
 class BatchConvertRequest(BaseModel):
     """Convert an ordered, bounded list using one dialect pair."""
 
-    statements: List[BatchSQLStatement] = Field(
+    statements: list[BatchSQLStatement] = Field(
         ...,
         min_length=1,
         max_length=settings.max_batch_size,
@@ -451,11 +455,11 @@ class BatchConvertResponse(BaseModel):
     """Ordered conversion results, including ordinary per-item failures."""
 
     success: bool
-    results: List[BatchConvertItemResponse]
+    results: list[BatchConvertItemResponse]
     count: int
     succeeded: int
     failed: int
-    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
+    timestamp: str = Field(default_factory=lambda: _now_iso())
 
 
 SchemaIdentifier = Annotated[
@@ -470,13 +474,13 @@ SchemaIdentifier = Annotated[
 
 class SchemaColumn(BaseModel):
     name: SchemaIdentifier
-    type: Optional[str] = None
+    type: str | None = None
 
 
 class SchemaTable(BaseModel):
     name: SchemaIdentifier
-    columns: List[SchemaColumn] = Field(default_factory=list, max_length=200)
-    primary_key: Optional[List[SchemaIdentifier]] = Field(None, max_length=8)
+    columns: list[SchemaColumn] = Field(default_factory=list, max_length=200)
+    primary_key: list[SchemaIdentifier] | None = Field(None, max_length=8)
 
     @model_validator(mode="after")
     def validate_primary_key(self):
@@ -495,10 +499,10 @@ class SchemaColumnPair(BaseModel):
 
 class SchemaRelationship(BaseModel):
     from_table: SchemaIdentifier
-    from_column: Optional[SchemaIdentifier] = None
+    from_column: SchemaIdentifier | None = None
     to_table: SchemaIdentifier
-    to_column: Optional[SchemaIdentifier] = None
-    columns: Optional[List[SchemaColumnPair]] = Field(None, max_length=8)
+    to_column: SchemaIdentifier | None = None
+    columns: list[SchemaColumnPair] | None = Field(None, max_length=8)
 
     @model_validator(mode="after")
     def validate_representation(self):
@@ -518,8 +522,8 @@ class SchemaRelationship(BaseModel):
 
 
 class SchemaDefinition(BaseModel):
-    tables: List[SchemaTable] = Field(default_factory=list, max_length=50)
-    relationships: List[SchemaRelationship] = Field(default_factory=list, max_length=200)
+    tables: list[SchemaTable] = Field(default_factory=list, max_length=50)
+    relationships: list[SchemaRelationship] = Field(default_factory=list, max_length=200)
 
     @model_validator(mode="after")
     def validate_total_columns(self):
@@ -539,11 +543,14 @@ class SchemaDefinition(BaseModel):
                 or relationship.to_table.casefold() not in table_names
             ):
                 raise ValueError("invalid schema relationship")
-            pairs = (
-                [(relationship.from_column, relationship.to_column)]
-                if relationship.columns is None
-                else [(pair.from_column, pair.to_column) for pair in relationship.columns]
-            )
+            if relationship.columns is None:
+                if relationship.from_column is None or relationship.to_column is None:
+                    raise ValueError("invalid schema relationship")
+                pairs: list[tuple[str, str]] = [
+                    (relationship.from_column, relationship.to_column)
+                ]
+            else:
+                pairs = [(pair.from_column, pair.to_column) for pair in relationship.columns]
             relationship_pair_count += len(pairs)
             if relationship_pair_count > MAX_SCHEMA_RELATIONSHIP_COLUMN_PAIRS:
                 raise ValueError("invalid schema relationship")
@@ -570,13 +577,13 @@ class NL2SQLRequest(BaseModel):
         description="Natural language query (Chinese or English)",
     )
     dialect: str = Field("hive", description="Target SQL dialect")
-    table_hint: Optional[str] = Field(None, description="Optional table name hint")
-    column_hints: Optional[List[str]] = Field(
+    table_hint: str | None = Field(None, description="Optional table name hint")
+    column_hints: list[str] | None = Field(
         None,
         description="Optional column identifier hints; accepts simple or dotted identifiers",
     )
     # Alias avoids shadowing Pydantic's legacy BaseModel.schema method.
-    schema_definition: Optional[SchemaDefinition] = Field(
+    schema_definition: SchemaDefinition | None = Field(
         None, alias="schema", description="Optional database schema for LLM generation and validation",
     )
 
@@ -593,28 +600,28 @@ class NL2SQLResponse(BaseModel):
     """Natural language to SQL response model."""
     success: bool = Field(..., description="Whether generation was successful")
     input_text: str = Field(..., description="Original natural language input")
-    sql: Optional[str] = Field(None, description="Generated SQL statement")
+    sql: str | None = Field(None, description="Generated SQL statement")
     dialect: str = Field(..., description="Target dialect")
     explanation: str = Field("", description="Explanation of generated SQL")
     confidence: float = Field(0.0, description="Confidence score (0.0-1.0)")
-    suggestions: List[str] = Field(default_factory=list, description="Improvement suggestions")
-    parameter_style: Optional[str] = Field(
+    suggestions: list[str] = Field(default_factory=list, description="Improvement suggestions")
+    parameter_style: str | None = Field(
         None,
         description=(
             "Placeholder style for generated DML: numeric ($1 in PostgreSQL/Redshift, "
             ":1 in Oracle), named (@p1 in T-SQL), format (%s in MySQL), or qmark (?)"
         ),
     )
-    parameters: List[str] = Field(
+    parameters: list[str] = Field(
         default_factory=list,
         description="Ordered placeholders that callers must bind for generated DML",
     )
-    evidence: Optional[Dict[str, Any]] = Field(
+    evidence: dict[str, Any] | None = Field(
         None, description="Structured evidence supporting the confidence score",
     )
     provider: str = "deterministic"
-    model: Optional[str] = None
-    fallback_reason: Optional[str] = None
+    model: str | None = None
+    fallback_reason: str | None = None
     schema_used: bool = False
 
 class ParseRequest(BaseModel):
@@ -660,9 +667,9 @@ class TypeMapRequest(BaseModel):
 class APIResponse(BaseModel):
     """Standard API response wrapper."""
     success: bool = Field(..., description="Operation success status")
-    data: Optional[Dict[str, Any]] = Field(None, description="Response data")
-    error: Optional[str] = Field(None, description="Error message if failed")
-    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
+    data: dict[str, Any] | None = Field(None, description="Response data")
+    error: str | None = Field(None, description="Error message if failed")
+    timestamp: str = Field(default_factory=lambda: _now_iso())
 
 # === API Endpoints ===
 
@@ -713,7 +720,7 @@ async def root():
                 }
             }
         },
-        "timestamp": datetime.now().isoformat()
+        "timestamp": _now_iso()
     }
 
 @app.get("/api/dialects", tags=["system"])
@@ -727,7 +734,7 @@ async def get_dialects():
     - Grouped by category for easy navigation
     """
     # Group dialects by category
-    by_category = {}
+    by_category: dict[str, list[dict[str, str]]] = {}
     for dialect, info in DIALECT_INFO.items():
         cat = info["category"]
         if cat not in by_category:
@@ -884,7 +891,7 @@ async def parse_sql(request: ParseRequest):
         "success": True,
         "dialect": dialect,
         "elements": elements,
-        "timestamp": datetime.now().isoformat()
+        "timestamp": _now_iso()
     }
 
 
@@ -908,8 +915,8 @@ async def compare_semantic_diff(request: DiffRequest):
 
 @app.get("/api/functions", tags=["functions"])
 async def list_functions(
-    search: Optional[str] = Query(None, description="Search term for function name"),
-    category: Optional[str] = Query(None, description="Filter by category (string, date, math, etc.)"),
+    search: str | None = Query(None, description="Search term for function name"),
+    category: str | None = Query(None, description="Filter by category (string, date, math, etc.)"),
     limit: int = Query(50, ge=1, le=500, description="Maximum number of results")
 ):
     """
@@ -923,20 +930,19 @@ async def list_functions(
     - `/api/functions?limit=100` - Get first 100 functions
     """
     normalized_category = category.strip().lower() if category is not None else None
-    if category is not None:
-        if normalized_category not in func_encyclopedia.CATEGORIES:
-            raise HTTPException(
-                status_code=400,
-                detail=(f"Unknown function category: {category}. Available categories: "
-                        + ", ".join(func_encyclopedia.CATEGORIES)),
-            )
+    if category is not None and normalized_category not in func_encyclopedia.CATEGORIES:
+        raise HTTPException(
+            status_code=400,
+            detail=(f"Unknown function category: {category}. Available categories: "
+                    + ", ".join(func_encyclopedia.CATEGORIES)),
+        )
     if search:
         # The search cache applies the category predicate before ranking and
         # the public limit, so category-filtered queries do not scan or copy
         # unrelated function records.
-        functions = func_encyclopedia.search(search, limit, normalized_category)
+        functions = func_encyclopedia.search(search, limit, cast(str, normalized_category))
     elif category:
-        functions = func_encyclopedia.list_by_category(normalized_category)[:limit]
+        functions = func_encyclopedia.list_by_category(cast(str, normalized_category))[:limit]
     else:
         functions = func_encyclopedia.functions[:limit]
 
@@ -985,8 +991,8 @@ async def get_function(name: str):
 
 @app.get("/api/types", tags=["types"])
 async def list_types(
-    source: Optional[str] = Query(None, description="Filter by source dialect"),
-    target: Optional[str] = Query(None, description="Filter by target dialect")
+    source: str | None = Query(None, description="Filter by source dialect"),
+    target: str | None = Query(None, description="Filter by target dialect")
 ):
     """
     Get type mapping matrix.
@@ -1004,7 +1010,7 @@ async def list_types(
         source = normalize_dialect(source, "source dialect")
     if target is not None:
         target = normalize_dialect(target, "target dialect")
-    matrix = type_mapper.get_matrix(source, target)
+    matrix = type_mapper.get_matrix(cast(str, source), cast(str, target))
     mappings = [
         {"type": type_name, **mapping}
         for type_name, mapping in matrix.items()
@@ -1053,7 +1059,7 @@ async def map_type(request: TypeMapRequest):
     return {
         "success": result.get("success", False),
         **result,
-        "timestamp": datetime.now().isoformat()
+        "timestamp": _now_iso()
     }
 
 @app.post("/api/nl2sql", response_model=NL2SQLResponse, tags=["nl2sql"])
@@ -1124,7 +1130,11 @@ async def generate_sql(request: NL2SQLRequest):
                 request.text, dialect, request.table_hint, request.column_hints,
                 **schema_options,
             )
-            sql = validate_llm_sql(generation.sql, dialect, **schema_options)
+            sql = (
+                validate_llm_sql(generation.sql, dialect)
+                if schema is None
+                else validate_llm_sql(generation.sql, dialect, schema=schema)
+            )
         except LLMError as exc:
             record_nl2sql_llm_request(exc.reason, time.perf_counter() - started)
             if settings.nl2sql_llm_fallback:
@@ -1202,7 +1212,7 @@ async def health_check():
     return {
         "status": "alive",
         "version": API_VERSION,
-        "timestamp": datetime.now().isoformat()
+        "timestamp": _now_iso()
     }
 
 @app.get("/ready", tags=["system"])
@@ -1252,7 +1262,7 @@ async def get_stats():
                 "details": DIALECT_INFO
             }
         },
-        "timestamp": datetime.now().isoformat()
+        "timestamp": _now_iso()
     }
 
 # Custom exception handler for better error responses
@@ -1288,7 +1298,7 @@ async def custom_http_exception_handler(request: Request, exc: HTTPException):
                 "message": exc.detail,
                 "type": "HTTPException"
             },
-            "timestamp": datetime.now().isoformat()
+            "timestamp": _now_iso()
         }
     )
 
@@ -1309,7 +1319,7 @@ async def sdm_exception_handler(request: Request, exc: SDMException):
         content={
             "success": False,
             "error": error,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": _now_iso()
         }
     )
 
@@ -1325,7 +1335,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
             "code": ErrorCode.INTERNAL_ERROR.value,
             "message": "Internal server error",
         },
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": _now_iso(),
     }
     if request_id:
         content["request_id"] = request_id

@@ -1,16 +1,15 @@
-#!/usr/bin/env python3
 """Input validation utilities for SQL Dialect Master.
 
 Provides validation functions for SQL, dialects, and other inputs.
 """
 import re
-from typing import Tuple, List
+from typing import cast
 
 from backend.core.config import SUPPORTED_DIALECTS, settings
 from backend.core.exceptions import (
-    ValidationError,
+    SecurityViolationError,
     UnsupportedDialectError,
-    SecurityViolationError
+    ValidationError,
 )
 
 
@@ -38,7 +37,7 @@ def validate_dialect(dialect: str, param_name: str = "dialect") -> str:
     return dialect_lower
 
 
-def validate_sql(sql: str, max_length: int = None) -> str:
+def validate_sql(sql: str, max_length: int | None = None) -> str:
     """Validate SQL input.
     
     Args:
@@ -72,10 +71,10 @@ def validate_sql(sql: str, max_length: int = None) -> str:
 
 def validate_sql_security(
     sql: str,
-    block_dangerous: bool = None,
+    block_dangerous: bool | None = None,
     *,
     dialect: str | None = None,
-) -> Tuple[bool, List[str]]:
+) -> tuple[bool, list[str]]:
     """Validate SQL for security issues.
     
     Args:
@@ -111,7 +110,7 @@ def validate_sql_security(
     return not warnings, warnings
 
 
-def validate_batch_size(size: int, max_size: int = None) -> int:
+def validate_batch_size(size: int, max_size: int | None = None) -> int:
     """Validate batch size.
     
     Args:
@@ -332,7 +331,7 @@ def split_sql_statements(sql: str, dialect: str = "postgres") -> list[str]:
                 continue
             else:
                 # Looking for closing $tag$
-                end_tag = "$" + dollar_tag + "$"
+                end_tag = "$" + cast(str, dollar_tag) + "$"
                 if sql[i:i + len(end_tag)] == end_tag:
                     stmt_chars.append(end_tag)
                     i += len(end_tag)
@@ -434,9 +433,7 @@ def split_sql_statements(sql: str, dialect: str = "postgres") -> list[str]:
             if word:
                 if skip_next_block_word:
                     skip_next_block_word = False
-                elif word == "BEGIN":
-                    block_depth += 1
-                elif word == "CASE":
+                elif word == "BEGIN" or word == "CASE":
                     block_depth += 1
                 elif word == "END":
                     block_depth = max(0, block_depth - 1)

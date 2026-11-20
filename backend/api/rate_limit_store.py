@@ -7,9 +7,10 @@ from __future__ import annotations
 
 import time
 from threading import Lock
-from typing import Optional, Protocol
+from typing import Protocol
 
-from backend.core.config import AppSettings, settings as _default_settings
+from backend.core.config import AppSettings
+from backend.core.config import settings as _default_settings
 
 
 class RateLimitStore(Protocol):
@@ -113,7 +114,7 @@ class RedisRateLimitStore:
         return {"backend": "redis", "namespace": self._namespace}
 
 
-def create_rate_limit_store(config: Optional[AppSettings] = None) -> RateLimitStore:
+def create_rate_limit_store(config: AppSettings | None = None) -> RateLimitStore:
     """Create the configured store; never silently downgrade Redis to memory.
 
     Reads configuration from ``config``, or from the unified
