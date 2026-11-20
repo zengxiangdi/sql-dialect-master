@@ -1,7 +1,7 @@
 """Small lexical scanner for SQL rewrites that must avoid literals/comments."""
 from __future__ import annotations
 
-from typing import Iterator, Tuple
+from collections.abc import Iterator
 
 
 def executable_segments(
@@ -9,7 +9,7 @@ def executable_segments(
     dialect: str | None = None,
     *,
     allow_possessive: bool = False,
-) -> Iterator[Tuple[int, int]]:
+) -> Iterator[tuple[int, int]]:
     """Yield [start, end) ranges outside strings, quoted identifiers/comments.
 
     MySQL treats ``#`` through end-of-line as a comment.  It is enabled only
@@ -67,8 +67,7 @@ def executable_segments(
                 i += 1
                 start = i
                 continue
-            if ch == "q" or ch == "Q":
-                if i + 2 < n and sql[i + 1] == "'":
+            if (ch == "q" or ch == "Q") and i + 2 < n and sql[i + 1] == "'":
                     opener = sql[i + 2]
                     closer = {"[": "]", "{": "}", "(": ")", "<": ">"}.get(opener, opener)
                     delimiter = f"{closer}'"

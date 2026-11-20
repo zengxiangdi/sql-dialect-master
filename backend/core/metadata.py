@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Canonical metadata for SQL Dialect Master.
 
 Single source of truth for product counts, version facts, and
@@ -61,11 +60,11 @@ def RULE_COUNT() -> int:
 
 
 __all__ = [
-    "PROJECT_VERSION",
     "API_VERSION",
     "FRONTEND_ARCHITECTURE_VERSION",
-    "SUPPORTED_DIALECTS_COUNT",
     "FUNCTION_COUNT",
-    "TYPE_COUNT",
+    "PROJECT_VERSION",
     "RULE_COUNT",
+    "SUPPORTED_DIALECTS_COUNT",
+    "TYPE_COUNT",
 ]

@@ -7,11 +7,8 @@ cannot be proven from the AST alone.
 from collections import Counter
 from dataclasses import dataclass, field
 from difflib import unified_diff
-from typing import List, Optional
 
-import sqlglot
 from sqlglot import exp
-
 
 _CONTEXT_SENSITIVE_FUNCTIONS = {
     "CURRENT_DATE",
@@ -50,7 +47,7 @@ class StructuredSemanticDifference:
     target_fragment: str
     explanation: str
     confidence: float = 1.0
-    evidence: Optional[str] = None
+    evidence: str | None = None
 
 
 @dataclass
@@ -58,16 +55,16 @@ class SemanticDiff:
     """Comparison result with an explicit semantic confidence status."""
 
     equivalent: bool
-    source_normalized: Optional[str]
-    target_normalized: Optional[str]
-    differences: List[str] = field(default_factory=list)
-    parse_error: Optional[str] = None
+    source_normalized: str | None
+    target_normalized: str | None
+    differences: list[str] = field(default_factory=list)
+    parse_error: str | None = None
     status: str = "different"
-    difference_categories: List[str] = field(default_factory=list)
-    structured_differences: List[StructuredSemanticDifference] = field(default_factory=list)
+    difference_categories: list[str] = field(default_factory=list)
+    structured_differences: list[StructuredSemanticDifference] = field(default_factory=list)
     semantic_classification: str = "definitely_different"
     confidence: float = 1.0
-    evidence: Optional[str] = None
+    evidence: str | None = None
 
 
 def _strip_redundant_parentheses(node: exp.Expression) -> exp.Expression:
@@ -99,7 +96,7 @@ def _node_counts(tree: exp.Expression) -> Counter[str]:
     return Counter(type(node).__name__ for node in tree.walk())
 
 
-def _function_names(tree: exp.Expression) -> List[str]:
+def _function_names(tree: exp.Expression) -> list[str]:
     names = []
     for node in tree.walk():
         sql_name = getattr(node, "sql_name", None)
@@ -114,7 +111,7 @@ def _function_names(tree: exp.Expression) -> List[str]:
     return sorted(names)
 
 
-def _context_sensitive_functions(tree: exp.Expression) -> List[str]:
+def _context_sensitive_functions(tree: exp.Expression) -> list[str]:
     names = set()
     for node in tree.walk():
         sql_name = getattr(node, "sql_name", None)
@@ -129,7 +126,7 @@ def _context_sensitive_functions(tree: exp.Expression) -> List[str]:
     return sorted(names)
 
 
-def _fragment_sql(node: Optional[exp.Expression]) -> str:
+def _fragment_sql(node: exp.Expression | None) -> str:
     if node is None:
         return ""
     return node.sql(dialect="", pretty=False).strip()
@@ -143,7 +140,7 @@ def _difference_categories(
     source_tree: exp.Expression,
     target_tree: exp.Expression,
     functions_differ: bool = False,
-) -> List[str]:
+) -> list[str]:
     """Return categories whose semantic regions actually changed."""
     categories = set()
     source_select = source_tree if isinstance(source_tree, exp.Select) else source_tree.find(exp.Select)
@@ -220,10 +217,10 @@ def _category_fragments(
 
 
 def _structured_explanations(
-    categories: List[str],
+    categories: list[str],
     source_tree: exp.Expression,
     target_tree: exp.Expression,
-) -> List[StructuredSemanticDifference]:
+) -> list[StructuredSemanticDifference]:
     explanations = {
         "predicate": ("error", "Predicate logic changed; boolean precedence or filtering behavior may differ."),
         "null_semantics": ("error", "NULL comparison semantics changed; SQL three-valued logic may produce different rows."),
@@ -237,7 +234,7 @@ def _structured_explanations(
         "literal_or_type": ("warning", "Literal or type representation changed and may affect coercion or comparison semantics."),
         "structure": ("error", "AST structure changed outside a more specific semantic category."),
     }
-    records: List[StructuredSemanticDifference] = []
+    records: list[StructuredSemanticDifference] = []
     for category in categories:
         severity, explanation = explanations.get(category, ("warning", "The SQL structure differs and requires semantic review."))
         source_fragment, target_fragment = _category_fragments(category, source_tree, target_tree)
@@ -270,7 +267,9 @@ def diff_sql_ast(
     try:
         source_tree = _parse_and_normalize(source_sql, source_dialect)
         target_tree = _parse_and_normalize(target_sql, target_dialect)
-    except Exception as exc:
+    # Semantic diff reports parse failures as analysis results regardless of
+    # which dialect reader exception was raised.
+    except Exception as exc:  # noqa: BLE001 - diff must classify parser failures as parse_error
         return SemanticDiff(
             equivalent=False,
             source_normalized=None,
@@ -289,8 +288,8 @@ def diff_sql_ast(
     target_functions = _function_names(target_tree)
     functions_differ = source_functions != target_functions
 
-    differences: List[str] = []
-    categories: List[str] = []
+    differences: list[str] = []
+    categories: list[str] = []
     if source_normalized != target_normalized:
         diff_lines = list(
             unified_diff(

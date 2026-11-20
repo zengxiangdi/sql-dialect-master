@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Function Encyclopedia - Search and compare SQL functions across dialects.
 
 Provides comprehensive SQL function lookup with:
@@ -8,22 +7,22 @@ Provides comprehensive SQL function lookup with:
 - Category-based filtering
 - Function examples and parameter documentation
 """
-import json
 import copy
+import json
 import logging
 import threading
 import time
 from collections import OrderedDict
-from pathlib import Path
-from typing import Optional, List, Dict, Any
 from difflib import SequenceMatcher
+from pathlib import Path
+from typing import Any, cast
 
 from .config import (
-    SUPPORTED_DIALECTS,
-    FUNCTION_CATEGORIES,
     CATEGORY_DESCRIPTIONS,
+    FUNCTION_CATEGORIES,
+    SUPPORTED_DIALECTS,
     FunctionInfo,
-    settings
+    settings,
 )
 from .exceptions import ConfigurationError
 from .function_semantics import FunctionSemanticRegistry
@@ -48,7 +47,7 @@ class FunctionEncyclopedia:
     CATEGORIES = FUNCTION_CATEGORIES
     CATEGORY_DESCRIPTIONS = CATEGORY_DESCRIPTIONS
     
-    def __init__(self, data_path: Optional[Path] = None, semantic_registry: Optional[FunctionSemanticRegistry] = None):
+    def __init__(self, data_path: Path | None = None, semantic_registry: FunctionSemanticRegistry | None = None):
         """Initialize encyclopedia with function data.
         
         Args:
@@ -59,14 +58,14 @@ class FunctionEncyclopedia:
             data_path = Path(__file__).parent / "functions_db.json"
         self.data_path = data_path
         self.semantic_registry = semantic_registry or FunctionSemanticRegistry()
-        self.functions: List[FunctionInfo] = self._load_data()
+        self.functions: list[FunctionInfo] = self._load_data()
         self._build_index()
         self._search_cache: OrderedDict[tuple[str, str | None, int], tuple[float, tuple[FunctionInfo, ...]]] = OrderedDict()
         self._search_cache_lock = threading.RLock()
         self._search_cache_max_size = 256
         self._search_cache_ttl = 60.0
     
-    def _load_data(self) -> List[FunctionInfo]:
+    def _load_data(self) -> list[FunctionInfo]:
         """Load function data from JSON file.
 
         Missing or malformed packaged data is a configuration error and must
@@ -99,8 +98,8 @@ class FunctionEncyclopedia:
     
     def _build_index(self) -> None:
         """Build search index for fast lookup."""
-        self.name_index: Dict[str, FunctionInfo] = {}
-        self.category_index: Dict[str, List[FunctionInfo]] = {cat: [] for cat in self.CATEGORIES}
+        self.name_index: dict[str, FunctionInfo] = {}
+        self.category_index: dict[str, list[FunctionInfo]] = {cat: [] for cat in self.CATEGORIES}
         
         for func in self.functions:
             name = func.get("name", "").upper()
@@ -110,7 +109,7 @@ class FunctionEncyclopedia:
             if category in self.category_index:
                 self.category_index[category].append(func)
     
-    def search(self, query: str, limit: int = None, category: str = None) -> List[FunctionInfo]:
+    def search(self, query: str, limit: int | None = None, category: str | None = None) -> list[FunctionInfo]:
         """Search functions with fuzzy matching.
         
         Args:
@@ -145,7 +144,7 @@ class FunctionEncyclopedia:
         if not query:
             result = candidates[:limit]
         else:
-            results: List[tuple] = []
+            results: list[tuple] = []
         
             for func in candidates:
                 name = func.get("name", "").upper()
@@ -175,28 +174,28 @@ class FunctionEncyclopedia:
                 self._search_cache.popitem(last=False)
         return copy.deepcopy(list(snapshot))
     
-    def get_function(self, name: str) -> Optional[FunctionInfo]:
+    def get_function(self, name: str) -> FunctionInfo | None:
         """Get detailed function information by exact name."""
         result = self.name_index.get(name.upper())
         return copy.deepcopy(result) if result is not None else None
     
-    def list_by_category(self, category: str) -> List[FunctionInfo]:
+    def list_by_category(self, category: str) -> list[FunctionInfo]:
         """List all functions in a category."""
         category = category.lower()
         return copy.deepcopy(self.category_index.get(category, []))
     
-    def get_dialect_syntax(self, func_name: str, dialect: str) -> Optional[str]:
+    def get_dialect_syntax(self, func_name: str, dialect: str) -> str | None:
         """Get function syntax for specific dialect."""
         func = self.get_function(func_name)
         if func:
             return func.get("dialects", {}).get(dialect.lower())
         return None
 
-    def resolve_function_semantics(self, func_name: str, source_dialect: str, target_dialect: str) -> Dict[str, Any]:
+    def resolve_function_semantics(self, func_name: str, source_dialect: str, target_dialect: str) -> dict[str, Any]:
         """Resolve reviewed semantic equivalence without inferring from syntax presence."""
         return self.semantic_registry.resolve(func_name, source_dialect, target_dialect)
     
-    def compare_dialects(self, func_name: str, dialects: List[str] = None) -> Dict[str, Any]:
+    def compare_dialects(self, func_name: str, dialects: list[str] | None = None) -> dict[str, Any]:
         """Compare function syntax across multiple dialects."""
         func = self.get_function(func_name)
         if not func:
@@ -205,7 +204,7 @@ class FunctionEncyclopedia:
         if dialects is None:
             dialects = SUPPORTED_DIALECTS
         
-        comparison = {
+        comparison: dict[str, Any] = {
             "name": func.get("name"),
             "description": func.get("description"),
             "category": func.get("category"),
@@ -228,7 +227,7 @@ class FunctionEncyclopedia:
         
         return comparison
     
-    def get_all_categories(self) -> List[Dict[str, Any]]:
+    def get_all_categories(self) -> list[dict[str, Any]]:
         """Get list of all categories with function counts and descriptions."""
         return [
             {
@@ -250,7 +249,7 @@ class FunctionEncyclopedia:
         }
         return icons.get(category, "📄")
     
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get comprehensive encyclopedia statistics."""
         dialect_coverage = {d: 0 for d in SUPPORTED_DIALECTS}
         for func in self.functions:
@@ -270,7 +269,7 @@ class FunctionEncyclopedia:
             )[:5]
         }
 
-    def find_equivalent(self, func_name: str, source_dialect: str, target_dialect: str) -> Optional[Dict[str, Any]]:
+    def find_equivalent(self, func_name: str, source_dialect: str, target_dialect: str) -> dict[str, Any] | None:
         """Find target syntax while exposing strict semantic classification."""
         func = self.get_function(func_name)
         if not func:
@@ -303,7 +302,7 @@ class FunctionEncyclopedia:
             "notes": func.get("notes", "")
         }
     
-    def get_functions_by_dialect(self, dialect: str) -> List[Dict[str, Any]]:
+    def get_functions_by_dialect(self, dialect: str) -> list[dict[str, Any]]:
         """Get all functions available in a specific dialect."""
         dialect = dialect.lower()
         available = []
@@ -321,7 +320,7 @@ class FunctionEncyclopedia:
         
         return available
     
-    def search_by_description(self, query: str, limit: int = 10) -> List[FunctionInfo]:
+    def search_by_description(self, query: str, limit: int = 10) -> list[FunctionInfo]:
         """Search functions by description text."""
         query = query.lower()
         results = []
@@ -337,7 +336,7 @@ class FunctionEncyclopedia:
         results.sort(key=lambda x: x[1], reverse=True)
         return [r[0] for r in results[:limit]]
     
-    def get_function_alternatives(self, func_name: str, dialect: str) -> List[Dict[str, Any]]:
+    def get_function_alternatives(self, func_name: str, dialect: str) -> list[dict[str, Any]]:
         """Get alternative functions for a dialect that doesn't support the original."""
         func = self.get_function(func_name)
         if not func:
@@ -364,5 +363,5 @@ class FunctionEncyclopedia:
                     ).ratio()
                 })
         
-        alternatives.sort(key=lambda x: x["similarity"], reverse=True)
+        alternatives.sort(key=lambda x: cast(float, x["similarity"]), reverse=True)
         return alternatives[:5]

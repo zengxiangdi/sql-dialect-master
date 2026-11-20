@@ -1,7 +1,7 @@
 """Scanner-backed function-call replacement shared by custom SQL rewrites."""
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 from .p1_sql_scanner import mask_non_executable
 

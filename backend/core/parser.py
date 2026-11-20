@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """SQL Parser - Parse and analyze SQL statements using sqlglot.
 
 Provides comprehensive SQL parsing with:
@@ -8,9 +7,8 @@ Provides comprehensive SQL parsing with:
 - Query type detection
 """
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-import sqlglot
 from sqlglot import exp
 
 from .config import SUPPORTED_DIALECTS, settings
@@ -23,13 +21,13 @@ __all__ = ['SUPPORTED_DIALECTS', 'ParseResult', 'SQLParser']
 class ParseResult:
     """Result of SQL parsing operation."""
     success: bool
-    ast: Optional[exp.Expression] = None
+    ast: exp.Expression | None = None
     dialect: str = ""
-    error: Optional[str] = None
-    tables: List[Dict[str, Any]] = field(default_factory=list)
-    columns: List[Dict[str, Any]] = field(default_factory=list)
-    functions: List[Dict[str, Any]] = field(default_factory=list)
-    joins: List[Dict[str, Any]] = field(default_factory=list)
+    error: str | None = None
+    tables: list[dict[str, Any]] = field(default_factory=list)
+    columns: list[dict[str, Any]] = field(default_factory=list)
+    functions: list[dict[str, Any]] = field(default_factory=list)
+    joins: list[dict[str, Any]] = field(default_factory=list)
     query_type: str = ""
 
 
@@ -77,7 +75,9 @@ class SQLParser:
             result.functions = self._extract_functions(ast)
             result.joins = self._extract_joins(ast)
             return result
-        except Exception as e:
+        # Parser callers require one stable failure result across dialect-specific
+        # sqlglot exceptions; no exception is allowed to escape this boundary.
+        except Exception as e:  # noqa: BLE001 - parser public API returns structured failure
             return ParseResult(
                 success=False,
                 error=str(e),
@@ -97,14 +97,18 @@ class SQLParser:
         try:
             parse_single_sql(sql, self.dialect)
             return True, None
-        except Exception as e:
+        # Keep validation's boolean/error contract for every reader failure.
+        except Exception as e:  # noqa: BLE001 - parser validation returns structured failure
             return False, str(e)
 
-    def extract_elements(self, sql: str) -> Dict[str, Any]:
+    def extract_elements(self, sql: str) -> dict[str, Any]:
         """Extract all SQL elements for analysis."""
         result = self.parse(sql)
         if not result.success:
             return {"error": result.error}
+        ast = result.ast
+        if ast is None:
+            return {"error": "SQL AST is unavailable"}
 
         return {
             "query_type": result.query_type,
@@ -112,21 +116,24 @@ class SQLParser:
             "columns": result.columns,
             "functions": result.functions,
             "joins": result.joins,
-            "has_subquery": self._has_subquery(result.ast),
-            "has_cte": self._has_cte(result.ast),
-            "has_window": self._has_window_function(result.ast),
-            "has_aggregation": self._has_aggregation(result.ast),
-            "has_distinct": self._has_distinct(result.ast),
-            "has_union": self._has_union(result.ast),
-            "has_order_by": self._has_order_by(result.ast),
-            "has_limit": self._has_limit(result.ast),
+            "has_subquery": self._has_subquery(ast),
+            "has_cte": self._has_cte(ast),
+            "has_window": self._has_window_function(ast),
+            "has_aggregation": self._has_aggregation(ast),
+            "has_distinct": self._has_distinct(ast),
+            "has_union": self._has_union(ast),
+            "has_order_by": self._has_order_by(ast),
+            "has_limit": self._has_limit(ast),
         }
 
-    def get_complexity_score(self, sql: str) -> Dict[str, Any]:
+    def get_complexity_score(self, sql: str) -> dict[str, Any]:
         """Calculate SQL complexity score."""
         result = self.parse(sql)
         if not result.success:
             return {"error": result.error, "score": 0}
+        ast = result.ast
+        if ast is None:
+            return {"error": "SQL AST is unavailable", "score": 0}
 
         score = 1
         factors = []
@@ -134,19 +141,19 @@ class SQLParser:
             join_score = len(result.joins) * 2
             score += join_score
             factors.append(f"Joins: +{join_score}")
-        if self._has_subquery(result.ast):
+        if self._has_subquery(ast):
             score += 3
             factors.append("Subquery: +3")
-        if self._has_cte(result.ast):
+        if self._has_cte(ast):
             score += 2
             factors.append("CTE: +2")
-        if self._has_window_function(result.ast):
+        if self._has_window_function(ast):
             score += 2
             factors.append("Window function: +2")
-        if self._has_aggregation(result.ast):
+        if self._has_aggregation(ast):
             score += 1
             factors.append("Aggregation: +1")
-        if self._has_union(result.ast):
+        if self._has_union(ast):
             score += 2
             factors.append("UNION: +2")
 
@@ -187,7 +194,7 @@ class SQLParser:
                 return name
         return "UNKNOWN"
 
-    def _extract_tables(self, ast: exp.Expression) -> List[Dict[str, Any]]:
+    def _extract_tables(self, ast: exp.Expression) -> list[dict[str, Any]]:
         """Extract all table references."""
         tables = []
         seen = set()
@@ -203,7 +210,7 @@ class SQLParser:
                 })
         return tables
 
-    def _extract_columns(self, ast: exp.Expression) -> List[Dict[str, Any]]:
+    def _extract_columns(self, ast: exp.Expression) -> list[dict[str, Any]]:
         """Extract all column references."""
         columns = []
         seen = set()
@@ -218,7 +225,7 @@ class SQLParser:
                 })
         return columns
 
-    def _extract_functions(self, ast: exp.Expression) -> List[Dict[str, Any]]:
+    def _extract_functions(self, ast: exp.Expression) -> list[dict[str, Any]]:
         """Extract all function calls."""
         functions = []
         seen = set()
@@ -266,7 +273,7 @@ class SQLParser:
             add(value)
         return count
 
-    def _extract_joins(self, ast: exp.Expression) -> List[Dict[str, Any]]:
+    def _extract_joins(self, ast: exp.Expression) -> list[dict[str, Any]]:
         """Extract all JOIN operations."""
         joins = []
         for join in ast.find_all(exp.Join):

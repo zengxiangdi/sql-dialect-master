@@ -1,11 +1,11 @@
 """Opt-in OpenRouter-compatible generation with strict SQL output validation."""
 from __future__ import annotations
 
-from contextvars import ContextVar
-from dataclasses import dataclass
 import json
 import logging
 import re
+from contextvars import ContextVar
+from dataclasses import dataclass
 
 import httpx
 from sqlglot import exp
@@ -14,7 +14,6 @@ from sqlglot.optimizer.scope import traverse_scope
 from .config import AppSettings, settings
 from .nl2sql_schema import SchemaContext, validate_schema_references
 from .sql_statements import parse_single_sql
-
 
 _ERROR_REASONS = frozenset({
     "timeout", "http_429", "http_5xx", "http_error", "invalid_response",
@@ -54,7 +53,9 @@ def _validate_schema_references(statement: exp.Expression, schema: dict) -> None
             SchemaContext.from_mapping(schema),
             scope_traverser=traverse_scope,
         )
-    except Exception:
+    # Schema validation has multiple parser/provider exception types; expose
+    # one stable LLMError contract at this boundary.
+    except Exception:  # noqa: BLE001 - schema validation maps all failures to invalid_sql
         raise LLMError("invalid_sql") from None
 
 
@@ -90,7 +91,9 @@ def validate_llm_sql(
             raise LLMError("invalid_sql")
         if schema is not None:
             _validate_schema_references(statement, schema)
-    except Exception:
+    # SQLGlot dialect readers and schema validation errors share one safe
+    # invalid_sql response contract for provider output.
+    except Exception:  # noqa: BLE001 - provider SQL validation has one safe error contract
         raise LLMError("invalid_sql") from None
     finally:
         _SQLGLOT_LOGGER.removeFilter(log_filter)

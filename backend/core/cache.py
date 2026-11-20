@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Unified caching module for SQL Dialect Master.
 
 Provides thread-safe caching with TTL support.
@@ -8,8 +7,9 @@ import logging
 import threading
 import time
 from collections import OrderedDict
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Callable
+from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,7 @@ class CacheEntry:
     # callers that inspect or construct CacheEntry directly.  Cache-owned
     # entries also record a monotonic timestamp so NTP/manual clock changes
     # cannot extend or prematurely expire a TTL.
-    monotonic_created_at: Optional[float] = None
+    monotonic_created_at: float | None = None
     
     def is_expired(self) -> bool:
         """Check if entry has expired."""
@@ -66,7 +66,7 @@ class TTLCache:
         self._hits = 0
         self._misses = 0
         self._evictions = 0
-        self._cleanup_thread: Optional[threading.Thread] = None
+        self._cleanup_thread: threading.Thread | None = None
     
     def _make_key(self, *args, **kwargs) -> str:
         """Create cache key; hashing is explicitly non-security use."""
@@ -93,13 +93,13 @@ class TTLCache:
         logger.debug(f"Cache hit: {key[:8]}...")
         return True, entry.value
     
-    def get(self, key: str) -> Optional[Any]:
+    def get(self, key: str) -> Any | None:
         """Get value from cache, returning None when absent or expired."""
         with self._lock:
             found, value = self._get_value(key)
             return value if found else None
     
-    def set(self, key: str, value: Any, ttl: int = None) -> None:
+    def set(self, key: str, value: Any, ttl: int | None = None) -> None:
         """Store value in cache."""
         with self._lock:
             if key in self._cache:
@@ -154,7 +154,7 @@ class TTLCache:
                 logger.debug(f"Cleaned up {len(expired_keys)} expired entries")
             return len(expired_keys)
     
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get cache statistics."""
         with self._lock:
             total = self._hits + self._misses
@@ -179,7 +179,7 @@ class TTLCache:
                 return False
             return not self._cache[key].is_expired()
     
-    def get_or_set(self, key: str, factory: Callable[[], Any], ttl: int = None) -> Any:
+    def get_or_set(self, key: str, factory: Callable[[], Any], ttl: int | None = None) -> Any:
         """Get cached value or compute and cache it.
 
         The factory is invoked *outside* the cache lock so that expensive
@@ -197,13 +197,13 @@ class TTLCache:
         self.set(key, value, ttl)
         return value
     
-    async def get_async(self, key: str) -> Optional[Any]:
+    async def get_async(self, key: str) -> Any | None:
         """Async version of get."""
         import asyncio
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self.get, key)
     
-    async def set_async(self, key: str, value: Any, ttl: int = None) -> None:
+    async def set_async(self, key: str, value: Any, ttl: int | None = None) -> None:
         """Async version of set."""
         import asyncio
         loop = asyncio.get_running_loop()
@@ -233,7 +233,7 @@ class TTLCache:
                     removed = self.cleanup_expired()
                     if removed > 0:
                         logger.info(f"Background cleanup removed {removed} expired entries")
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 - cleanup must keep running
                     logger.error(f"Background cleanup error: {e}")
 
         with self._lock:
@@ -255,13 +255,17 @@ class TTLCache:
 class CachedFunction:
     """Decorator for caching function results."""
     
-    def __init__(self, cache: TTLCache = None, key_func: Callable = None):
+    def __init__(
+        self,
+        cache: TTLCache | None = None,
+        key_func: Callable[..., str] | None = None,
+    ):
         self._cache = cache if cache is not None else TTLCache()
         self._key_func = key_func
     
     def __call__(self, func: Callable) -> Callable:
         def wrapper(*args, **kwargs):
-            if self._key_func:
+            if self._key_func is not None:
                 key = self._key_func(*args, **kwargs)
             else:
                 key = self._cache._make_key(func.__name__, *args, **kwargs)
@@ -274,7 +278,7 @@ class CachedFunction:
             return value
         wrapper.__name__ = func.__name__
         wrapper.__doc__ = func.__doc__
-        wrapper.cache = self._cache
+        cast(Any, wrapper).cache = self._cache
         return wrapper
 
 

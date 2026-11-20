@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Rule Engine for SQL dialect transformations.
 
 Provides a declarative rule-based system for post-processing SQL transformations
@@ -6,12 +5,16 @@ that sqlglot doesn't handle natively.
 """
 import logging
 import re
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable, List, Tuple
 
 from .function_call_scanner import replace_function_calls
-from .p1_sql_scanner import executable_segments, mask_non_executable, split_top_level_args
+from .p1_sql_scanner import (
+    executable_segments,
+    mask_non_executable,
+    split_top_level_args,
+)
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -44,7 +47,7 @@ DYNAMIC_SEPARATOR_FAIL_NOTE = (
 _DYNAMIC_SEPARATOR_SENTINEL = "\x00@@B2_1C_DYN_SEP@@\x00"
 
 
-def strip_dynamic_separator_sentinel(sql: str) -> Tuple[str, bool]:
+def strip_dynamic_separator_sentinel(sql: str) -> tuple[str, bool]:
     """Remove every embedded dynamic-separator sentinel token from ``sql``.
 
     Returns ``(cleaned_sql, was_present)``.  The token is an exact
@@ -57,7 +60,7 @@ def strip_dynamic_separator_sentinel(sql: str) -> Tuple[str, bool]:
     return cleaned, was_present
 
 
-def strip_dynamic_separator_marker(sql: str) -> Tuple[str, bool]:
+def strip_dynamic_separator_marker(sql: str) -> tuple[str, bool]:
     """Deprecated B2-1b alias; delegates to ``strip_dynamic_separator_sentinel``."""
     return strip_dynamic_separator_sentinel(sql)
 
@@ -411,10 +414,11 @@ class TransformRule:
     # Custom callable replacer for complex structured rewrites that can't
     # be expressed as a simple format string. Receives (args_str, original_call)
     # and returns the replacement string.
-    structured_replacer: Callable[[str, str], str] | None = None
+    structured_replacer: Callable[..., str] | None = None
     # For rules that need the full SQL context (e.g., LISTAGG with WITHIN GROUP).
     # Receives (sql,) and returns (transformed_sql, applied_bool).
     full_sql_rewriter: Callable[[str], tuple[str, bool]] | None = None
+    _compiled_pattern: re.Pattern[str] | None = field(default=None, init=False, repr=False)
 
     @property
     def safety(self) -> RuleSafety:
@@ -443,7 +447,7 @@ class TransformRule:
 
     def _apply_structured(
         self, sql: str, source_dialect: str = ""
-    ) -> Tuple[str, bool]:
+    ) -> tuple[str, bool]:
         """Apply an explicitly scanner-backed function rewrite.
 
         ``source_dialect`` (lower-cased) is threaded to
@@ -473,18 +477,21 @@ class TransformRule:
                 applied = applied or transformed != original_call
                 return transformed
             values = split_top_level_args(args)
-            expected = self.structured_replacement.count("{")
+            replacement = self.structured_replacement
+            if replacement is None:
+                return original_call
+            expected = replacement.count("{")
             if len(values) != expected:
                 return original_call
             applied = True
-            return self.structured_replacement.format(*values)
+            return replacement.format(*values)
 
         transformed = replace_function_calls(sql, self.function_name, replacer)
         return transformed, applied
 
     def apply(
         self, sql: str, source_dialect: str = ""
-    ) -> Tuple[str, bool]:
+    ) -> tuple[str, bool]:
         """Apply this rule only to executable SQL segments."""
         if not self.enabled:
             return sql, False
@@ -516,7 +523,7 @@ class TransformRule:
 # Rule Definitions - Organized by Category
 # =============================================================================
 
-TRANSFORM_RULES: List[TransformRule] = [
+TRANSFORM_RULES: list[TransformRule] = [
     # =========================================================================
     # ARRAY/EXPLODE Rules
     # =========================================================================
@@ -845,7 +852,7 @@ TRANSFORM_RULES: List[TransformRule] = [
 class RuleEngine:
     """Engine for applying transformation rules."""
 
-    def __init__(self, rules: List[TransformRule] = None):
+    def __init__(self, rules: list[TransformRule] | None = None):
         """Initialize with rules.
 
         Args:
@@ -855,7 +862,7 @@ class RuleEngine:
         # Dialect applicability is static for a rule-engine instance.  Keep a
         # small pair-keyed cache so the hot conversion path does not rescan
         # every rule on every statement.  Mutating operations invalidate it.
-        self._applicable_rules_cache: dict[tuple[str, str], List[TransformRule]] = {}
+        self._applicable_rules_cache: dict[tuple[str, str], list[TransformRule]] = {}
         self._sort_rules()
         self._compile_patterns()
 
@@ -864,7 +871,7 @@ class RuleEngine:
         sql: str,
         source: str,
         target: str,
-    ) -> Tuple[str, List[str]]:
+    ) -> tuple[str, list[str]]:
         """Apply all matching rules to SQL.
 
         Args:
@@ -911,7 +918,7 @@ class RuleEngine:
 
         return result, notes
 
-    def get_applicable_rules(self, source: str, target: str) -> List[TransformRule]:
+    def get_applicable_rules(self, source: str, target: str) -> list[TransformRule]:
         """Get all rules that apply to a dialect pair.
 
         Args:
@@ -994,7 +1001,7 @@ class RuleEngine:
                     logger.warning(f"Failed to compile pattern for rule {rule.name}: {e}")
                     rule._compiled_pattern = None
 
-    def validate_rules(self) -> List[str]:
+    def validate_rules(self) -> list[str]:
         """Validate rules for common conflicts and invalid configurations.
 
         Returns:

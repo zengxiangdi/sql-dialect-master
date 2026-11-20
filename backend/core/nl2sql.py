@@ -1,8 +1,10 @@
 """Stable NL2SQL facade with focused semantic extraction fixes."""
 import re
 
-from .nl2sql_pipeline.orchestrator import PipelineNL2SQLGenerator as _NL2SQLGenerator
 from .nl2sql_pipeline.models import NL2SQLResult
+from .nl2sql_pipeline.orchestrator import PipelineNL2SQLGenerator as _NL2SQLGenerator
+
+__all__ = ["NL2SQLGenerator", "NL2SQLResult"]
 
 
 class NL2SQLGenerator(_NL2SQLGenerator):

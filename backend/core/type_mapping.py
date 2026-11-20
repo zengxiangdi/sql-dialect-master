@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Type Mapper - Map SQL data types between different database dialects.
 
 Provides comprehensive data type mapping with:
@@ -7,12 +6,12 @@ Provides comprehensive data type mapping with:
 - Precision and compatibility warnings
 - Type conversion suggestions
 """
-import json
 import copy
+import json
 import logging
 import re
 from pathlib import Path
-from typing import Optional, Any, Dict, List
+from typing import Any, ClassVar, cast
 
 from .config import SUPPORTED_DIALECTS, TYPE_CATEGORIES, TypeMappingInfo
 from .exceptions import ConfigurationError
@@ -35,7 +34,7 @@ class TypeMapper:
     DIALECTS = SUPPORTED_DIALECTS
     TYPE_CATEGORIES = TYPE_CATEGORIES
     # Explicit aliases preserve deterministic resolution without fuzzy matching.
-    TYPE_ALIASES = {
+    TYPE_ALIASES: ClassVar[dict[str, str]] = {
         "INTEGER": "INT",
         "VARCHAR2": "VARCHAR",
         "NVARCHAR2": "NVARCHAR",
@@ -48,7 +47,7 @@ class TypeMapper:
         r"^([A-Z_][A-Z0-9_]*)\s*(?:\(\s*(.*?)\s*\))?$", re.IGNORECASE
     )
     
-    def __init__(self, data_path: Optional[Path] = None):
+    def __init__(self, data_path: Path | None = None):
         """Initialize mapper with type mapping data.
         
         Args:
@@ -58,8 +57,8 @@ class TypeMapper:
             data_path = Path(__file__).parent / "type_mapping.json"
         self.data_path = data_path
         self.data = self._load_data()
-        self.mappings: Dict[str, TypeMappingInfo] = self.data.get("mappings", {})
-        self.precision_warnings: Dict[str, str] = self.data.get("precision_warnings", {})
+        self.mappings: dict[str, TypeMappingInfo] = self.data.get("mappings", {})
+        self.precision_warnings: dict[str, str] = self.data.get("precision_warnings", {})
     
     def _load_data(self) -> dict:
         """Load and validate type mapping data from JSON file."""
@@ -145,7 +144,7 @@ class TypeMapper:
             return (base_candidate, None)  # Unknown base type
 
         # Parse precision
-        precision = None
+        precision: int | str | None = None
         if precision_str is not None:
             # Empty parens: VARCHAR2() → no precision (treat as unbounded)
             if precision_str.strip() == "":
@@ -162,7 +161,7 @@ class TypeMapper:
 
         return (canonical_key, precision)
 
-    def map_type(self, type_name: str, source: str, target: str) -> Dict[str, Any]:
+    def map_type(self, type_name: str, source: str, target: str) -> dict[str, Any]:
         """Map a type from source dialect to target dialect.
 
         Args:
@@ -274,7 +273,7 @@ class TypeMapper:
         type_name: str,
         source: str,
         target: str
-    ) -> List[str]:
+    ) -> list[str]:
         """Get type-specific warnings for a conversion.
         
         Args:
@@ -288,43 +287,38 @@ class TypeMapper:
         warnings = []
         
         # Array/Map/Struct warnings
-        if type_name in ["ARRAY", "MAP", "STRUCT"]:
-            if target in ["mysql", "oracle", "tsql"]:
-                warnings.append(
-                    f"{type_name} is stored as JSON in {target} - "
-                    "native array operations not available"
-                )
+        if type_name in ["ARRAY", "MAP", "STRUCT"] and target in ["mysql", "oracle", "tsql"]:
+            warnings.append(
+                f"{type_name} is stored as JSON in {target} - "
+                "native array operations not available"
+            )
         
         # UUID warnings
-        if type_name == "UUID":
-            if target not in ["postgres", "tsql", "clickhouse", "duckdb"]:
-                warnings.append(
-                    f"UUID stored as CHAR(36) in {target} - "
-                    "consider indexing implications"
-                )
+        if type_name == "UUID" and target not in ["postgres", "tsql", "clickhouse", "duckdb"]:
+            warnings.append(
+                f"UUID stored as CHAR(36) in {target} - "
+                "consider indexing implications"
+            )
         
         # JSON warnings
-        if type_name in ["JSON", "JSONB"]:
-            if target == "snowflake":
-                warnings.append("Snowflake uses VARIANT type for JSON data")
-            if target in ["hive", "spark"]:
-                warnings.append("JSON stored as STRING - use JSON functions for access")
+        if type_name in ["JSON", "JSONB"] and target == "snowflake":
+            warnings.append("Snowflake uses VARIANT type for JSON data")
+        if type_name in ["JSON", "JSONB"] and target in ["hive", "spark"]:
+            warnings.append("JSON stored as STRING - use JSON functions for access")
         
         # Timestamp precision
-        if type_name in ["TIMESTAMP", "TIMESTAMP_TZ"]:
-            if source == "oracle" and target in ["mysql", "postgres"]:
-                warnings.append(
-                    "Oracle TIMESTAMP has 9 fractional digits, "
-                    f"{target} has 6 - potential precision loss"
-                )
+        if type_name in ["TIMESTAMP", "TIMESTAMP_TZ"] and source == "oracle" and target in ["mysql", "postgres"]:
+            warnings.append(
+                "Oracle TIMESTAMP has 9 fractional digits, "
+                f"{target} has 6 - potential precision loss"
+            )
         
         # Boolean
-        if type_name == "BOOLEAN":
-            if target in ["mysql", "oracle"]:
-                warnings.append(
-                    f"BOOLEAN stored as numeric in {target} - "
-                    "use 0/1 for false/true"
-                )
+        if type_name == "BOOLEAN" and target in ["mysql", "oracle"]:
+            warnings.append(
+                f"BOOLEAN stored as numeric in {target} - "
+                "use 0/1 for false/true"
+            )
         
         return warnings
 
@@ -334,7 +328,7 @@ class TypeMapper:
         precision,
         source: str,
         target: str
-    ) -> List[str]:
+    ) -> list[str]:
         """Get precision-aware warnings for parameterized types.
 
         Args:
@@ -388,8 +382,7 @@ class TypeMapper:
 
                     # TSQL source NVARCHAR: warn if exceeds limit. Reachable
                     # now that the outer branch covers canonical NVARCHAR.
-                    if source == "tsql" and type_name == "NVARCHAR":
-                        if precision > tsql_nvarchar_max:
+                    if source == "tsql" and type_name == "NVARCHAR" and precision > tsql_nvarchar_max:
                             warnings.append(
                                 f"NVARCHAR({precision}) exceeds TSQL NVARCHAR "
                                 f"limit of {tsql_nvarchar_max}; consider "
@@ -397,27 +390,23 @@ class TypeMapper:
                             )
 
                     # Target-specific warnings
-                    if target == "oracle" and type_name == "VARCHAR":
-                        if precision > oracle_max:
-                            if precision > oracle_extended:
+                    if target == "oracle" and type_name == "VARCHAR" and precision > oracle_max and precision > oracle_extended:
                                 warnings.append(
                                     f"Target Oracle cannot store VARCHAR2({precision}); "
                                     f"use CLOB for lengths > {oracle_extended}"
                                 )
-                    elif target == "tsql" and type_name == "VARCHAR":
-                        if precision > tsql_varchar_max:
+                    elif target == "tsql" and type_name == "VARCHAR" and precision > tsql_varchar_max:
                             warnings.append(
                                 f"Target TSQL VARCHAR({precision}) exceeds "
                                 f"limit of {tsql_varchar_max}; use VARCHAR(MAX)"
                             )
-                    elif target == "mysql" and type_name == "VARCHAR":
+                    elif target == "mysql" and type_name == "VARCHAR" and precision > 21845:
                         # MySQL's 65535 is a row-size soft limit, not per-column
-                        if precision > 21845:
-                            warnings.append(
-                                f"VARCHAR({precision}) may exceed MySQL row size "
-                                f"limit when combined with other columns; "
-                                f"consider TEXT"
-                            )
+                        warnings.append(
+                            f"VARCHAR({precision}) may exceed MySQL row size "
+                            f"limit when combined with other columns; "
+                            f"consider TEXT"
+                        )
                 elif precision == "MAX" and type_name == "VARCHAR":
                     # Unbounded — suggest checking if CLOB/TEXT is more appropriate
                     if target == "oracle":
@@ -435,9 +424,9 @@ class TypeMapper:
 
     def get_matrix(
         self,
-        source: str = None,
-        target: str = None
-    ) -> Dict[str, Any]:
+        source: str | None = None,
+        target: str | None = None
+    ) -> dict[str, Any]:
         """Get full or filtered type mapping matrix.
 
         Args:
@@ -450,9 +439,9 @@ class TypeMapper:
         if source is None and target is None:
             return copy.deepcopy(self.mappings)
 
-        result = {}
+        result: dict[str, dict[str, Any]] = {}
         for type_name, type_map in self.mappings.items():
-            entry = {"type": type_name}
+            entry: dict[str, Any] = {"type": type_name}
             if source:
                 entry["source"] = type_map.get(source.lower(), "N/A")
             if target:
@@ -464,7 +453,7 @@ class TypeMapper:
 
         return result
 
-    def get_all_types(self) -> List[str]:
+    def get_all_types(self) -> list[str]:
         """Get list of all supported type names.
         
         Returns:
@@ -472,7 +461,7 @@ class TypeMapper:
         """
         return list(self.mappings.keys())
     
-    def get_dialect_types(self, dialect: str) -> Dict[str, str]:
+    def get_dialect_types(self, dialect: str) -> dict[str, str]:
         """Get all type mappings for a specific dialect.
         
         Args:
@@ -482,13 +471,13 @@ class TypeMapper:
             Dictionary of type_name -> dialect_syntax
         """
         dialect = dialect.lower()
-        result = {}
+        result: dict[str, str] = {}
         for type_name, type_map in self.mappings.items():
             if dialect in type_map:
-                result[type_name] = type_map[dialect]
+                result[type_name] = cast(dict[str, str], type_map).get(dialect, "")
         return result
     
-    def compare_types(self, type_name: str) -> Dict[str, Any]:
+    def compare_types(self, type_name: str) -> dict[str, Any]:
         """Compare a type across all dialects.
         
         Args:
@@ -521,7 +510,7 @@ class TypeMapper:
         
         return comparison
     
-    def get_precision_warnings(self) -> Dict[str, str]:
+    def get_precision_warnings(self) -> dict[str, str]:
         """Get all precision and compatibility warnings.
         
         Returns:
@@ -534,7 +523,7 @@ class TypeMapper:
         source_type: str,
         source: str,
         target: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Suggest best target type with notes and recommendations.
         
         Args:
@@ -587,7 +576,7 @@ class TypeMapper:
         result["suggestions"] = suggestions
         return result
     
-    def get_type_category(self, type_name: str) -> Optional[str]:
+    def get_type_category(self, type_name: str) -> str | None:
         """Get the category for a type.
         
         Args:
@@ -602,7 +591,7 @@ class TypeMapper:
                 return category
         return None
     
-    def get_types_by_category(self, category: str) -> List[str]:
+    def get_types_by_category(self, category: str) -> list[str]:
         """Get all types in a category.
         
         Args:
@@ -613,7 +602,7 @@ class TypeMapper:
         """
         return self.TYPE_CATEGORIES.get(category, [])
     
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get comprehensive type mapping statistics.
         
         Returns:
@@ -639,7 +628,7 @@ class TypeMapper:
         self,
         type_name: str,
         target: str
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Find compatible alternative types in target dialect.
         
         Args:
@@ -677,7 +666,7 @@ class TypeMapper:
         source_type: str,
         source: str,
         target: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Get detailed conversion path with all considerations.
         
         Args:
@@ -704,7 +693,7 @@ class TypeMapper:
         self,
         target_syntax: str,
         target_dialect: str
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Reverse lookup: find source types that map to a target syntax.
         
         Args:
@@ -719,13 +708,14 @@ class TypeMapper:
         matches = []
         
         for type_name, mapping in self.mappings.items():
-            dialect_syntax = mapping.get(target_dialect, "")
+            mapping_values = cast(dict[str, str], mapping)
+            dialect_syntax = mapping_values.get(target_dialect, "")
             if dialect_syntax and dialect_syntax.upper().strip() == target_syntax_upper:
                 matches.append({
                     "type_name": type_name,
                     "target_syntax": dialect_syntax,
                     "category": self.get_type_category(type_name),
-                    "notes": mapping.get("notes", ""),
+                    "notes": mapping_values.get("notes", ""),
                     "exact_match": dialect_syntax.upper() == target_syntax_upper
                 })
         
@@ -736,7 +726,7 @@ class TypeMapper:
     def get_type_compatibility_matrix(
         self,
         type_name: str
-    ) -> Dict[str, Dict[str, bool]]:
+    ) -> dict[str, Any]:
         """Get compatibility matrix showing which dialects support a type natively.
         
         Args:
@@ -749,13 +739,13 @@ class TypeMapper:
         if not type_info:
             return {"error": f"Type {type_name} not found"}
         
-        matrix = {}
+        matrix: dict[str, dict[str, bool | None]] = {}
         for source in self.DIALECTS:
             matrix[source] = {}
-            source_syntax = type_info.get(source, "N/A")
+            source_syntax = cast(dict[str, str], type_info).get(source, "N/A")
             
             for target in self.DIALECTS:
-                target_syntax = type_info.get(target, "N/A")
+                target_syntax = cast(dict[str, str], type_info).get(target, "N/A")
                 
                 # Check if conversion is lossless
                 if source_syntax == "N/A" or target_syntax == "N/A":
@@ -798,7 +788,4 @@ class TypeMapper:
             return False  # Precision may vary
         
         # Timestamp precision varies
-        if "TIMESTAMP" in type_upper:
-            return False  # Precision may vary
-        
-        return True
+        return "TIMESTAMP" not in type_upper  # Precision may vary

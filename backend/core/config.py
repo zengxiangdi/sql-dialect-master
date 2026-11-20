@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Centralized configuration for SQL Dialect Master.
 
 All configuration constants and settings are defined here for consistency
@@ -9,11 +8,12 @@ Supports configuration via:
 - .env file in project root
 - Default values
 """
-import logging
 import ipaddress
+import logging
 import sys
+from collections.abc import Callable
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, TypedDict
+from typing import Any, Literal, TypedDict, cast
 from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, field_validator, model_validator
@@ -25,8 +25,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 def setup_logging(
     level: int = logging.INFO,
-    format_string: str = None,
-    log_file: str = None
+    format_string: str | None = None,
+    log_file: str | None = None
 ) -> logging.Logger:
     """Configure logging for SQL Dialect Master.
     
@@ -78,7 +78,7 @@ logger = logging.getLogger(__name__)
 # Supported Dialects - Single Source of Truth
 # =============================================================================
 
-SUPPORTED_DIALECTS: List[str] = [
+SUPPORTED_DIALECTS: list[str] = [
     "hive", "mysql", "oracle", "tsql", "postgres", "spark",
     "trino", "snowflake", "redshift", "clickhouse", "duckdb", "databricks"
 ]
@@ -104,7 +104,7 @@ class DialectInfo:
     color: str
     description: str = ""
 
-DIALECT_METADATA: Dict[str, DialectInfo] = {
+DIALECT_METADATA: dict[str, DialectInfo] = {
     "hive": DialectInfo("hive", "Apache Hive", "🐝", DialectCategory.BIG_DATA, "#FDEE21", "Hadoop data warehouse"),
     "mysql": DialectInfo("mysql", "MySQL", "🐬", DialectCategory.RDBMS, "#00758F", "Popular open-source RDBMS"),
     "oracle": DialectInfo("oracle", "Oracle Database", "🔴", DialectCategory.RDBMS, "#F80000", "Enterprise RDBMS"),
@@ -120,7 +120,7 @@ DIALECT_METADATA: Dict[str, DialectInfo] = {
 }
 
 
-def get_dialect_ui_info() -> Dict[str, Dict[str, str]]:
+def get_dialect_ui_info() -> dict[str, dict[str, str]]:
     """Get dialect info formatted for UI display."""
     return {
         d.id: {"icon": d.icon, "name": d.name, "color": d.color}
@@ -128,7 +128,7 @@ def get_dialect_ui_info() -> Dict[str, Dict[str, str]]:
     }
 
 
-def get_dialect_api_info() -> Dict[str, Dict[str, str]]:
+def get_dialect_api_info() -> dict[str, dict[str, str]]:
     """Get dialect info formatted for API responses."""
     return {
         d.id: {"icon": d.icon, "name": d.name, "category": d.category.value}
@@ -160,9 +160,9 @@ class FunctionInfo(TypedDict, total=False):
     name: str
     category: str
     description: str
-    parameters: List[FunctionParameter]
-    dialects: Dict[str, str]
-    examples: Dict[str, str]
+    parameters: list[FunctionParameter]
+    dialects: dict[str, str]
+    examples: dict[str, str]
     notes: str
 
 class TypeMappingInfo(TypedDict, total=False):
@@ -185,14 +185,14 @@ class TranspileResultDict(TypedDict, total=False):
     """Transpile result dictionary."""
     success: bool
     source_sql: str
-    target_sql: Optional[str]
+    target_sql: str | None
     source_dialect: str
     target_dialect: str
-    error: Optional[str]
-    error_code: Optional[str]
-    compatibility_notes: List[str]
-    transformations: List[str]
-    warnings: List[str]
+    error: str | None
+    error_code: str | None
+    compatibility_notes: list[str]
+    transformations: list[str]
+    warnings: list[str]
     target_validation_state: str
 
 
@@ -201,6 +201,7 @@ class TranspileResultDict(TypedDict, total=False):
 # =============================================================================
 
 from backend.core.metadata import API_VERSION as _METADATA_API_VERSION
+
 
 class AppSettings(BaseSettings):
     """Application settings using Pydantic.
@@ -219,7 +220,7 @@ class AppSettings(BaseSettings):
     # API settings
     api_version: str = _METADATA_API_VERSION
     api_title: str = "SQL Dialect Master API"
-    api_key: Optional[SecretStr] = None
+    api_key: SecretStr | None = None
     api_workers: int = Field(4, gt=0)
     api_queue_size: int = Field(4, ge=0)
     allowed_origins: str = (
@@ -251,7 +252,7 @@ class AppSettings(BaseSettings):
     # SecretStr keeps the password out of repr / logs / serialization;
     # the store factory reads the actual value only to build the Redis
     # client.  Default None = not configured.
-    redis_url: Optional[SecretStr] = None
+    redis_url: SecretStr | None = None
     
     # NL2SQL settings
     nl2sql_confidence_threshold: float = Field(0.6, ge=0.0, le=1.0)
@@ -264,7 +265,7 @@ class AppSettings(BaseSettings):
     # Optional external generation. Secrets are unwrapped only by the client.
     nl2sql_llm_enabled: bool = False
     nl2sql_llm_base_url: str = "https://openrouter.ai/api/v1"
-    nl2sql_llm_api_key: Optional[SecretStr] = None
+    nl2sql_llm_api_key: SecretStr | None = None
     nl2sql_llm_model: str = ""
     nl2sql_llm_timeout: float = Field(15, gt=0, le=60)
     nl2sql_llm_max_tokens: int = Field(800, gt=0, le=8192)
@@ -281,7 +282,7 @@ class AppSettings(BaseSettings):
     # settings object — never ``os.getenv`` directly.
     transpiler_pretty_default: bool = True
     transpiler_max_sql_length: int = Field(100000, gt=0)
-    parser_max_sql_length: Optional[int] = Field(None, gt=0)
+    parser_max_sql_length: int | None = Field(None, gt=0)
     
     # Function encyclopedia
     function_search_limit: int = Field(50, gt=0)
@@ -289,11 +290,11 @@ class AppSettings(BaseSettings):
 
     # Readiness probes.  SecretStr keeps the value out of settings reprs and
     # structured logs while still allowing deployment through SDM_ env vars.
-    health_probe_token: Optional[SecretStr] = None
+    health_probe_token: SecretStr | None = None
 
     # Prometheus metrics are opt-in and use a dedicated secret.
     metrics_enabled: bool = False
-    metrics_token: Optional[SecretStr] = None
+    metrics_token: SecretStr | None = None
     
     # Security settings
     security_check_enabled: bool = True
@@ -348,7 +349,7 @@ class AppSettings(BaseSettings):
                 and not any(character.isspace() or ord(character) < 32 or ord(character) == 127 for character in normalized)
             )
             # Accessing port rejects malformed or out-of-range port values.
-            parsed.port
+            _ = parsed.port
         except ValueError:
             valid = False
         if not valid:
@@ -371,7 +372,7 @@ class AppSettings(BaseSettings):
         if value is None:
             return ""
         if not isinstance(value, str):
-            raise ValueError("trusted_proxies must be a comma-separated string")
+            raise TypeError("trusted_proxies must be a comma-separated string")
         normalized = []
         for raw_value in value.split(","):
             candidate = raw_value.strip()
@@ -399,12 +400,13 @@ class AppSettings(BaseSettings):
             if value
         )
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert settings to dictionary."""
         return self.model_dump()
 
 
-settings = AppSettings()
+_settings_factory = cast(Callable[[], AppSettings], AppSettings)
+settings = _settings_factory()
 
 
 # =============================================================================
@@ -413,7 +415,7 @@ settings = AppSettings()
 
 import re
 
-_DANGEROUS_SQL_PATTERNS_RAW: List[tuple] = [
+_DANGEROUS_SQL_PATTERNS_RAW: list[tuple] = [
     (r";\s*(DROP|DELETE|TRUNCATE|ALTER|CREATE|INSERT|UPDATE)\s+", 
      "Multiple statements with dangerous operations detected"),
     (r"--\s*.*\s*(DROP|DELETE|TRUNCATE)", 
@@ -442,7 +444,7 @@ _DANGEROUS_SQL_PATTERNS_RAW: List[tuple] = [
      "Database enumeration attempt detected"),
 ]
 
-_WARNING_SQL_PATTERNS_RAW: List[tuple] = [
+_WARNING_SQL_PATTERNS_RAW: list[tuple] = [
     (r"DELETE\s+FROM\s+\w+\s*(?!WHERE)", 
      "DELETE without WHERE clause - will affect all rows"),
     (r"UPDATE\s+\w+\s+SET\s+.*(?!WHERE)",
@@ -459,12 +461,12 @@ _WARNING_SQL_PATTERNS_RAW: List[tuple] = [
      "SELECT * detected - consider specifying columns explicitly"),
 ]
 
-DANGEROUS_SQL_PATTERNS: List[tuple] = [
+DANGEROUS_SQL_PATTERNS: list[tuple] = [
     (re.compile(pattern, re.IGNORECASE | re.MULTILINE), message)
     for pattern, message in _DANGEROUS_SQL_PATTERNS_RAW
 ]
 
-WARNING_SQL_PATTERNS: List[tuple] = [
+WARNING_SQL_PATTERNS: list[tuple] = [
     (re.compile(pattern, re.IGNORECASE | re.MULTILINE), message)
     for pattern, message in _WARNING_SQL_PATTERNS_RAW
 ]
@@ -473,12 +475,12 @@ WARNING_SQL_PATTERNS: List[tuple] = [
 # Function Categories
 # =============================================================================
 
-FUNCTION_CATEGORIES: List[str] = [
+FUNCTION_CATEGORIES: list[str] = [
     "string", "date", "math", "aggregate", "window",
     "conditional", "conversion", "json", "array", "system", "geo"
 ]
 
-CATEGORY_DESCRIPTIONS: Dict[str, str] = {
+CATEGORY_DESCRIPTIONS: dict[str, str] = {
     "string": "String manipulation functions (CONCAT, SUBSTRING, TRIM, etc.)",
     "date": "Date and time functions (DATE_ADD, DATEDIFF, NOW, etc.)",
     "math": "Mathematical functions (ABS, ROUND, FLOOR, etc.)",
@@ -496,7 +498,7 @@ CATEGORY_DESCRIPTIONS: Dict[str, str] = {
 # Type Categories
 # =============================================================================
 
-TYPE_CATEGORIES: Dict[str, List[str]] = {
+TYPE_CATEGORIES: dict[str, list[str]] = {
     "String Types": ["STRING", "VARCHAR", "CHAR", "TEXT", "MEDIUMTEXT", "LONGTEXT"],
     "Numeric Types": ["BIGINT", "INT", "SMALLINT", "TINYINT", "DOUBLE", "FLOAT", "DECIMAL", "MONEY", "SERIAL"],
     "Boolean & Bit": ["BOOLEAN", "BIT"],
@@ -510,7 +512,7 @@ TYPE_CATEGORIES: Dict[str, List[str]] = {
 # Compatibility Notes Database
 # =============================================================================
 
-COMPATIBILITY_NOTES: Dict[tuple, List[str]] = {
+COMPATIBILITY_NOTES: dict[tuple, list[str]] = {
     ("hive", "mysql"): [
         "Hive ARRAY/MAP types converted to JSON",
         "LATERAL VIEW EXPLODE may need manual adjustment",
@@ -680,6 +682,6 @@ COMPATIBILITY_NOTES: Dict[tuple, List[str]] = {
 }
 
 
-def get_compatibility_notes(source: str, target: str) -> List[str]:
+def get_compatibility_notes(source: str, target: str) -> list[str]:
     """Get compatibility notes for a dialect pair."""
     return COMPATIBILITY_NOTES.get((source.lower(), target.lower()), [])
