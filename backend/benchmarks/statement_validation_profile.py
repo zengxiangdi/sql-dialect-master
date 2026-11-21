@@ -1,12 +1,11 @@
-#!/usr/bin/env python3
 """Profile the statement-validation cost without changing production code."""
 
 import argparse
 import json
 import platform
 import time
+from collections.abc import Callable
 from statistics import mean, median
-from typing import Callable, List
 
 import sqlglot
 
@@ -14,7 +13,7 @@ from backend.benchmarks.transpiler_benchmark import build_statements
 from backend.core.transpiler import SQLTranspiler
 
 
-def measure(capture: Callable[[], object], repeats: int) -> List[float]:
+def measure(capture: Callable[[], object], repeats: int) -> list[float]:
     timings = []
     for _ in range(repeats):
         start = time.perf_counter()
@@ -37,7 +36,7 @@ def run(iterations: int, repeats: int, dialect: str) -> dict:
 
     def parse_and_count() -> None:
         for statement in statements:
-            len(sqlglot.parse(statement)) > 1
+            _ = len(sqlglot.parse(statement)) > 1
 
     validation = measure(validate_only, repeats)
     parsing = measure(parse_only, repeats)

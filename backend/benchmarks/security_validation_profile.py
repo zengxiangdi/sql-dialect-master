@@ -1,20 +1,18 @@
-#!/usr/bin/env python3
 """Profile security-validation sub-stages without changing production code."""
 
 import argparse
 import json
 import platform
 import time
+from collections.abc import Callable
 from statistics import mean, median
-from typing import Callable, Dict, List
 
 import sqlglot
 
 from backend.benchmarks.transpiler_benchmark import DEFAULT_STATEMENTS
 from backend.core import transpiler as transpiler_module
 from backend.core.config import DANGEROUS_SQL_PATTERNS, WARNING_SQL_PATTERNS
-from backend.core.transpiler import SQLTranspiler, _DANGEROUS_OPERATION_PATTERN
-
+from backend.core.transpiler import _DANGEROUS_OPERATION_PATTERN, SQLTranspiler
 
 SECURITY_CASES = [
     ("select", "SELECT id, name FROM users WHERE id > 100"),
@@ -25,7 +23,7 @@ SECURITY_CASES = [
 ]
 
 
-def measure(capture: Callable[[], object], repeats: int) -> List[float]:
+def measure(capture: Callable[[], object], repeats: int) -> list[float]:
     timings = []
     for _ in range(repeats):
         start = time.perf_counter()
@@ -39,7 +37,7 @@ def _pattern_scan(sql: str, patterns) -> None:
         pattern.search(sql)
 
 
-def run(iterations: int, repeats: int) -> Dict[str, object]:
+def run(iterations: int, repeats: int) -> dict[str, object]:
     statements = [DEFAULT_STATEMENTS[index % len(DEFAULT_STATEMENTS)] for index in range(iterations)]
     transpiler = SQLTranspiler()
     original_mask = transpiler_module.mask_non_executable

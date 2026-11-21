@@ -1,5 +1,6 @@
-#!/usr/bin/env python3
 """Validate the cache-key profiling output contract."""
+
+from typing import Any, cast
 
 from backend.benchmarks.cache_key_profile import run
 
@@ -11,14 +12,15 @@ def test_cache_key_profile_shape() -> None:
         if key not in payload:
             raise RuntimeError(f"missing profiling key: {key}")
 
-    measurements = payload["measurements"]
+    measurements = cast(dict[str, Any], payload["measurements"])
     for key in ("cache_key", "rule_payload_build", "rule_version_hash"):
         if key not in measurements:
             raise RuntimeError(f"missing measurement: {key}")
         if measurements[key]["mean_seconds"] < 0:
             raise RuntimeError(f"negative timing for {key}")
 
-    if payload["workload"]["rule_count"] < 1:
+    workload = cast(dict[str, Any], payload["workload"])
+    if workload["rule_count"] < 1:
         raise RuntimeError("expected at least one rule")
-    if payload["workload"]["rule_payload_bytes"] <= 0:
+    if workload["rule_payload_bytes"] <= 0:
         raise RuntimeError("expected non-empty rule payload")

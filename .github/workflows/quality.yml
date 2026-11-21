@@ -80,6 +80,12 @@ jobs:
       - name: Mypy all test checks
         run: .venv/bin/python -m mypy backend/tests
 
+      - name: Ruff full backend checks
+        run: ruff check backend
+
+      - name: Mypy full backend checks
+        run: .venv/bin/python -m mypy backend
+
       - name: Bandit security scan
         run: |
           # Reviewed static-analysis exceptions:
