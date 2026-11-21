@@ -36,7 +36,9 @@ def test_invalid_function_entry_schema(tmp_path, entry, needle):
 def test_valid_function_entry_loads(tmp_path):
     path = tmp_path / "functions.json"
     path.write_text(json.dumps({"functions": [valid_function()]}), encoding="utf-8")
-    assert FunctionEncyclopedia(data_path=path).get_function("COUNT")["name"] == "COUNT"
+    function = FunctionEncyclopedia(data_path=path).get_function("COUNT")
+    assert function is not None
+    assert function["name"] == "COUNT"
 
 
 @pytest.mark.parametrize("payload, needle", [

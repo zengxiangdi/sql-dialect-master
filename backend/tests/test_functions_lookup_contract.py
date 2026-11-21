@@ -12,6 +12,7 @@ def encyclopedia() -> FunctionEncyclopedia:
 
 def test_exact_lookup_and_dialect_syntax(encyclopedia: FunctionEncyclopedia) -> None:
     function = encyclopedia.get_function("concat")
+    assert function is not None
     assert function["name"] == "CONCAT"
     assert encyclopedia.get_function("DOES_NOT_EXIST") is None
     assert encyclopedia.get_dialect_syntax("CONCAT", "MYSQL") == "CONCAT(s1, s2, ...)"
@@ -57,15 +58,18 @@ def test_categories_and_statistics(encyclopedia: FunctionEncyclopedia) -> None:
 
 def test_find_equivalent_supported_unknown_and_unsupported(encyclopedia: FunctionEncyclopedia) -> None:
     supported = encyclopedia.find_equivalent("CONCAT", "mysql", "postgres")
+    assert supported is not None
     assert supported["supported_in_target"] is True
     assert supported["target_syntax"]
     assert supported["semantic_status"] == "supported-but-different"
 
     unknown_semantics = encyclopedia.find_equivalent("ROW_NUMBER", "mysql", "postgres")
+    assert unknown_semantics is not None
     assert unknown_semantics["supported_in_target"] is True
     assert unknown_semantics["semantic_status"] == "unknown"
 
     unsupported = encyclopedia.find_equivalent("ARRAY_CONTAINS", "hive", "redshift")
+    assert unsupported is not None
     assert unsupported["supported_in_target"] is False
     assert unsupported["target_syntax"] is None
     assert encyclopedia.find_equivalent("ARRAY_CONTAINS", "redshift", "hive") is None

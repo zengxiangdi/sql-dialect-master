@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Unit tests for TTLCache module.
 
 Tests caching functionality including:
@@ -9,15 +8,16 @@ Tests caching functionality including:
 - Statistics
 """
 import asyncio
-import pytest
-import time
-import threading
 import sys
+import threading
+import time
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from backend.core.cache import TTLCache, CacheEntry, CachedFunction
+from backend.core.cache import CachedFunction, CacheEntry, TTLCache
 from backend.core.config import settings
 from backend.core.transpiler import SQLTranspiler
 
@@ -74,6 +74,7 @@ class TestTTLCache:
         monkeypatch.setattr(settings, "security_block_dangerous", True)
         blocked = transpiler.transpile(sql, "mysql", "postgres")
         assert not blocked.success
+        assert blocked.error is not None
         assert "Security check failed" in blocked.error
 
     def test_get_nonexistent_key(self):
@@ -192,14 +193,14 @@ class TestTTLCache:
             try:
                 for i in range(100):
                     cache.set(f"key{i}", f"value{i}")
-            except Exception as e:
+            except RuntimeError as e:
                 errors.append(e)
 
         def reader():
             try:
                 for i in range(100):
                     cache.get(f"key{i}")
-            except Exception as e:
+            except RuntimeError as e:
                 errors.append(e)
 
         threads = [threading.Thread(target=writer) for _ in range(5)]

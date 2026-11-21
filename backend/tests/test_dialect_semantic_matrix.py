@@ -10,6 +10,7 @@ runtime equality across database engines.
 """
 
 from dataclasses import dataclass
+from typing import cast
 
 import pytest
 import sqlglot
@@ -135,11 +136,13 @@ STRUCTURAL_PROPERTY_CASES = [
 
 def _without_aliases(tree: exp.Expression) -> exp.Expression:
     """Copy an AST while ignoring projection aliases for structural checks."""
-    return tree.transform(
+    transformed = tree.transform(
         lambda node: node.copy().set("alias", None)
         if isinstance(node, exp.Alias)
         else node.copy()
     )
+    assert isinstance(transformed, exp.Expression)
+    return cast(exp.Expression, transformed)
 
 
 @pytest.mark.parametrize(
@@ -155,8 +158,8 @@ def test_structural_properties_are_explicitly_asserted(
     assert result.success, result.error
     assert result.target_sql
 
-    source_tree = sqlglot.parse_one(case.sql, read=case.source_dialect)
-    target_tree = sqlglot.parse_one(result.target_sql, read=case.target_dialect)
+    source_tree = cast(exp.Expression, sqlglot.parse_one(case.sql, read=case.source_dialect))
+    target_tree = cast(exp.Expression, sqlglot.parse_one(result.target_sql, read=case.target_dialect))
 
     source_structural = _without_aliases(source_tree)
     target_structural = _without_aliases(target_tree)
@@ -197,9 +200,9 @@ def test_date_arithmetic_semantics_are_checked_by_ast_shape(
     source_tree = sqlglot.parse_one(sql, read=source)
     target_tree = sqlglot.parse_one(result.target_sql, read=target)
 
-    assert list(source_tree.find_all(exp.Column))[0].name == list(
-        target_tree.find_all(exp.Column)
-    )[0].name
+    assert next(iter(source_tree.find_all(exp.Column))).name == next(
+        iter(target_tree.find_all(exp.Column))
+    ).name
     assert any(isinstance(node, exp.Interval) for node in target_tree.walk()) or any(
         isinstance(node, exp.Literal) and node.is_number
         for node in target_tree.walk()

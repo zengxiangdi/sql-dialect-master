@@ -9,7 +9,7 @@ feature.
 
 import pytest
 
-from backend.core.parser import SQLParser, SUPPORTED_DIALECTS
+from backend.core.parser import SUPPORTED_DIALECTS, SQLParser
 from backend.core.transpiler import SQLTranspiler
 
 

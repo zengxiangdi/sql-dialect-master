@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import cast
 
 import pytest
 import sqlglot
@@ -190,6 +191,7 @@ def test_nl2sql_corpus_cases_are_semantically_parseable(generator: NL2SQLGenerat
     )
 
     assert result.success, result.explanation
+    assert result.sql is not None
     sql = _sql_without_comments(result.sql)
     tree = sqlglot.parse_one(sql, read=case.dialect)
 
@@ -211,7 +213,7 @@ def test_nl2sql_corpus_cases_are_semantically_parseable(generator: NL2SQLGenerat
     if case.require_order:
         assert tree.find(exp.Order) is not None
     if case.require_limit:
-        assert _contains_limit(tree)
+        assert _contains_limit(cast(exp.Expression, tree))
     if case.require_boolean_and_or:
         where = tree.find(exp.Where)
         assert where is not None

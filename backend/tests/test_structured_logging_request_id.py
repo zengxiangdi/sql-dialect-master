@@ -1,7 +1,7 @@
 import asyncio
 import uuid
 
-from fastapi import Response, Request
+from fastapi import Request, Response
 
 from backend.api.middleware import StructuredLoggingMiddleware
 

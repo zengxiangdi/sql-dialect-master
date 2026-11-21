@@ -1,7 +1,7 @@
 """Regression tests for statement-level SQL security validation."""
 
-from backend.core.transpiler import SQLTranspiler
 from backend.core.config import settings
+from backend.core.transpiler import SQLTranspiler
 
 
 def test_stacked_statements_are_detected_structurally(monkeypatch) -> None:

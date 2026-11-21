@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Tests for DML-without-WHERE warning deduplication.
 
 Each DELETE/UPDATE without WHERE must produce exactly one warning.

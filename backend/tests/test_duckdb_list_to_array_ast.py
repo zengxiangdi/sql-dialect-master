@@ -4,11 +4,13 @@ Covers the helper-level transform and the full production pipeline for
 duckdb → hive/spark.  Expected outputs are hardcoded from the verified
 production contract; no dependency on the legacy rule-engine rule.
 """
+from typing import cast
+
 import pytest
 import sqlglot
 from sqlglot import exp
 
-from backend.core.transpiler import SQLTranspiler
+from backend.core.transpiler import SQLTranspiler, TranspileResult
 
 NOTE = "Converted LIST to ARRAY (AST)"
 
@@ -20,12 +22,17 @@ NOTE = "Converted LIST to ARRAY (AST)"
 def _helper(sql: str, target: str = "hive") -> tuple[exp.Expression, list[str]]:
     """Parse sql as duckdb and run the AST transform directly."""
     t = SQLTranspiler.__new__(SQLTranspiler)
-    ast = sqlglot.parse_one(sql, read="duckdb")
+    ast = cast(exp.Expression, sqlglot.parse_one(sql, read="duckdb"))
     return t._ast_duckdb_list_to_array(ast, target)
 
 
 def _norm(sql: str) -> str:
     return " ".join(sql.split())
+
+
+def _target_sql(result: TranspileResult) -> str:
+    assert result.target_sql is not None
+    return result.target_sql
 
 
 # ---------------------------------------------------------------------------
@@ -126,11 +133,13 @@ class TestProductionPipeline:
     """The full transpile() path must produce the expected output and notes
     for every duckdb→hive/spark case."""
 
+    t: SQLTranspiler
+
     @classmethod
     def setup_class(cls):
         cls.t = SQLTranspiler()
 
-    def _run(self, sql: str, target: str) -> dict:
+    def _run(self, sql: str, target: str) -> TranspileResult:
         return self.t.transpile(sql, source="duckdb", target=target, validate=False)
 
     # -- Expected outputs (normalized) for each case × target --
@@ -178,11 +187,11 @@ class TestProductionPipeline:
     def test_output_matches_expected(self, sql, expected_hive, expected_spark):
         r_hive = self._run(sql, "hive")
         assert r_hive.success is True, r_hive.error
-        assert _norm(r_hive.target_sql) == expected_hive, f"hive: {sql}"
+        assert _norm(_target_sql(r_hive)) == expected_hive, f"hive: {sql}"
 
         r_spark = self._run(sql, "spark")
         assert r_spark.success is True, r_spark.error
-        assert _norm(r_spark.target_sql) == expected_spark, f"spark: {sql}"
+        assert _norm(_target_sql(r_spark)) == expected_spark, f"spark: {sql}"
 
     def test_note_recorded_hive(self):
         r = self._run("SELECT CAST(x AS LIST) FROM t", "hive")
@@ -196,34 +205,35 @@ class TestProductionPipeline:
         """LIST inside a string literal: no transformation should fire."""
         r = self._run("SELECT 'LIST(x)' AS label FROM t", "hive")
         assert r.success is True
-        assert "'LIST(x)'" in r.target_sql
-        assert "ARRAY" not in r.target_sql
+        target_sql = _target_sql(r)
+        assert "'LIST(x)'" in target_sql
+        assert "ARRAY" not in target_sql
         assert NOTE not in r.transformations
 
     def test_comment_case(self):
         """Real CAST is converted; comment preserved as block comment."""
         r = self._run("SELECT CAST(x AS LIST) FROM t -- LIST(fake)", "hive")
         assert r.success is True
-        assert "CAST(x AS ARRAY)" in r.target_sql
+        assert "CAST(x AS ARRAY)" in _target_sql(r)
         assert NOTE in r.transformations
 
     def test_list_function_no_note(self):
         """LIST(x) aggregate is handled natively; no AST note emitted."""
         r = self._run("SELECT LIST(x) FROM t GROUP BY g", "hive")
         assert r.success is True
-        assert "COLLECT_LIST(x)" in r.target_sql
+        assert "COLLECT_LIST(x)" in _target_sql(r)
         assert NOTE not in r.transformations
 
     def test_list_distinct_function_no_note(self):
         r = self._run("SELECT LIST(DISTINCT x) FROM t GROUP BY g", "hive")
         assert r.success is True
-        assert "COLLECT_LIST(DISTINCT x)" in r.target_sql
+        assert "COLLECT_LIST(DISTINCT x)" in _target_sql(r)
         assert NOTE not in r.transformations
 
     def test_mylist_identifier_no_note(self):
         r = self._run("SELECT MYLIST FROM t", "hive")
         assert r.success is True
-        assert "MYLIST" in r.target_sql
+        assert "MYLIST" in _target_sql(r)
         assert NOTE not in r.transformations
 
     def test_no_list_type_in_output(self):
@@ -235,6 +245,7 @@ class TestProductionPipeline:
         ]:
             for tgt in ("hive", "spark"):
                 r = self._run(sql, tgt)
-                assert "LIST" not in r.target_sql.upper() or "LIST" in sql.replace("CAST", "").strip(), (
+                target_sql = _target_sql(r)
+                assert "LIST" not in target_sql.upper() or "LIST" in sql.replace("CAST", "").strip(), (
                     f"unexpected LIST in {tgt} output for: {sql}\n{r.target_sql}"
                 )

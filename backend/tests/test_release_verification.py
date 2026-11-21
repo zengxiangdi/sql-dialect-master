@@ -10,7 +10,6 @@ import pytest
 from backend.core.metadata import PROJECT_VERSION
 from scripts.verify_release import ReleaseValidationError, validate_release
 
-
 ROOT = Path(__file__).resolve().parents[2]
 
 

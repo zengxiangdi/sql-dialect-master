@@ -1,6 +1,7 @@
 import asyncio
 import ipaddress
 import json
+from typing import Any, cast
 
 import pytest
 from fastapi import Request, Response
@@ -30,11 +31,11 @@ def make_request(peer: str | None, forwarded_for: str = "") -> Request:
 
 
 def networks(value: str):
-    return AppSettings(_env_file=None, trusted_proxies=value).trusted_proxy_networks
+    return cast(Any, AppSettings)(_env_file=None, trusted_proxies=value).trusted_proxy_networks
 
 
 def test_trusted_proxy_configuration_normalizes_and_parses():
-    settings = AppSettings(
+    settings = cast(Any, AppSettings)(
         _env_file=None,
         trusted_proxies=" 192.0.2.10 , , 2001:db8::/64 ",
     )
@@ -48,18 +49,18 @@ def test_trusted_proxy_configuration_normalizes_and_parses():
 @pytest.mark.parametrize("value", ["not-an-ip", "192.0.2.0/33", "0.0.0.0/0", "::/0"])
 def test_trusted_proxy_configuration_rejects_invalid_or_catch_all(value):
     with pytest.raises(ValidationError):
-        AppSettings(_env_file=None, trusted_proxies=value)
+        cast(Any, AppSettings)(_env_file=None, trusted_proxies=value)
 
 
 def test_empty_trusted_proxy_configuration_is_legal():
-    settings = AppSettings(_env_file=None, trusted_proxies=" , ")
+    settings = cast(Any, AppSettings)(_env_file=None, trusted_proxies=" , ")
     assert settings.trusted_proxies == ""
     assert settings.trusted_proxy_networks == ()
 
 
 @pytest.mark.parametrize("value", ["192.0.2.10", "2001:db8::10", "192.0.2.0/24", "2001:db8::/64"])
 def test_trusted_proxy_configuration_accepts_ip_and_cidr(value):
-    assert len(AppSettings(_env_file=None, trusted_proxies=value).trusted_proxy_networks) == 1
+    assert len(cast(Any, AppSettings)(_env_file=None, trusted_proxies=value).trusted_proxy_networks) == 1
 
 
 def test_default_configuration_ignores_forwarded_for():

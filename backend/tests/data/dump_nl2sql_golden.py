@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """One-time helper: dump NL2SQL characterization golden snapshots.
 
 Run manually from the repository root:
@@ -13,6 +12,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 import sys
+
 sys.path.insert(0, str(REPO_ROOT))
 
 from backend.core.nl2sql import NL2SQLGenerator

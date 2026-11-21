@@ -12,11 +12,13 @@ required (Postgres treats ``CROSS JOIN UNNEST(...)`` and
 ``CROSS JOIN LATERAL UNNEST(...)`` equivalently for non-correlated
 expressions, and the non-LATERAL form is the one sqlglot serializes).
 """
+from typing import cast
+
 import pytest
 import sqlglot
 from sqlglot import exp
 
-from backend.core.transpiler import SQLTranspiler
+from backend.core.transpiler import SQLTranspiler, TranspileResult
 
 NOTE = "Converted ARRAY JOIN to CROSS JOIN UNNEST"
 
@@ -46,12 +48,17 @@ EXPECTED = [
 def _helper(sql: str, target: str = "postgres") -> tuple[exp.Expression, list[str]]:
     """Parse sql as clickhouse and run the ARRAY JOIN AST transform directly."""
     t = SQLTranspiler.__new__(SQLTranspiler)
-    ast = sqlglot.parse_one(sql, read="clickhouse")
+    ast = cast(exp.Expression, sqlglot.parse_one(sql, read="clickhouse"))
     return t._ast_clickhouse_array_join_to_unnest(ast, target)
 
 
 def _norm(sql: str) -> str:
     return " ".join(sql.split())
+
+
+def _target_sql(result: TranspileResult) -> str:
+    assert result.target_sql is not None
+    return result.target_sql
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +123,8 @@ class TestProductionPipeline:
     """The full transpile() path must produce the expected output and notes
     for every clickhouse→postgres case."""
 
+    t: SQLTranspiler
+
     @classmethod
     def setup_class(cls):
         cls.t = SQLTranspiler()
@@ -127,7 +136,7 @@ class TestProductionPipeline:
     def test_output_matches_expected(self, sql, expected):
         result = self.t.transpile(sql, source="clickhouse", target="postgres", validate=False)
         assert result.success is True, result.error
-        assert _norm(result.target_sql) == expected, f"output mismatch for: {sql}"
+        assert _norm(_target_sql(result)) == expected, f"output mismatch for: {sql}"
 
     def test_note_is_recorded(self):
         result = self.t.transpile(
@@ -145,8 +154,9 @@ class TestProductionPipeline:
         )
         assert result.success is True
         assert result.target_validation_state == "target_valid"
-        assert "ARRAY JOIN" not in result.target_sql.upper()
-        sqlglot.parse_one(result.target_sql, read="postgres")  # raises if invalid
+        target_sql = _target_sql(result)
+        assert "ARRAY JOIN" not in target_sql.upper()
+        sqlglot.parse_one(target_sql, read="postgres")  # raises if invalid
 
     def test_lexical_rule_is_gone(self):
         """The shadowed regex rule must no longer be present in the engine."""

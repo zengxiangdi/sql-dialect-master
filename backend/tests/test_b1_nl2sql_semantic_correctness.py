@@ -25,10 +25,9 @@
 """
 from __future__ import annotations
 
+import pytest
 import sqlglot
 from sqlglot import exp
-
-import pytest
 
 from backend.core.nl2sql import NL2SQLGenerator
 
@@ -40,7 +39,8 @@ def gen():
 
 def executable_sql(result) -> str:
     """Strip comment lines so the payload can be parsed by sqlglot."""
-    sql = result.sql or ""
+    assert result.sql is not None
+    sql = result.sql
     return "\n".join(line for line in sql.splitlines() if not line.strip().startswith("--"))
 
 
@@ -247,6 +247,8 @@ class TestB1_3_TopNWithFilterClauseOrder:
         assert result.success is True, result.explanation
         tree = sqlglot.parse_one(executable_sql(result), read="duckdb")
         where = tree.find(exp.Where)
+        assert where is not None
+        assert where.this is not None
         assert f"amount {expected_operator} {expected_threshold}" in where.sql(dialect="duckdb"), result.sql
 
     @pytest.mark.parametrize("dialect", ["postgres", "mysql", "oracle", "tsql", "duckdb", "hive"])
@@ -323,24 +325,29 @@ class TestB1_5_ChineseRelationIntent:
     def test_chinese_exists_relation(self, gen):
         result = gen.generate("查询有订单的用户", "hive")
         assert result.success is True, result.explanation
+        assert result.sql is not None
         assert "EXISTS" in result.sql.upper(), (
             f"Chinese relational intent must yield EXISTS, got: {result.sql}"
         )
         assert "users.id = orders.user_id" in result.sql, result.sql
         tree = sqlglot.parse_one(executable_sql(result), read="hive")
         from_clause = tree.find(exp.From)
+        assert from_clause is not None
+        assert from_clause.this is not None
         assert from_clause.this.name == "users", result.sql
         assert tree.find(exp.Exists) is not None, result.sql
 
     def test_chinese_not_exists_relation(self, gen):
         result = gen.generate("查询没有订单的用户", "hive")
         assert result.success is True, result.explanation
+        assert result.sql is not None
         assert "NOT EXISTS" in result.sql.upper(), result.sql
         assert "users.id = orders.user_id" in result.sql, result.sql
 
     def test_chinese_known_pair_customers(self, gen):
         result = gen.generate("查询有订单的客户", "hive")
         assert result.success is True, result.explanation
+        assert result.sql is not None
         assert "EXISTS" in result.sql.upper(), result.sql
         assert "customers.id = orders.customer_id" in result.sql, result.sql
 

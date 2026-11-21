@@ -1,4 +1,5 @@
 import asyncio
+from typing import cast
 
 import pytest
 
@@ -53,7 +54,7 @@ def test_batch_transpile_async_rejects_non_positive_concurrency() -> None:
                     ["SELECT 1"],
                     "mysql",
                     "postgres",
-                    max_concurrent=max_concurrent,
+                    max_concurrent=cast(int, max_concurrent),
                 )
             )
 
@@ -66,14 +67,14 @@ def test_batch_transpile_async_rejects_non_positive_concurrency() -> None:
 def test_batch_transpile_async_rejects_non_integer_concurrency() -> None:
     transpiler = SQLTranspiler()
 
-    for max_concurrent in (1.5, True, "2"):
+    for max_concurrent in cast(tuple[object, ...], (1.5, True, "2")):
         with pytest.raises(ValidationError) as exc_info:
             asyncio.run(
                 transpiler.batch_transpile_async(
                     ["SELECT 1"],
                     "mysql",
                     "postgres",
-                    max_concurrent=max_concurrent,
+                    max_concurrent=cast(int, max_concurrent),
                 )
             )
 

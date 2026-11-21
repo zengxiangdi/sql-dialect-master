@@ -8,7 +8,6 @@ def test_get_or_set_caches_none_value_once() -> None:
     def factory() -> None:
         nonlocal calls
         calls += 1
-        return None
 
     assert cache.get_or_set("none", factory) is None
     assert cache.get_or_set("none", factory) is None
@@ -24,7 +23,6 @@ def test_cached_function_caches_none_value_once() -> None:
     def build_value() -> None:
         nonlocal calls
         calls += 1
-        return None
 
     assert build_value() is None
     assert build_value() is None

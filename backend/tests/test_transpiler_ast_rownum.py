@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """G6-A1: AST-first ROWNUM -> LIMIT migration.
 
 Behavior tests for the AST transform added to ``SQLTranspiler``:
@@ -16,17 +15,24 @@ Covers:
 """
 from __future__ import annotations
 
+from typing import cast
+
 import sqlglot
 from sqlglot import exp
 
-from backend.core.transpiler import SQLTranspiler
+from backend.core.transpiler import SQLTranspiler, TranspileResult
 
 
 def _helper(sql: str, target: str = "postgres") -> tuple[exp.Expression, list[str]]:
     """Parse ``sql`` as Oracle and run the helper transform directly."""
     t = SQLTranspiler.__new__(SQLTranspiler)
-    ast = sqlglot.parse_one(sql, read="oracle")
+    ast = cast(exp.Expression, sqlglot.parse_one(sql, read="oracle"))
     return t._ast_rownum_to_limit(ast, target)
+
+
+def _target_sql(result: TranspileResult) -> str:
+    assert result.target_sql is not None
+    return result.target_sql
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +166,8 @@ class TestProductionPipeline:
     """The production transpile() path must record the AST note and
     emit the migrated LIMIT, for each supported target."""
 
+    t: SQLTranspiler
+
     @classmethod
     def setup_class(cls) -> None:
         cls.t = SQLTranspiler()
@@ -175,8 +183,9 @@ class TestProductionPipeline:
     def test_bare_rownum_migrated_to_postgres(self) -> None:
         r = self.t.transpile("SELECT * FROM t WHERE ROWNUM <= 5", source="oracle", target="postgres")
         assert r.success is True
-        assert self._contains("LIMIT 5", self._normalize(r.target_sql))
-        assert not self._contains("ROWNUM", r.target_sql.upper())
+        target_sql = _target_sql(r)
+        assert self._contains("LIMIT 5", self._normalize(target_sql))
+        assert not self._contains("ROWNUM", target_sql.upper())
         assert any("ROWNUM" in note and "LIMIT 5" in note for note in r.transformations)
 
     def test_companion_predicate_preserved(self) -> None:
@@ -185,16 +194,17 @@ class TestProductionPipeline:
             source="oracle", target="postgres",
         )
         assert r.success is True
-        norm = self._normalize(r.target_sql)
+        target_sql = _target_sql(r)
+        norm = self._normalize(target_sql)
         assert self._contains("dept = 1", norm)
         assert self._contains("LIMIT 5", norm)
-        assert not self._contains("ROWNUM", r.target_sql.upper())
+        assert not self._contains("ROWNUM", target_sql.upper())
 
     def test_all_supported_targets_fire_the_transform(self) -> None:
         for target in SUPPORTED_TARGETS:
             r = self.t.transpile("SELECT * FROM t WHERE ROWNUM <= 3", source="oracle", target=target)
             assert r.success is True, f"{target}: {r.error}"
-            assert self._contains("LIMIT 3", self._normalize(r.target_sql)), target
+            assert self._contains("LIMIT 3", self._normalize(_target_sql(r))), target
             assert any("(AST)" in note for note in r.transformations), target
 
     def test_order_by_rownum_not_migrated(self) -> None:
@@ -203,17 +213,19 @@ class TestProductionPipeline:
         # The AST path correctly declines ORDER BY; no ROWNUM → LIMIT
         # conversion happens anywhere in the pipeline.
         assert not any("(AST)" in note for note in r.transformations)
-        assert "ROWNUM <= 5" in r.target_sql.upper()
-        assert "LIMIT 5" not in r.target_sql.upper()
+        target_sql = _target_sql(r)
+        assert "ROWNUM <= 5" in target_sql.upper()
+        assert "LIMIT 5" not in target_sql.upper()
 
     def test_rejected_shape_leaves_limit_absent(self) -> None:
         r = self.t.transpile("SELECT * FROM t WHERE ROWNUM = 5", source="oracle", target="postgres")
         assert r.success is True
         # The AST path declines (operator is =, not <=); the legacy post-
         # processor also declines (its regex requires <=). No LIMIT is added.
-        assert "LIMIT" not in r.target_sql.upper()
+        target_sql = _target_sql(r)
+        assert "LIMIT" not in target_sql.upper()
         # ROWNUM remains in the output because no AST migration happened.
-        assert "ROWNUM" in r.target_sql.upper()
+        assert "ROWNUM" in target_sql.upper()
         assert not any("(AST)" in note for note in r.transformations)
 
     def test_unsupported_target_skips_transform(self) -> None:
@@ -226,7 +238,7 @@ class TestProductionPipeline:
     def test_string_literal_rownum_unchanged_in_pipeline(self) -> None:
         r = self.t.transpile("SELECT * FROM t WHERE name = 'ROWNUM'", source="oracle", target="postgres")
         assert r.success is True
-        assert "'ROWNUM'" in r.target_sql
+        assert "'ROWNUM'" in _target_sql(r)
         assert not any("(AST)" in note for note in r.transformations)
 
 class TestFloatBoundaryBehavior:
@@ -239,6 +251,8 @@ class TestFloatBoundaryBehavior:
     * The production result is ``success=True`` with the original ROWNUM
       predicate intact.
     """
+
+    t: SQLTranspiler
 
     @classmethod
     def setup_class(cls) -> None:
@@ -281,6 +295,8 @@ class TestDoubleRownumBehavior:
     both predicates must survive the pipeline unchanged — the old residual
     ``WHERE ROWNUM <= 5 LIMIT 5`` must not appear.
     """
+
+    t: SQLTranspiler
 
     @classmethod
     def setup_class(cls) -> None:

@@ -24,6 +24,7 @@ parsing rather than keyword sniffing.
 from __future__ import annotations
 
 import re
+from typing import ClassVar
 
 import pytest
 import sqlglot
@@ -43,11 +44,11 @@ def executable_sql(result) -> str:
     return "\n".join(line for line in sql.splitlines() if not line.strip().startswith("--"))
 
 
-def where_clauses(tree: exp.Expression) -> list:
+def where_clauses(tree: exp.Expr) -> list[exp.Where]:
     return list(tree.find_all(exp.Where))
 
 
-def unique_where_bodies(tree: exp.Expression) -> list:
+def unique_where_bodies(tree: exp.Expr) -> list[str]:
     """Canonical WHERE predicate bodies, de-duplicated by rendered text."""
     bodies = [w.this.sql() for w in where_clauses(tree)]
     seen: dict[str, str] = {}
@@ -64,7 +65,7 @@ class TestG1A_DuplicateWhere:
     """time_range inputs must produce at most one WHERE clause."""
 
     # (text, dialect) — covers EN, CN, with/without an explicit table.
-    INPUTS = [
+    INPUTS: ClassVar[list[str]] = [
         "last 7 days",
         "last 30 days",
         "last week",
@@ -73,7 +74,7 @@ class TestG1A_DuplicateWhere:
         "查询最近7天的订单",
         "find orders from last 7 days",
     ]
-    DIALECTS = ["postgres", "hive", "mysql", "oracle", "tsql", "duckdb"]
+    DIALECTS: ClassVar[list[str]] = ["postgres", "hive", "mysql", "oracle", "tsql", "duckdb"]
 
     @pytest.mark.parametrize("text", INPUTS)
     @pytest.mark.parametrize("dialect", DIALECTS)
@@ -266,7 +267,7 @@ class TestG1B_UnknownRelationship:
 
     # Relational EXISTential phrasings (enhanced path) and explicit physical
     # JOIN / CN-connective phrasings (join_query template path).
-    UNKNOWN_INPUTS = [
+    UNKNOWN_INPUTS: ClassVar[list[str]] = [
         "find users who have invoices",
         "find users who have logs",
         "find products who have payments",
@@ -274,7 +275,7 @@ class TestG1B_UnknownRelationship:
         "查询 users 与 invoices 连接",
         "find users join invoices",
     ]
-    DIALECTS = ["postgres", "hive", "mysql", "oracle", "tsql", "duckdb"]
+    DIALECTS: ClassVar[list[str]] = ["postgres", "hive", "mysql", "oracle", "tsql", "duckdb"]
 
     @pytest.mark.parametrize("text", UNKNOWN_INPUTS)
     @pytest.mark.parametrize("dialect", DIALECTS)
@@ -321,7 +322,7 @@ class TestG1B_EarlyBooleanPath:
 
     # These inputs trigger boolean_conditions or has_explicit_null_predicate
     # in generate() before the template/enhanced-fallback gates.
-    EARLY_PATH_INPUTS = [
+    EARLY_PATH_INPUTS: ClassVar[list[str]] = [
         # price/quantity → two comparisons → boolean_conditions non-None
         "find users who have invoices where price = 1 and quantity = 2",
         "find users who have invoices where price > 5 or price < 3",
@@ -331,7 +332,7 @@ class TestG1B_EarlyBooleanPath:
         # CN numeric + null
         "查询 users 和 invoices 的关联数据 where price > 10 and price is null",
     ]
-    DIALECTS = ["postgres", "hive", "mysql", "oracle", "tsql", "duckdb"]
+    DIALECTS: ClassVar[list[str]] = ["postgres", "hive", "mysql", "oracle", "tsql", "duckdb"]
 
     @pytest.mark.parametrize("text", EARLY_PATH_INPUTS)
     @pytest.mark.parametrize("dialect", DIALECTS)
@@ -424,7 +425,7 @@ class TestG1B_EarlyPathSubjectTable:
     """
 
     # (text, outer_table, relation_table, canonical_fk, expected_exists)
-    KNOWN_RELATION_INPUTS = [
+    KNOWN_RELATION_INPUTS: ClassVar[list[tuple[str, str, str, str, str]]] = [
         (
             "find users who have orders where price = 5 and quantity = 2",
             "users", "orders", "users.id = orders.user_id", "EXISTS",
@@ -537,7 +538,7 @@ class TestG1B_EarlyPathSubjectTable:
 class TestG1B_AllPathFailClosed:
     """Explicit fail-closed contract across every G1-B path category."""
 
-    DIALECTS = ["postgres", "hive", "mysql", "oracle", "tsql", "duckdb"]
+    DIALECTS: ClassVar[list[str]] = ["postgres", "hive", "mysql", "oracle", "tsql", "duckdb"]
 
     # (text, table_hint) — covers all 7 required path categories.
     @pytest.mark.parametrize(

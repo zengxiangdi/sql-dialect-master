@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Tests for Oracle LISTAGG → Hive/Spark/Databricks conversion.
 
 Oracle LISTAGG(expr, delim) WITHIN GROUP (ORDER BY ...) must produce

@@ -1,8 +1,9 @@
-#!/usr/bin/env python3
 """Test cases for SQL Server (TSQL) ↔ Hive SQL conversion."""
-import pytest
 import sys
 from pathlib import Path
+
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from backend.core.transpiler import SQLTranspiler
@@ -17,12 +18,12 @@ class TestTSQLToHive:
     def test_basic_select(self):
         sql = "SELECT * FROM users WHERE id = 1"
         result = transpiler.transpile(sql, "tsql", "hive")
-        assert result.success
+        assert result.success and result.target_sql is not None
     
     def test_top_to_limit(self):
         sql = "SELECT TOP 10 * FROM users"
         result = transpiler.transpile(sql, "tsql", "hive")
-        assert result.success
+        assert result.success and result.target_sql is not None
         assert "LIMIT" in result.target_sql
     
     def test_top_with_order(self):
@@ -154,7 +155,7 @@ class TestHiveToTSQL:
     def test_limit_to_top(self):
         sql = "SELECT * FROM users LIMIT 10"
         result = transpiler.transpile(sql, "hive", "tsql")
-        assert result.success
+        assert result.success and result.target_sql is not None
         assert "TOP" in result.target_sql or "FETCH" in result.target_sql
     
     def test_coalesce(self):

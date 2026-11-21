@@ -1,8 +1,8 @@
 """Regression tests for NL2SQL template regex hardening."""
 
 from backend.core.nl2sql_components.templates import (
-    DEFAULT_QUERY_TEMPLATES,
     _TEMPLATE_CAPTURE_LIMIT,
+    DEFAULT_QUERY_TEMPLATES,
 )
 
 

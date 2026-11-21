@@ -77,7 +77,7 @@ def test_postgres_array_type_evidence_keeps_compatibility_note(monkeypatch):
 
 def test_mysql_plain_query_skips_ast_normalization(monkeypatch):
     sql = "SELECT id, name FROM users WHERE id > 100"
-    calls = Counter()
+    calls: Counter[str] = Counter()
     original = sqlglot.parse_one
     original_transpile = sqlglot.transpile
 

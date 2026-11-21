@@ -2,13 +2,14 @@
 
 import sys
 import types
+from typing import Any, cast
 
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from backend.api.middleware import RateLimitMiddleware, RateLimiter
+from backend.api.middleware import RateLimiter, RateLimitMiddleware
 from backend.api.rate_limit_store import RedisRateLimitStore
 from backend.core.cache import TTLCache
 from backend.core.config import AppSettings
@@ -73,14 +74,14 @@ def test_health_probe_denial_has_request_id_without_logging_middleware() -> None
 
 
 def test_parser_limit_falls_back_to_transpiler_limit() -> None:
-    cfg = AppSettings(_env_file=None, transpiler_max_sql_length=1234)
+    cfg = cast(Any, AppSettings)(_env_file=None, transpiler_max_sql_length=1234)
     assert cfg.parser_max_sql_length == 1234
 
 
 def test_log_level_is_normalized_and_validated() -> None:
-    assert AppSettings(_env_file=None, log_level=" warning ").log_level == "WARNING"
+    assert cast(Any, AppSettings)(_env_file=None, log_level=" warning ").log_level == "WARNING"
     with pytest.raises(ValidationError):
-        AppSettings(_env_file=None, log_level="verbose")
+        cast(Any, AppSettings)(_env_file=None, log_level="verbose")
 
 
 def test_redis_client_has_bounded_timeouts(monkeypatch) -> None:
