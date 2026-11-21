@@ -42,6 +42,7 @@ def test_legacy_and_composite_relationship_models_are_accepted():
     })
     assert legacy.relationships[0].columns is None
     composite = main.SchemaDefinition.model_validate(composite_schema())
+    assert composite.relationships[0].columns is not None
     assert len(composite.relationships[0].columns) == 2
 
 

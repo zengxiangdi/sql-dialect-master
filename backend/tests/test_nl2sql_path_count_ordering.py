@@ -13,14 +13,15 @@ from backend.core.nl2sql_pipeline.ir import (
     build_ir,
 )
 from backend.core.nl2sql_pipeline.renderer import render_sql
-from backend.tests.test_nl2sql_composite_unique_count import schema as single_composite_schema
+from backend.tests.test_nl2sql_composite_unique_count import (
+    schema as single_composite_schema,
+)
 from backend.tests.test_nl2sql_path_filter_ownership import (
     onehop_schema,
     twohop_schema,
 )
 from backend.tests.test_nl2sql_unique_count import make_schema as single_schema
 from backend.tests.test_nl2sql_zero_count import make_count_pk_schema, make_schema
-
 
 DIALECTS = [
     "mysql", "postgres", "oracle", "tsql", "hive", "spark",
@@ -89,8 +90,7 @@ def test_count_and_group_ordering_preserves_user_order_and_ties(text, expected):
 
 def test_zero_count_ordering_with_path_filter_and_limit():
     result = generate(
-        "count distinct products per user whose products.tenant_id is 1 "
-        "including zero ordered by count desc, users.id desc limit 2",
+        "count distinct products per user whose products.tenant_id is 1 including zero ordered by count desc, users.id desc limit 2",
         twohop_schema(),
     )
 
@@ -154,8 +154,7 @@ def test_limit_words_inside_path_filter_values_do_not_limit(owner, include_zero,
 def test_real_ordering_after_path_filter_still_orders(owner, include_zero):
     suffix = " including zero" if include_zero else ""
     result = generate(
-        f"count distinct products per user whose {owner}.status is 'desc'{suffix} "
-        "ordered by count desc",
+        f"count distinct products per user whose {owner}.status is 'desc'{suffix} ordered by count desc",
         twohop_schema(),
     )
 
@@ -166,38 +165,31 @@ def test_real_ordering_after_path_filter_still_orders(owner, include_zero):
 
 @pytest.mark.parametrize("text,limit", [
     (
-        "count distinct products per user whose products.status is 'top 10' "
-        "ordered by count desc limit 2",
+        ("count distinct products per user whose products.status is 'top 10' ordered by count desc limit 2"),
         "LIMIT 2",
     ),
     (
-        "count distinct products per user whose products.status is 'top 5' "
-        "ordered by count desc top 10",
+        ("count distinct products per user whose products.status is 'top 5' ordered by count desc top 10"),
         "LIMIT 10",
     ),
     (
-        "count distinct products per user whose products.status is 'limit 5' "
-        "ordered by count desc limit 2",
+        ("count distinct products per user whose products.status is 'limit 5' ordered by count desc limit 2"),
         "LIMIT 2",
     ),
     (
-        "count distinct products per user whose products.status is 'limit 2' "
-        "ordered by count desc top 10",
+        ("count distinct products per user whose products.status is 'limit 2' ordered by count desc top 10"),
         "LIMIT 10",
     ),
     (
-        "count distinct products per user whose products.status is 'top 10' "
-        "ordered by count desc",
+        ("count distinct products per user whose products.status is 'top 10' ordered by count desc"),
         None,
     ),
     (
-        "count distinct products per user ordered by count desc limit 2 "
-        "whose products.status is 'top 10'",
+        ("count distinct products per user ordered by count desc limit 2 whose products.status is 'top 10'"),
         "LIMIT 2",
     ),
     (
-        "count distinct products per user including zero whose products.status is 'top 10' "
-        "ordered by count desc limit 2",
+        ("count distinct products per user including zero whose products.status is 'top 10' ordered by count desc limit 2"),
         "LIMIT 2",
     ),
 ])
@@ -293,11 +285,10 @@ def test_flat_and_single_table_count_ordering_is_handled_by_grouped_batch(text, 
 
 def _setup_onehop_runtime(connection):
     connection.executescript(
-        "CREATE TABLE users(id INTEGER, status TEXT);"
-        "CREATE TABLE orders(id INTEGER, user_id INTEGER, status TEXT, amount INTEGER);"
-        "INSERT INTO users VALUES (1, 'active'), (2, 'active'), (3, 'active');"
-        "INSERT INTO orders VALUES "
-        "(10, 1, 'active', 1), (11, 1, 'active', 1), (12, 2, 'active', 1);"
+            "CREATE TABLE users(id INTEGER, status TEXT);CREATE TABLE orders(id INTEGER, user_id INTEGER, status TEXT, amount INTEGER);"
+            "INSERT INTO users VALUES (1, 'active'), (2, 'active'), (3, 'active');INSERT INTO orders VALUES "
+            "(10, 1, 'active', 1), (11, 1, 'active', 1), (12, 2, 'active', 1);"
+
     )
 
 

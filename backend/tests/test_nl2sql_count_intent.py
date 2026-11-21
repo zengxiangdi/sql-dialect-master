@@ -6,7 +6,6 @@ import sqlglot
 from backend.core.nl2sql import NL2SQLGenerator
 from backend.core.nl2sql_schema import SchemaContext
 
-
 BASE = {
     "tables": [
         {"name": "orders", "columns": [{"name": "id"}, {"name": "amount"}, {"name": "user_id"}]},
@@ -43,6 +42,7 @@ def generate(text: str, schema: SchemaContext | None):
 def test_schema_order_count_is_count_only(text):
     result = generate(text, context())
     assert result.success
+    assert result.sql is not None
     assert "SELECT COUNT(*) AS count" in result.sql
     assert "GROUP BY" not in result.sql
 
@@ -50,6 +50,7 @@ def test_schema_order_count_is_count_only(text):
 def test_orders_quantity_does_not_change_order_count():
     result = generate("统计订单数量", context(orders_quantity=True))
     assert result.success
+    assert result.sql is not None
     assert "COUNT(*) AS count" in result.sql
     assert "SUM(quantity)" not in result.sql
 
@@ -57,6 +58,7 @@ def test_orders_quantity_does_not_change_order_count():
 def test_products_quantity_does_not_turn_product_count_into_sum():
     result = generate("统计产品数量", context())
     assert result.success
+    assert result.sql is not None
     assert "FROM products" in result.sql
     assert "COUNT(*) AS count" in result.sql
     assert "SUM(quantity)" not in result.sql
@@ -71,6 +73,7 @@ def test_products_quantity_does_not_turn_product_count_into_sum():
 def test_entity_counter_suffix_is_count(text, table):
     result = generate(text, single_table_context(table, ["id"]))
     assert result.success
+    assert result.sql is not None
     assert f"FROM {table}" in result.sql
     assert "COUNT(*) AS count" in result.sql
 
@@ -87,6 +90,7 @@ def test_entity_counter_suffix_is_count(text, table):
 def test_entity_data_words_remain_select_without_count(text, table):
     result = generate(text, single_table_context(table, ["id", "name", "data"]))
     assert result.success
+    assert result.sql is not None
     assert f"FROM {table}" in result.sql
     assert "COUNT(" not in result.sql
 
@@ -103,6 +107,7 @@ def test_data_words_do_not_trigger_schema_count(text):
 def test_user_data_words_are_not_count_intent(text):
     result = generate(text, single_table_context("users", ["id", "name", "data"]))
     assert result.success
+    assert result.sql is not None
     assert "COUNT(*) AS count" not in result.sql
 
 
@@ -118,10 +123,12 @@ def test_user_compound_data_words_are_not_entity_counters(text):
 ])
 def test_entity_counter_and_data_suffixes_are_distinct(text, table):
     result = generate(text, single_table_context(table, ["id", "name", "data"]))
-    if text.endswith("数") or text.endswith("数量"):
-        assert result.success and "COUNT(*) AS count" in result.sql
+    if text.endswith(("数", "数量")):
+        assert result.success and result.sql is not None
+        assert "COUNT(*) AS count" in result.sql
     else:
-        assert "COUNT(*) AS count" not in (result.sql or "")
+        assert result.sql is not None
+        assert "COUNT(*) AS count" not in result.sql
 
 
 def test_qualified_measure_tables_use_basename():
@@ -135,6 +142,7 @@ def test_qualified_measure_tables_use_basename():
     })
     inventory_result = generate("统计库存数量", inventory)
     orders_result = generate("统计购买数量", orders)
+    assert inventory_result.sql is not None and orders_result.sql is not None
     assert inventory_result.success and "SUM(quantity)" in inventory_result.sql
     assert orders_result.success and "SUM(quantity)" in orders_result.sql
 
@@ -145,6 +153,7 @@ def test_inventory_quantity_is_sum_measure():
         context(inventory_columns=[{"name": "id"}, {"name": "quantity"}]),
     )
     assert result.success
+    assert result.sql is not None
     assert "SELECT SUM(quantity)" in result.sql
     assert "FROM inventory" in result.sql
     assert "GROUP BY" not in result.sql
@@ -153,6 +162,7 @@ def test_inventory_quantity_is_sum_measure():
 def test_purchase_quantity_is_sum_on_orders():
     result = generate("统计购买数量", context(orders_quantity=True))
     assert result.success
+    assert result.sql is not None
     assert "SELECT SUM(quantity)" in result.sql
     assert "FROM orders" in result.sql
 
@@ -194,7 +204,7 @@ def test_batch_two_b_group_labels_remain_fail_closed(text):
 ])
 def test_count_and_sum_parse_in_all_dialects(dialect):
     count = NL2SQLGenerator().generate("统计订单数量", dialect, schema=context())
-    assert count.success
+    assert count.success and count.sql is not None
     assert sqlglot.parse_one(count.sql, read=dialect) is not None
 
     inventory = NL2SQLGenerator().generate(
@@ -202,7 +212,7 @@ def test_count_and_sum_parse_in_all_dialects(dialect):
         dialect,
         schema=context(inventory_columns=[{"name": "quantity"}]),
     )
-    assert inventory.success
+    assert inventory.success and inventory.sql is not None
     assert sqlglot.parse_one(inventory.sql, read=dialect) is not None
 
 
@@ -218,6 +228,7 @@ def test_no_schema_count_outputs_remain_current(text):
 def test_no_schema_order_count_keeps_legacy_quantity_grouping():
     result = generate("统计订单数量", None)
     assert result.success
+    assert result.sql is not None
     assert "COUNT(*) AS count" in result.sql
     assert "GROUP BY quantity" in result.sql
 

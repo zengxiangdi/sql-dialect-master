@@ -6,10 +6,9 @@ import pytest
 import sqlglot
 
 from backend.core.nl2sql import NL2SQLGenerator
-from backend.core.nl2sql_schema import SchemaContext
-from backend.core.nl2sql_pipeline.predicates import _quoted_comparisons
 from backend.core.nl2sql_components.mappings import COLUMN_PATTERNS
-
+from backend.core.nl2sql_pipeline.predicates import _quoted_comparisons
+from backend.core.nl2sql_schema import SchemaContext
 
 SCHEMA = SchemaContext.from_mapping(
     {
@@ -145,7 +144,7 @@ def test_safe_predicates_parse_in_supported_dialects(dialect):
         dialect,
         schema=SCHEMA,
     )
-    assert result.success
+    assert result.success and result.sql is not None
     assert sqlglot.parse_one(result.sql, read=dialect) is not None
 
 
@@ -268,5 +267,5 @@ def test_remaining_status_and_text_cases_parse(dialect):
         "show users where price < -10",
     ):
         result = NL2SQLGenerator().generate(text, dialect, schema=SCHEMA)
-        assert result.success
+        assert result.success and result.sql is not None
         assert sqlglot.parse_one(result.sql, read=dialect) is not None

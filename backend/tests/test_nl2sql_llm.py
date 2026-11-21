@@ -4,18 +4,23 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from threading import Thread
 import traceback
+from threading import Thread
+from typing import Any, cast
 
 import httpx
 import pytest
 from pydantic import SecretStr, ValidationError
 from sqlglot import exp
 
-from backend.core.config import AppSettings
 from backend.core import nl2sql_llm
-from backend.core.nl2sql_llm import LLMError, LLMGeneration, LLMN2SQLClient, validate_llm_sql
-
+from backend.core.config import AppSettings
+from backend.core.nl2sql_llm import (
+    LLMError,
+    LLMGeneration,
+    LLMN2SQLClient,
+    validate_llm_sql,
+)
 
 PRIVATE_KEY = "private-llm-api-key-for-tests"
 
@@ -28,7 +33,7 @@ def configured(**overrides):
         "nl2sql_llm_model": "provider/test-model",
     }
     values.update(overrides)
-    return AppSettings(**values)
+    return cast(AppSettings, cast(Any, AppSettings)(**values))
 
 
 def completion(content="SELECT id FROM users", **extra):
@@ -41,7 +46,7 @@ def generate_with(handler, **settings_overrides):
 
 
 def test_settings_defaults_disable_external_generation():
-    values = AppSettings(_env_file=None)
+    values = cast(AppSettings, cast(Any, AppSettings)(_env_file=None))
     assert values.nl2sql_llm_enabled is False
     assert values.nl2sql_llm_base_url == "https://openrouter.ai/api/v1"
     assert values.nl2sql_llm_api_key is None

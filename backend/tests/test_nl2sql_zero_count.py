@@ -8,7 +8,6 @@ import sqlglot
 from backend.core.nl2sql import NL2SQLGenerator
 from backend.core.nl2sql_schema import SchemaContext
 
-
 DIALECTS = [
     "mysql", "postgres", "oracle", "tsql", "hive", "spark",
     "trino", "databricks", "snowflake", "redshift", "clickhouse", "duckdb",

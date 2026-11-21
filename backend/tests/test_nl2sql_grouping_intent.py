@@ -6,7 +6,6 @@ import sqlglot
 from backend.core.nl2sql import NL2SQLGenerator
 from backend.core.nl2sql_schema import SchemaContext
 
-
 SCHEMA = SchemaContext.from_mapping(
     {
         "tables": [
@@ -138,7 +137,7 @@ def test_schema_order_by_is_not_reinterpreted_as_group_by():
 ])
 def test_schema_group_count_parses_in_all_dialects(dialect):
     result = NL2SQLGenerator().generate("Count orders by user_id", dialect, schema=SCHEMA)
-    assert result.success
+    assert result.success and result.sql is not None
     assert sqlglot.parse_one(result.sql, read=dialect) is not None
 
 

@@ -15,6 +15,7 @@ def test_count_by_group_honors_column_hint_and_requested_count_order() -> None:
     )
 
     assert result.success, result.explanation
+    assert result.sql is not None
     sql = "\n".join(
         line for line in result.sql.splitlines() if not line.strip().startswith("--")
     )
@@ -39,6 +40,7 @@ def test_count_by_group_without_order_language_keeps_existing_shape() -> None:
     )
 
     assert result.success, result.explanation
+    assert result.sql is not None
     sql = "\n".join(
         line for line in result.sql.splitlines() if not line.strip().startswith("--")
     )

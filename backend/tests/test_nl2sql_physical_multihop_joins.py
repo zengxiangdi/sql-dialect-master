@@ -9,7 +9,6 @@ from backend.core.nl2sql import NL2SQLGenerator
 from backend.core.nl2sql_schema import SchemaContext
 from backend.tests.test_nl2sql_three_hop_path import schema
 
-
 DIALECTS = ["mysql", "postgres", "oracle", "tsql", "hive", "spark", "trino", "databricks", "snowflake", "redshift", "clickhouse", "duckdb"]
 
 

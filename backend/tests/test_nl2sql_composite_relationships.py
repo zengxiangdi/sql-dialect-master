@@ -1,11 +1,11 @@
 """Composite relationship normalization and direct SQL contracts."""
 import sqlite3
+
 import pytest
 import sqlglot
-from fastapi.testclient import TestClient
-from backend.api import main
+
 from backend.core.nl2sql import NL2SQLGenerator
-from backend.core.nl2sql_schema import SchemaContext, SchemaValidationError
+from backend.core.nl2sql_schema import SchemaContext
 
 
 def composite_schema():
@@ -58,12 +58,13 @@ def test_composite_tenant_isolation_sqlite():
     assert list(conn.execute(sql)) == [(1,1)]
 
 def test_no_schema_unchanged():
-    r=NL2SQLGenerator().generate('users joined with orders','postgres'); assert r.success and 'WHERE EXISTS' in r.sql
+    r=NL2SQLGenerator().generate('users joined with orders','postgres'); assert r.success and r.sql is not None and 'WHERE EXISTS' in r.sql
 
 @pytest.mark.parametrize('dialect',['mysql','postgres','oracle','tsql','hive','spark','trino','databricks','snowflake','redshift','clickhouse','duckdb'])
 def test_composite_sql_parses(dialect):
     r=NL2SQLGenerator().generate('users join orders',dialect,schema=SchemaContext.from_mapping(composite_schema()));
     assert r.success
+    assert r.sql is not None
     assert sqlglot.parse_one(r.sql, read=dialect) is not None
 
 def test_repeated_deterministic():

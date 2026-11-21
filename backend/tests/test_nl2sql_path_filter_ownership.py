@@ -15,7 +15,6 @@ from backend.core.nl2sql_pipeline.ir import (
 from backend.core.nl2sql_pipeline.renderer import render_sql
 from backend.core.nl2sql_schema import SchemaContext
 
-
 DIALECTS = [
     "mysql", "postgres", "oracle", "tsql", "hive", "spark",
     "trino", "databricks", "snowflake", "redshift", "clickhouse", "duckdb",

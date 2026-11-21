@@ -6,7 +6,6 @@ import sqlglot
 from backend.core.nl2sql import NL2SQLGenerator
 from backend.core.nl2sql_schema import SchemaContext
 
-
 SCHEMA = SchemaContext.from_mapping(
     {
         "tables": [
@@ -53,6 +52,7 @@ def generate(text: str, *, schema: bool = True, hints=None):
 def test_schema_projection_uses_text_order_and_case_insensitive_columns(text, columns):
     result = generate(text)
     assert result.success
+    assert result.sql is not None
     assert f"SELECT {', '.join(columns)}" in result.sql
 
 
@@ -68,6 +68,7 @@ def test_schema_projection_uses_text_order_and_case_insensitive_columns(text, co
 def test_schema_projection_merges_aliases_and_deduplicates(text, columns):
     result = generate(text)
     assert result.success
+    assert result.sql is not None
     assert f"SELECT {', '.join(columns)}" in result.sql
 
 
@@ -83,6 +84,7 @@ def test_schema_projection_merges_aliases_and_deduplicates(text, columns):
 def test_schema_projection_deduplicates_canonical_columns(text, expected):
     result = generate(text)
     assert result.success
+    assert result.sql is not None
     assert expected in result.sql
     projection = result.sql.split("FROM", 1)[0]
     assert projection.count("email") <= 1
@@ -92,6 +94,7 @@ def test_schema_projection_deduplicates_canonical_columns(text, expected):
 def test_schema_projection_deduplication_keeps_alias_merge_behavior():
     result = generate("Show user 姓名 and nickname")
     assert result.success
+    assert result.sql is not None
     assert "SELECT name, nickname" in result.sql
 
 
@@ -105,6 +108,7 @@ def test_schema_projection_deduplication_keeps_alias_merge_behavior():
 def test_schema_projection_ignores_columns_inside_literals(text):
     result = generate(text)
     assert result.success
+    assert result.sql is not None
     assert "SELECT name" in result.sql
     assert "email" not in result.sql.split("FROM", 1)[0]
 
@@ -117,6 +121,7 @@ def test_schema_projection_supports_qualified_column():
         "show public.users.email", "postgres", schema=qualified
     )
     assert result.success
+    assert result.sql is not None
     assert "SELECT email" in result.sql
 
 
@@ -136,6 +141,7 @@ def test_schema_projection_rejects_mapped_column_outside_table():
 def test_schema_distinct_combines_with_projection(text, expected):
     result = generate(text)
     assert result.success
+    assert result.sql is not None
     assert expected in result.sql
 
 
@@ -143,6 +149,7 @@ def test_schema_distinct_combines_with_projection(text, expected):
 def test_schema_projection_does_not_add_spurious_ordering(text):
     result = generate(text)
     assert result.success
+    assert result.sql is not None
     assert "SELECT amount" in result.sql
     assert "ORDER BY" not in result.sql
 
@@ -158,12 +165,14 @@ def test_schema_projection_does_not_add_spurious_ordering(text):
 def test_schema_explicit_ordering_is_preserved(text, order):
     result = generate(text)
     assert result.success
+    assert result.sql is not None
     assert order in result.sql
 
 
 def test_schema_ordering_uses_target_column_after_projection_text():
     result = generate("Show users with name ordered by created_at")
     assert result.success
+    assert result.sql is not None
     assert "SELECT name" in result.sql
     assert "ORDER BY created_at ASC" in result.sql
 
@@ -177,6 +186,7 @@ def test_schema_unknown_ordering_column_fails_closed():
 def test_schema_multiple_ordering_columns_are_resolved_in_batch_one():
     result = generate("Show users ordered by name and email")
     assert result.success
+    assert result.sql is not None
     assert "ORDER BY name ASC, email ASC" in result.sql
 
 
@@ -190,6 +200,7 @@ def test_schema_plain_select_and_exists_are_unchanged():
 def test_schema_column_hints_remain_authoritative():
     result = generate("Show users", hints=["users.email", "users.name"])
     assert result.success
+    assert result.sql is not None
     assert "SELECT users.email, users.name" in result.sql
 
 
@@ -200,6 +211,7 @@ def test_schema_column_hints_remain_authoritative():
 def test_schema_projection_parses_in_all_dialects(dialect):
     result = NL2SQLGenerator().generate("Show user names and emails", dialect, schema=SCHEMA)
     assert result.success
+    assert result.sql is not None
     assert sqlglot.parse_one(result.sql, read=dialect) is not None
 
 

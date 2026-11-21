@@ -158,6 +158,7 @@ def test_unique_count_is_parseable_in_all_dialects(dialect):
         schema=make_schema(primary_key=["id"]),
     )
     assert result.success
+    assert result.sql is not None
     assert sqlglot.parse_one(result.sql, read=dialect) is not None
 
 

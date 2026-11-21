@@ -18,8 +18,9 @@ def generate(text, schema_value=None):
 
 
 def body(result):
+    assert result.sql is not None
     return " ".join(
-        line.strip() for line in (result.sql or "").splitlines()
+        line.strip() for line in result.sql.splitlines()
         if not line.strip().startswith("--")
     )
 

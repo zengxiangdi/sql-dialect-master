@@ -1,5 +1,7 @@
 """P1 Batch 2b2 schema group-label and subject-table contracts."""
 
+from typing import cast
+
 import pytest
 import sqlglot
 
@@ -8,14 +10,14 @@ from backend.core.nl2sql_schema import SchemaContext
 
 
 def schema_context(*, relationship=True, orders_user_id=True, employees_department=True, users=True):
-    tables = [
+    tables: list[dict[str, object]] = [
         {"name": "orders", "columns": [{"name": "id"}, {"name": "amount"}]},
         {"name": "employees", "columns": [{"name": "id"}, {"name": "name"}]},
     ]
     if orders_user_id:
-        tables[0]["columns"].append({"name": "user_id"})
+        tables[0]["columns"] = [*cast(list[dict[str, str]], tables[0]["columns"]), {"name": "user_id"}]
     if employees_department:
-        tables[1]["columns"].append({"name": "department"})
+        tables[1]["columns"] = [*cast(list[dict[str, str]], tables[1]["columns"]), {"name": "department"}]
     if users:
         tables.append({"name": "users", "columns": [{"name": "id"}, {"name": "name"}]})
     relationships = []
@@ -28,7 +30,7 @@ def schema_context(*, relationship=True, orders_user_id=True, employees_departme
 
 
 def generate(text, schema=None):
-    return NL2SQLGenerator().generate("".join([text]), "postgres", schema=schema)
+    return NL2SQLGenerator().generate(f"{text}", "postgres", schema=schema)
 
 
 def executable_sql(result):
@@ -471,63 +473,51 @@ def test_no_schema_outputs_remain_current(text):
 @pytest.mark.parametrize("text,expected", [
     (
         "统计每个部门员工数量",
-        "SELECT COUNT(*) AS count FROM departments "
-        "INNER JOIN employees ON departments.id = employees.dept_id GROUP BY quantity",
+        ("SELECT COUNT(*) AS count FROM departments INNER JOIN employees ON departments.id = employees.dept_id GROUP BY quantity"),
     ),
     (
         "每个部门的员工数量",
-        "SELECT department, COUNT(*) AS count FROM departments "
-        "INNER JOIN employees ON departments.id = employees.dept_id GROUP BY department",
+        ("SELECT department, COUNT(*) AS count FROM departments INNER JOIN employees ON departments.id = employees.dept_id GROUP BY department"),
     ),
     (
         "统计每个部门的员工数量",
-        "SELECT department, COUNT(*) AS count FROM departments "
-        "INNER JOIN employees ON departments.id = employees.dept_id GROUP BY department",
+        ("SELECT department, COUNT(*) AS count FROM departments INNER JOIN employees ON departments.id = employees.dept_id GROUP BY department"),
     ),
     (
         "每个部门的员工数",
-        "SELECT * FROM departments "
-        "INNER JOIN employees ON departments.id = employees.dept_id GROUP BY department",
+        ("SELECT * FROM departments INNER JOIN employees ON departments.id = employees.dept_id GROUP BY department"),
     ),
     (
         "统计每个部门的员工数",
-        "SELECT department, COUNT(*) AS count FROM departments "
-        "INNER JOIN employees ON departments.id = employees.dept_id GROUP BY department",
+        ("SELECT department, COUNT(*) AS count FROM departments INNER JOIN employees ON departments.id = employees.dept_id GROUP BY department"),
     ),
     (
         "每个部门的员工人数",
-        "SELECT * FROM departments "
-        "INNER JOIN employees ON departments.id = employees.dept_id GROUP BY department",
+        ("SELECT * FROM departments INNER JOIN employees ON departments.id = employees.dept_id GROUP BY department"),
     ),
     (
         "统计每个用户订单数量",
-        "SELECT COUNT(*) AS count FROM users "
-        "INNER JOIN orders ON users.id = orders.user_id GROUP BY quantity",
+        ("SELECT COUNT(*) AS count FROM users INNER JOIN orders ON users.id = orders.user_id GROUP BY quantity"),
     ),
     (
         "每个用户的订单数量",
-        "SELECT user_id, COUNT(*) AS count FROM users "
-        "INNER JOIN orders ON users.id = orders.user_id GROUP BY user_id",
+        ("SELECT user_id, COUNT(*) AS count FROM users INNER JOIN orders ON users.id = orders.user_id GROUP BY user_id"),
     ),
     (
         "每个用户的订单数",
-        "SELECT * FROM users "
-        "INNER JOIN orders ON users.id = orders.user_id GROUP BY user_id",
+        ("SELECT * FROM users INNER JOIN orders ON users.id = orders.user_id GROUP BY user_id"),
     ),
     (
         "统计每个用户的订单数",
-        "SELECT user_id, COUNT(*) AS count FROM users "
-        "INNER JOIN orders ON users.id = orders.user_id GROUP BY user_id",
+        ("SELECT user_id, COUNT(*) AS count FROM users INNER JOIN orders ON users.id = orders.user_id GROUP BY user_id"),
     ),
     (
         "每个用户订单数量",
-        "SELECT COUNT(*) AS count FROM users "
-        "INNER JOIN orders ON users.id = orders.user_id GROUP BY quantity",
+        ("SELECT COUNT(*) AS count FROM users INNER JOIN orders ON users.id = orders.user_id GROUP BY quantity"),
     ),
     (
         "统计各个部门员工数量",
-        "SELECT COUNT(*) AS count FROM departments "
-        "INNER JOIN employees ON departments.id = employees.dept_id GROUP BY quantity",
+        ("SELECT COUNT(*) AS count FROM departments INNER JOIN employees ON departments.id = employees.dept_id GROUP BY quantity"),
     ),
     ("统计每位员工的订单数量", None),
     ("每个部门的订单数量", None),
@@ -559,6 +549,7 @@ def test_chinese_group_label_no_schema_outputs_match_existing_sql(text, expected
 def test_group_label_sql_parses_in_all_dialects(dialect, text):
     result = NL2SQLGenerator().generate(text, dialect, schema=schema_context())
     assert result.success
+    assert result.sql is not None
     assert sqlglot.parse_one(result.sql, read=dialect) is not None
 
 

@@ -3,7 +3,6 @@
 These tests verify that nl2sql.py owns the canonical dialect-adjustment
 behavior, independent of the final_hardening monkey-patch layer.
 """
-import pytest
 
 from backend.core.nl2sql import NL2SQLGenerator
 
