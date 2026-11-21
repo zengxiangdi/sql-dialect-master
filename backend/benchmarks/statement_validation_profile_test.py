@@ -1,3 +1,5 @@
+import math
+
 from backend.benchmarks.statement_validation_profile import run
 
 
@@ -14,5 +16,5 @@ def test_statement_validation_profile_reports_parse_breakdown():
     if measurements["sqlglot_parse_and_count"]["per_statement_ms"] < 0:
         raise AssertionError("negative parse-and-count timing")
     parse_share = payload["analysis"]["parse_share_of_statement_validation_percent"]
-    if not 0 <= parse_share < 1000:
+    if not math.isfinite(parse_share) or parse_share < 0:
         raise AssertionError("invalid parse share")

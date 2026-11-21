@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Profile SQL transpiler cache-key construction without changing production code."""
 
 import argparse
@@ -6,16 +5,16 @@ import hashlib
 import json
 import platform
 import time
+from collections.abc import Callable
 from statistics import mean, median
-from typing import Callable, Dict, List
 
 from backend.core.config import settings
 from backend.core.transpiler import SQLTranspiler
 
 
-def measure(capture: Callable[[], object], repeats: int) -> List[float]:
+def measure(capture: Callable[[], object], repeats: int) -> list[float]:
     """Capture repeated wall-clock measurements."""
-    timings: List[float] = []
+    timings: list[float] = []
     for _ in range(repeats):
         start = time.perf_counter()
         capture()
@@ -56,25 +55,25 @@ def measure_direct_key(
     pretty: bool,
     validate: bool,
     repeats: int,
-) -> List[float]:
+) -> list[float]:
     """Measure the production `_cache_key()` end-to-end."""
     return measure(
         lambda: transpiler._cache_key(sql, source, target, pretty, validate), repeats
     )
 
 
-def measure_payload(transpiler: SQLTranspiler, repeats: int) -> List[float]:
+def measure_payload(transpiler: SQLTranspiler, repeats: int) -> list[float]:
     """Measure rule payload construction alone."""
     return measure(lambda: build_rule_payload(transpiler), repeats)
 
 
-def measure_hash(transpiler: SQLTranspiler, repeats: int) -> List[float]:
+def measure_hash(transpiler: SQLTranspiler, repeats: int) -> list[float]:
     """Measure rule payload hashing alone."""
     payload = build_rule_payload(transpiler)
     return measure(lambda: hash_rule_payload(payload), repeats)
 
 
-def run(repeats: int) -> Dict[str, object]:
+def run(repeats: int) -> dict[str, object]:
     """Run the cache-key profile for one representative request."""
     transpiler = SQLTranspiler()
     sql = "SELECT id, name FROM users WHERE id > 100"

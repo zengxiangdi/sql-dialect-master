@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Reproducible benchmark for transpiler wall time and hot-path stage cost.
 
 The benchmark intentionally avoids a pass/fail performance threshold. Runtime
@@ -13,17 +12,17 @@ import asyncio
 import json
 import platform
 import time
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from statistics import mean, median
-from typing import Callable, Dict, Iterator, List
+from typing import Any, cast
 from unittest.mock import patch
 
 import sqlglot
 
 from backend.core.config import settings
 from backend.core.transpiler import SQLTranspiler
-
 
 DEFAULT_STATEMENTS = [
     "SELECT id, name, created_at FROM users WHERE id > 100 ORDER BY created_at DESC LIMIT 50",
@@ -39,8 +38,8 @@ INVALID_INPUTS = [None, 42, True]
 class StageRecorder:
     """Accumulate inclusive wall-clock time for instrumented callables."""
 
-    totals: Dict[str, float] = field(default_factory=dict)
-    calls: Dict[str, int] = field(default_factory=dict)
+    totals: dict[str, float] = field(default_factory=dict)
+    calls: dict[str, int] = field(default_factory=dict)
 
     @contextmanager
     def time_call(self, name: str) -> Iterator[None]:
@@ -53,7 +52,7 @@ class StageRecorder:
             self.calls[name] = self.calls.get(name, 0) + 1
 
 
-def build_statements(iterations: int) -> List[str]:
+def build_statements(iterations: int) -> list[str]:
     """Create a stable workload without depending on external data."""
     return [DEFAULT_STATEMENTS[index % len(DEFAULT_STATEMENTS)] for index in range(iterations)]
 
@@ -65,7 +64,7 @@ def per_statement_seconds(total_seconds: float, statement_count: int) -> float:
     return total_seconds / statement_count
 
 
-def summarize_timings(timings: List[float], statement_count: int) -> Dict[str, object]:
+def summarize_timings(timings: list[float], statement_count: int) -> dict[str, object]:
     """Summarize repeated timings while retaining total-time measurements."""
     mean_seconds = mean(timings)
     per_statement = per_statement_seconds(mean_seconds, statement_count)
@@ -81,7 +80,7 @@ def summarize_timings(timings: List[float], statement_count: int) -> Dict[str, o
 
 def measure_sync(
     transpiler: SQLTranspiler,
-    statements: List[str],
+    statements: list[str],
     source: str,
     target: str,
     validate: bool = True,
@@ -95,7 +94,7 @@ def measure_sync(
 
 async def measure_async(
     transpiler: SQLTranspiler,
-    statements: List[str],
+    statements: list[str],
     source: str,
     target: str,
     max_concurrent: int,
@@ -112,7 +111,7 @@ async def measure_async(
     return time.perf_counter() - start
 
 
-def measure_repeated(capture: Callable[[], float], repeats: int) -> List[float]:
+def measure_repeated(capture: Callable[[], float], repeats: int) -> list[float]:
     """Capture repeated timings in seconds."""
     return [capture() for _ in range(repeats)]
 
@@ -158,13 +157,14 @@ def _instrument_transpiler(transpiler: SQLTranspiler, recorder: StageRecorder) -
         with recorder.time_call("cache_set"):
             return original_set(*args, **kwargs)
 
-    transpiler._cache.get = timed_get
-    transpiler._cache.set = timed_set
+    cache = cast(Any, transpiler._cache)
+    cache.get = timed_get
+    cache.set = timed_set
 
 
 def _measure_sqlglot_and_postprocess(
     transpiler: SQLTranspiler,
-    statements: List[str],
+    statements: list[str],
     source: str,
     target: str,
     validate: bool,
@@ -191,18 +191,18 @@ def _measure_sqlglot_and_postprocess(
     with patch("backend.core.transpiler.sqlglot.transpile", timed_transpile), patch(
         "backend.core.transpiler.mask_non_executable", timed_mask
     ):
-        transpiler.post_processor.process = timed_process
+        cast(Any, transpiler.post_processor).process = timed_process
         return measure_sync(transpiler, statements, source, target, validate=validate)
 
 
-def measure_input_validation(repeats: int) -> Dict[str, object]:
+def measure_input_validation(repeats: int) -> dict[str, object]:
     """Measure the public type-validation fast path without changing behavior."""
-    timings: List[float] = []
+    timings: list[float] = []
     transpiler = SQLTranspiler()
     for _ in range(repeats):
         start = time.perf_counter()
         for value in INVALID_INPUTS:
-            transpiler.transpile(value, "mysql", "postgres", pretty=False)
+            transpiler.transpile(cast(str, value), "mysql", "postgres", pretty=False)
         timings.append(time.perf_counter() - start)
     return {
         "mean_seconds": mean(timings),
@@ -213,7 +213,7 @@ def measure_input_validation(repeats: int) -> Dict[str, object]:
 
 
 def profile_configuration(
-    statements: List[str],
+    statements: list[str],
     source: str,
     target: str,
     pretty: bool,
@@ -221,12 +221,12 @@ def profile_configuration(
     cache_enabled: bool,
     security_enabled: bool,
     repeats: int,
-) -> Dict[str, object]:
+) -> dict[str, object]:
     """Profile one stable cache/security/validation configuration."""
     previous_security = settings.security_check_enabled
     try:
         settings.security_check_enabled = security_enabled
-        timings: List[float] = []
+        timings: list[float] = []
         aggregate = StageRecorder()
 
         for _ in range(repeats):
