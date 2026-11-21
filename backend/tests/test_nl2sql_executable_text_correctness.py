@@ -10,8 +10,8 @@ import sys
 import pytest
 
 from backend.core.nl2sql import NL2SQLGenerator
-from backend.core.nl2sql_schema import SchemaContext
 from backend.core.nl2sql_pipeline.scanner import mask_nl2sql_non_executable
+from backend.core.nl2sql_schema import SchemaContext
 from backend.core.p1_sql_scanner import mask_non_executable
 
 

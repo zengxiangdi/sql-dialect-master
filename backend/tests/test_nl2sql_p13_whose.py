@@ -6,7 +6,6 @@ import sqlglot
 from backend.core.nl2sql import NL2SQLGenerator
 from backend.core.nl2sql_schema import SchemaContext
 
-
 USERS_SCHEMA = SchemaContext.from_mapping({
     "tables": [{
         "name": "users",
@@ -183,6 +182,7 @@ def test_whose_sql_parses_in_all_dialects(dialect):
     ]:
         result = generator.generate(text, dialect, schema=USERS_SCHEMA)
         assert result.success
+        assert result.sql is not None
         assert sqlglot.parse_one(result.sql, read=dialect) is not None
 
 

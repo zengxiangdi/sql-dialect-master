@@ -1,18 +1,22 @@
 """Batch 2 bounded schema relationship paths using nested EXISTS."""
 import sqlite3
+from typing import Any
+
 import pytest
 import sqlglot
+
 from backend.core.nl2sql import NL2SQLGenerator
 from backend.core.nl2sql_schema import SchemaContext
 
-def schema(extra=None, *, cycle=False, compound=False):
-    tables=[
+
+def schema(extra: list[dict[str, str]] | None = None, *, cycle: bool = False, compound: bool = False):
+    tables: list[dict[str, Any]]=[
       {'name':'users','columns':[{'name':'id'}, {'name':'tenant_id'}]},
       {'name':'orders','columns':[{'name':'id'}, {'name':'user_id'}, {'name':'product_id'}, {'name':'tenant_id'}]},
       {'name':'products','columns':[{'name':'id'}] + ([{'name':'user_id'}] if cycle else [])},
       {'name':'payments','columns':[{'name':'id'}, {'name':'order_id'}]},
     ]
-    rels=[
+    rels: list[dict[str, Any]]=[
       {'from_table':'orders','from_column':'user_id','to_table':'users','to_column':'id'},
       {'from_table':'orders','from_column':'product_id','to_table':'products','to_column':'id'},
       {'from_table':'payments','from_column':'order_id','to_table':'orders','to_column':'id'},
@@ -89,7 +93,7 @@ def test_composite_path_uses_all_pairs():
 
 def test_no_schema_unchanged():
     result=NL2SQLGenerator().generate('users who have products','postgres')
-    assert result.success and 'WHERE EXISTS' in result.sql
+    assert result.success and result.sql is not None and 'WHERE EXISTS' in result.sql
 
 def test_sqlite_runtime_semantics():
     conn=sqlite3.connect(':memory:'); conn.executescript('CREATE TABLE users(id); CREATE TABLE orders(id,user_id,product_id); CREATE TABLE products(id); INSERT INTO users VALUES(1),(2),(3); INSERT INTO orders VALUES(1,1,10),(2,1,10),(3,2,20); INSERT INTO products VALUES(10),(20);')

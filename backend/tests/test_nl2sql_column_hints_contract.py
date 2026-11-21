@@ -1,3 +1,5 @@
+from typing import cast
+
 from backend.core.nl2sql import NL2SQLGenerator
 
 
@@ -9,9 +11,9 @@ def test_column_hints_contract_accepts_supported_shapes():
         [],
         ["id"],
         ["users.id", "users.name"],
-        tuple(["users.id"]),
+        ("users.id",),
     ):
-        result = generator.generate("查询所有用户", "mysql", "users", hints)
+        result = generator.generate("查询所有用户", "mysql", "users", cast(list[str] | None, hints))
         assert result.success is True
         assert result.sql is not None
 
@@ -32,7 +34,7 @@ def test_column_hints_contract_rejects_invalid_shapes():
     )
 
     for hints in invalid_values:
-        result = generator.generate("查询所有用户", "mysql", "users", hints)
+        result = generator.generate("查询所有用户", "mysql", "users", cast(list[str] | None, hints))
         assert result.success is False
         assert result.confidence == 0.0
         assert result.sql is None
@@ -48,5 +50,6 @@ def test_column_hints_contract_preserves_dotted_identifiers():
     )
 
     assert result.success is True
+    assert result.sql is not None
     assert "users.id" in result.sql
     assert "users.name" in result.sql

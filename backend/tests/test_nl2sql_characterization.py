@@ -56,7 +56,7 @@ def _result_fields(result, prompt: str) -> dict:
 
 def _sql_without_comments(sql: str | None) -> str:
     if sql is None:
-        return ""
+        raise AssertionError("expected generated SQL")
     return "\n".join(line for line in sql.splitlines() if not line.strip().startswith("--"))
 
 
@@ -122,82 +122,82 @@ class TestD1DateArithmeticStructure:
 
     def test_today_postgres(self):
         r = NL2SQLGenerator().generate("查询今天的订单", "postgres")
-        assert r.success
+        assert r.success and r.sql is not None
         assert "date = CURRENT_DATE" in r.sql
 
     def test_yesterday_postgres(self):
         r = NL2SQLGenerator().generate("show yesterday's orders", "postgres")
-        assert r.success
+        assert r.success and r.sql is not None
         assert "CURRENT_DATE - INTERVAL '1 days'" in r.sql
 
     def test_yesterday_mysql(self):
         r = NL2SQLGenerator().generate("show yesterday's orders", "mysql")
-        assert r.success
+        assert r.success and r.sql is not None
         assert "DATE_SUB(CURRENT_DATE, INTERVAL 1 DAY)" in r.sql
 
     def test_yesterday_oracle(self):
         r = NL2SQLGenerator().generate("show yesterday's orders", "oracle")
-        assert r.success
+        assert r.success and r.sql is not None
         assert "TRUNC(SYSDATE) - 1" in r.sql
 
     def test_yesterday_tsql(self):
         r = NL2SQLGenerator().generate("show yesterday's orders", "tsql")
-        assert r.success
+        assert r.success and r.sql is not None
         assert "DATEADD(DAY, -1, CAST(GETDATE() AS DATE))" in r.sql
 
     def test_yesterday_hive(self):
         r = NL2SQLGenerator().generate("show yesterday's orders", "hive")
-        assert r.success
+        assert r.success and r.sql is not None
         assert "DATE_SUB(CURRENT_DATE, 1)" in r.sql
 
     def test_last_7_days_postgres(self):
         r = NL2SQLGenerator().generate("查询最近7天的订单", "postgres")
-        assert r.success
+        assert r.success and r.sql is not None
         assert "CURRENT_DATE - INTERVAL '7 days'" in r.sql
 
     def test_last_7_days_mysql(self):
         r = NL2SQLGenerator().generate("查询最近7天的订单", "mysql")
-        assert r.success
+        assert r.success and r.sql is not None
         assert "DATE_SUB(CURRENT_DATE, INTERVAL 7 DAY)" in r.sql
 
     def test_last_7_days_oracle(self):
         r = NL2SQLGenerator().generate("查询最近7天的订单", "oracle")
-        assert r.success
+        assert r.success and r.sql is not None
         assert "TRUNC(SYSDATE) - 7" in r.sql
 
     def test_last_7_days_tsql(self):
         r = NL2SQLGenerator().generate("查询最近7天的订单", "tsql")
-        assert r.success
+        assert r.success and r.sql is not None
         assert "DATEADD(DAY, -7, CAST(GETDATE() AS DATE))" in r.sql
 
     def test_last_7_days_hive(self):
         r = NL2SQLGenerator().generate("查询最近7天的订单", "hive")
-        assert r.success
+        assert r.success and r.sql is not None
         assert "DATE_SUB(CURRENT_DATE, 7)" in r.sql
 
     def test_last_3_weeks_postgres(self):
         r = NL2SQLGenerator().generate("查询最近3周的订单", "postgres")
-        assert r.success
+        assert r.success and r.sql is not None
         assert "CURRENT_DATE - INTERVAL '21 days'" in r.sql
 
     def test_last_2_months_mysql(self):
         r = NL2SQLGenerator().generate("查询最近2月的订单", "mysql")
-        assert r.success
+        assert r.success and r.sql is not None
         assert "DATE_SUB(CURRENT_DATE, INTERVAL 2 MONTH)" in r.sql
 
     def test_last_1_year_oracle(self):
         r = NL2SQLGenerator().generate("查询最近1年的订单", "oracle")
-        assert r.success
+        assert r.success and r.sql is not None
         assert "ADD_MONTHS(TRUNC(SYSDATE), -12)" in r.sql
 
     def test_last_1_year_tsql(self):
         r = NL2SQLGenerator().generate("查询最近1年的订单", "tsql")
-        assert r.success
+        assert r.success and r.sql is not None
         assert "DATEADD(MONTH, -12, CAST(GETDATE() AS DATE))" in r.sql
 
     def test_last_1_year_hive(self):
         r = NL2SQLGenerator().generate("查询最近1年的订单", "hive")
-        assert r.success
+        assert r.success and r.sql is not None
         assert "ADD_MONTHS(CURRENT_DATE, -12)" in r.sql
 
 
@@ -223,7 +223,7 @@ class TestD2RelationalGolden:
 class TestD2RelationalStructure:
     def test_users_with_orders_postgres_uses_exists(self):
         r = NL2SQLGenerator().generate("find users who have orders", "postgres")
-        assert r.success
+        assert r.success and r.sql is not None
         assert "WHERE EXISTS" in r.sql
         assert "users.id = orders.user_id" in r.sql
         tree = _parse(r.sql, "postgres")
@@ -233,19 +233,19 @@ class TestD2RelationalStructure:
 
     def test_users_without_orders_postgres_uses_not_exists(self):
         r = NL2SQLGenerator().generate("find users without orders", "postgres")
-        assert r.success
+        assert r.success and r.sql is not None
         assert "NOT EXISTS" in r.sql
         assert "users.id = orders.user_id" in r.sql
 
     def test_users_with_orders_hive_uses_exists(self):
         r = NL2SQLGenerator().generate("find users who have orders", "hive")
-        assert r.success
+        assert r.success and r.sql is not None
         assert "WHERE EXISTS" in r.sql
         assert "users.id = orders.user_id" in r.sql
 
     def test_users_with_orders_mysql_uses_exists(self):
         r = NL2SQLGenerator().generate("find users who have orders", "mysql")
-        assert r.success
+        assert r.success and r.sql is not None
         assert "WHERE EXISTS" in r.sql
         assert "users.id = orders.user_id" in r.sql
 
@@ -293,14 +293,14 @@ class TestG1FailClosedStructure:
     def test_no_on_none_in_successful_sql(self):
         """A successful join must never contain 'ON None'."""
         r = NL2SQLGenerator().generate("show users and products", "postgres")
-        assert r.success
+        assert r.success and r.sql is not None
         assert r.sql is not None
         assert "ON None" not in r.sql
 
     def test_known_relationship_succeeds_with_physical_join(self):
         """users/products have a canonical FK; the join must succeed."""
         r = NL2SQLGenerator().generate("show users and products", "postgres")
-        assert r.success
+        assert r.success and r.sql is not None
         assert "INNER JOIN products" in r.sql
         assert "users.id = products.user_id" in r.sql
 
@@ -313,26 +313,26 @@ class TestP0DialectForms:
 
     def test_top_n_oracle_uses_fetch_first(self):
         r = NL2SQLGenerator().generate("find top 10 products by price", "oracle")
-        assert r.success
+        assert r.success and r.sql is not None
         assert "FETCH FIRST 10 ROWS ONLY" in r.sql
         assert "LIMIT" not in r.sql
 
     def test_top_n_tsql_uses_top(self):
         r = NL2SQLGenerator().generate("find top 5 products by price", "tsql")
-        assert r.success
+        assert r.success and r.sql is not None
         assert "SELECT TOP 5" in r.sql
         assert "LIMIT" not in r.sql
 
     def test_top_n_postgres_uses_limit(self):
         r = NL2SQLGenerator().generate("find top 10 products by price", "postgres")
-        assert r.success
+        assert r.success and r.sql is not None
         assert "LIMIT 10" in r.sql
         assert "FETCH FIRST" not in r.sql
         assert "SELECT TOP" not in r.sql
 
     def test_top_n_mysql_uses_limit(self):
         r = NL2SQLGenerator().generate("find top 10 products by price", "mysql")
-        assert r.success
+        assert r.success and r.sql is not None
         assert "LIMIT 10" in r.sql
 
     def test_all_12_dialects_matrix(self):
@@ -340,7 +340,7 @@ class TestP0DialectForms:
         plain select prompt."""
         for dialect in DIALECTS:
             r = NL2SQLGenerator().generate("查询所有用户", dialect=dialect)
-            assert r.success, f"Plain select failed for dialect {dialect}"
+            assert r.success and r.sql is not None, f"Plain select failed for dialect {dialect}"
             tree = sqlglot.parse_one(
                 _sql_without_comments(r.sql), read=dialect
             )

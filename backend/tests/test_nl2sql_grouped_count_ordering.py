@@ -1,12 +1,14 @@
 """Schema grouped unique count ordering contracts."""
 import sqlite3
+
 import pytest
 import sqlglot
+
 from backend.core.nl2sql import NL2SQLGenerator
 from backend.core.nl2sql_pipeline.ir import AggregateOrderingTerm, build_ir
 from backend.core.nl2sql_pipeline.renderer import render_sql
-from backend.tests.test_nl2sql_unique_count import make_schema
 from backend.tests.test_nl2sql_composite_unique_count import schema as composite_schema
+from backend.tests.test_nl2sql_unique_count import make_schema
 
 DIALECTS = ["mysql", "postgres", "oracle", "tsql", "hive", "spark", "trino", "databricks", "snowflake", "redshift", "clickhouse", "duckdb"]
 

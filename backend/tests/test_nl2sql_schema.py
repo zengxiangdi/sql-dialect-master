@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -11,7 +12,6 @@ from pydantic import SecretStr
 from backend.api import main
 from backend.core.config import settings
 from backend.core.nl2sql_llm import LLMGeneration
-
 
 MODEL = "test-provider/schema-model"
 SCHEMA = {
@@ -111,6 +111,7 @@ def test_schema_reaches_deterministic_generation_without_changing_no_schema_base
     assert actual["provider"] == "deterministic"
     assert actual["success"] is True
     call = worker.await_args
+    assert call is not None
     assert call.args[:5] == (main.nl2sql_generator.generate, text, "postgres", None, None)
     assert call.args[5].tables[0].name == "users"
     generate.assert_not_awaited()
@@ -214,7 +215,7 @@ def test_schema_rejects_unsafe_or_overlength_table_identifiers(client, monkeypat
 @pytest.mark.parametrize("location", ["table", "column", "from_table", "from_column", "to_table", "to_column"])
 def test_invalid_schema_identifiers_are_not_echoed_in_422_or_logs(client, monkeypatch, caplog, location):
     sentinel = "private_schema_identifier;DROP"
-    schema = deepcopy(SCHEMA)
+    schema: dict[str, Any] = cast(dict[str, Any], deepcopy(SCHEMA))
     if location == "table":
         schema["tables"][0]["name"] = sentinel
     elif location == "column":
@@ -274,7 +275,7 @@ def test_malformed_schema_shape_is_rejected(client, monkeypatch, schema):
 
 def test_schema_metadata_is_not_logged_or_echoed_in_success_response(client, monkeypatch, caplog):
     sentinel = "private_schema_metadata_sentinel"
-    schema = deepcopy(SCHEMA)
+    schema: dict[str, Any] = cast(dict[str, Any], deepcopy(SCHEMA))
     schema["tables"][0]["columns"][0]["type"] = sentinel
     schema["tables"].append({"name": sentinel, "columns": [{"name": sentinel}]})
     stub_llm(monkeypatch)
@@ -323,11 +324,11 @@ def test_missing_required_text_does_not_echo_valid_schema(client, monkeypatch, c
 def test_schema_model_list_defaults_are_independent():
     first_schema = main.SchemaDefinition()
     second_schema = main.SchemaDefinition()
-    first_table = main.SchemaTable(name="users")
-    second_table = main.SchemaTable(name="orders")
+    first_table = main.SchemaTable(name="users", columns=[], primary_key=None)
+    second_table = main.SchemaTable(name="orders", columns=[], primary_key=None)
 
     first_schema.tables.append(first_table)
-    first_schema.relationships.append(main.SchemaRelationship(
+    first_schema.relationships.append(cast(Any, main.SchemaRelationship)(
         from_table="users", from_column="id", to_table="orders", to_column="user_id",
     ))
     first_table.columns.append(main.SchemaColumn(name="id"))

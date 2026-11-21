@@ -8,6 +8,7 @@ from backend.core.nl2sql import NL2SQLGenerator
 def test_bottom_n_template_orders_ascending():
     result = NL2SQLGenerator().generate("find bottom 10 products by price", "postgres")
     assert result.success
+    assert result.sql is not None
     assert "ORDER BY price ASC" in result.sql
     assert "LIMIT 10" in result.sql
 
@@ -15,6 +16,7 @@ def test_bottom_n_template_orders_ascending():
 def test_top_n_template_keeps_descending_order():
     result = NL2SQLGenerator().generate("find top 10 products by price", "postgres")
     assert result.success
+    assert result.sql is not None
     assert "ORDER BY price DESC" in result.sql
     assert "LIMIT 10" in result.sql
 
@@ -22,6 +24,7 @@ def test_top_n_template_keeps_descending_order():
 def test_table_hint_accepts_dotted_identifier():
     result = NL2SQLGenerator().generate("show all users", "postgres", "analytics.users")
     assert result.success
+    assert result.sql is not None
     assert "FROM analytics.users" in result.sql
 
 
@@ -33,6 +36,7 @@ def test_table_hint_rejects_sql_injection_syntax():
 def test_bottom_n_output_remains_parseable():
     result = NL2SQLGenerator().generate("find bottom 5 products by price", "postgres")
     assert result.success
+    assert result.sql is not None
     parsed = sqlglot.parse_one(result.sql, read="postgres")
     order = parsed.find(exp.Order)
     assert order is not None

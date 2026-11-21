@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Regression tests: NL2SQL relation correctness.
 
 Locks two invariants:
@@ -20,8 +19,6 @@ Locks two invariants:
 """
 from __future__ import annotations
 
-import re
-
 import pytest
 
 from backend.core.nl2sql_components.relations import (
@@ -30,7 +27,6 @@ from backend.core.nl2sql_components.relations import (
     guess_join_key,
     parse_join_spec,
 )
-from backend.core.nl2sql_components.relations import JoinSpec
 from backend.core.nl2sql_legacy import NL2SQLGenerator
 
 # Every known relationship, both directions for the reciprocal test.
@@ -47,7 +43,7 @@ RECIProCAL_PAIRS = [
 ]
 
 
-def _columns_of_condition(condition: str) -> set[tuple[str, str]]:
+def _columns_of_condition(condition: str) -> set[str]:
     """Normalize ``a.b = c.d`` to the set of {lhs, rhs} column tokens."""
     lhs, rhs = condition.split("=", 1)
     return {lhs.strip().lower(), rhs.strip().lower()}
@@ -138,8 +134,10 @@ class TestPhysicalJoinSpecParsing:
         assert spec.kind == "LEFT"
 
     def test_chinese_join_keywords(self) -> None:
-        assert parse_join_spec("右连接 用户 和 订单").kind == "RIGHT"
-        assert parse_join_spec("内连接 用户 和 订单").kind == "INNER"
+        right = parse_join_spec("右连接 用户 和 订单")
+        inner = parse_join_spec("内连接 用户 和 订单")
+        assert right is not None and right.kind == "RIGHT"
+        assert inner is not None and inner.kind == "INNER"
 
 
 class TestExtractJoinsStructured:
@@ -183,6 +181,7 @@ class TestNl2SqlEndToEnd:
     def test_explicit_join_kind_renders_in_sql(self, text: str, expected_join: str) -> None:
         result = NL2SQLGenerator().generate(text)
         assert result.success, f"generation failed: {result.explanation}"
+        assert result.sql is not None
         assert expected_join in result.sql, (
             f"expected '{expected_join}' in SQL, got: {result.sql}"
         )
@@ -190,6 +189,7 @@ class TestNl2SqlEndToEnd:
     def test_unqualified_join_defaults_to_inner_in_sql(self) -> None:
         result = NL2SQLGenerator().generate("join users and orders")
         assert result.success
+        assert result.sql is not None
         sql_upper = result.sql.upper()
         # Unqualified "JOIN" must render as INNER JOIN or a plain JOIN,
         # never as a garbage token like "USERS JOIN".
@@ -199,6 +199,7 @@ class TestNl2SqlEndToEnd:
     def test_relational_existence_uses_exists_not_join(self) -> None:
         result = NL2SQLGenerator().generate("show users who have orders")
         assert result.success
+        assert result.sql is not None
         sql_upper = result.sql.upper()
         assert "EXISTS" in sql_upper, (
             f"relational existence should use EXISTS, got: {result.sql}"
@@ -209,6 +210,7 @@ class TestNl2SqlEndToEnd:
     def test_negative_existence_uses_not_exists(self) -> None:
         result = NL2SQLGenerator().generate("show users without orders")
         assert result.success
+        assert result.sql is not None
         sql_upper = result.sql.upper()
         assert "NOT EXISTS" in sql_upper or "NOT" in sql_upper, (
             f"negative relational existence should use NOT EXISTS, got: {result.sql}"

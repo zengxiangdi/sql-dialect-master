@@ -9,6 +9,7 @@ from backend.core.nl2sql import NL2SQLGenerator
 def _where(text: str) -> exp.Expression:
     result = NL2SQLGenerator().generate(text, "postgres")
     assert result.success
+    assert result.sql is not None
     tree = sqlglot.parse_one(result.sql, read="postgres")
     where = tree.find(exp.Where)
     assert where is not None

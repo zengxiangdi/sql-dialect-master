@@ -11,7 +11,6 @@ from backend.core.nl2sql_pipeline.renderer import render_sql
 from backend.core.nl2sql_schema import SchemaContext
 from backend.tests.test_nl2sql_path_filter_ownership import twohop_schema
 
-
 DIALECTS = [
     "mysql", "postgres", "oracle", "tsql", "hive", "spark",
     "trino", "databricks", "snowflake", "redshift", "clickhouse", "duckdb",

@@ -13,7 +13,7 @@ from backend.core.nl2sql_schema import SchemaContext
 
 
 def table(*, columns=None, primary_key=None):
-    value = {"name": "users"}
+    value: dict[str, object] = {"name": "users"}
     if columns is not None:
         value["columns"] = [{"name": column} for column in columns]
     if primary_key is not None:

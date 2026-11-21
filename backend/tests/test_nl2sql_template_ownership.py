@@ -4,7 +4,6 @@ These tests verify that _generate_from_template (top-N semantics) and
 _match_templates (DML routing) are owned by the canonical nl2sql module,
 not by the final_hardening monkey-patch layer.
 """
-import pytest
 
 from backend.core.nl2sql import NL2SQLGenerator
 
@@ -15,18 +14,21 @@ class TestTopNSemantics:
     def test_bottom_n_orders_ascending(self):
         result = NL2SQLGenerator().generate("find bottom 10 products by price", "postgres")
         assert result.success
+        assert result.sql is not None
         assert "ORDER BY price ASC" in result.sql
         assert "LIMIT 10" in result.sql
 
     def test_top_n_keeps_descending_order(self):
         result = NL2SQLGenerator().generate("find top 10 products by price", "postgres")
         assert result.success
+        assert result.sql is not None
         assert "ORDER BY price DESC" in result.sql
         assert "LIMIT 10" in result.sql
 
     def test_bottom_n_oracle_uses_fetch_first(self):
         result = NL2SQLGenerator().generate("find bottom 10 products by price", "oracle")
         assert result.success
+        assert result.sql is not None
         assert "ORDER BY price ASC" in result.sql
         assert "FETCH FIRST 10 ROWS ONLY" in result.sql
         assert "LIMIT" not in result.sql
@@ -34,6 +36,7 @@ class TestTopNSemantics:
     def test_top_n_oracle_uses_fetch_first(self):
         result = NL2SQLGenerator().generate("find top 10 products by price", "oracle")
         assert result.success
+        assert result.sql is not None
         assert "ORDER BY price DESC" in result.sql
         assert "FETCH FIRST 10 ROWS ONLY" in result.sql
         assert "LIMIT" not in result.sql
@@ -41,6 +44,7 @@ class TestTopNSemantics:
     def test_bottom_n_tsql_uses_top(self):
         result = NL2SQLGenerator().generate("find bottom 5 products by price", "tsql")
         assert result.success
+        assert result.sql is not None
         assert "SELECT TOP 5" in result.sql
         assert "ORDER BY price ASC" in result.sql
         assert "LIMIT" not in result.sql
@@ -48,6 +52,7 @@ class TestTopNSemantics:
     def test_top_n_tsql_uses_top(self):
         result = NL2SQLGenerator().generate("find top 5 products by price", "tsql")
         assert result.success
+        assert result.sql is not None
         assert "SELECT TOP 5" in result.sql
         assert "ORDER BY price DESC" in result.sql
         assert "LIMIT" not in result.sql
@@ -56,18 +61,21 @@ class TestTopNSemantics:
         result = NL2SQLGenerator().generate("show all users", "postgres")
         assert result.success
         # Plain select should not have ORDER BY forced
+        assert result.sql is not None
         assert "ORDER BY" not in result.sql
 
     def test_bottom_n_output_remains_parseable(self):
         result = NL2SQLGenerator().generate("find bottom 5 products by price", "postgres")
         assert result.success
         import sqlglot
+        assert result.sql is not None
         tree = sqlglot.parse_one(result.sql, read="postgres")
         assert tree is not None
 
     def test_chinese_bottom_keyword_falls_through_success(self):
         result = NL2SQLGenerator().generate("查询最少10个用户", "postgres")
         assert result.success
+        assert result.sql is not None
         assert "ASC" in result.sql
 
     def test_chinese_bottom_keyword_falls_through_without_order(self):
@@ -103,17 +111,20 @@ class TestDMLOrouting:
     def test_insert_generation_has_explicit_columns(self):
         result = NL2SQLGenerator().generate("insert new user", "postgres")
         assert result.success
+        assert result.sql is not None
         assert "INSERT" in result.sql.upper()
         assert "VALUES" in result.sql.upper()
 
     def test_update_generation_has_explicit_predicates(self):
         result = NL2SQLGenerator().generate("update user status", "postgres")
         assert result.success
+        assert result.sql is not None
         assert "UPDATE" in result.sql.upper()
         assert "WHERE" in result.sql.upper()
 
     def test_delete_generation_has_explicit_predicates(self):
         result = NL2SQLGenerator().generate("delete old user", "postgres")
         assert result.success
+        assert result.sql is not None
         assert "DELETE" in result.sql.upper()
         assert "WHERE" in result.sql.upper()

@@ -4,10 +4,9 @@ import pytest
 import sqlglot
 
 from backend.core.nl2sql import NL2SQLGenerator
-from backend.core.nl2sql_schema import SchemaContext
 from backend.core.nl2sql_pipeline.ir import build_ir
 from backend.core.nl2sql_pipeline.renderer import render_sql
-
+from backend.core.nl2sql_schema import SchemaContext
 
 USERS_SCHEMA = SchemaContext.from_mapping({
     "tables": [
@@ -31,6 +30,7 @@ def generate(text: str, schema=USERS_SCHEMA):
 
 def body(result):
     assert result.success, result.explanation
+    assert result.sql is not None
     return " ".join(line.strip() for line in result.sql.splitlines() if not line.strip().startswith("--"))
 
 
@@ -76,6 +76,7 @@ def test_schema_multi_ordering_invalid_forms_fail_closed(text):
 def test_qualified_subject_columns_are_supported():
     result = generate("show users ordered by users.name, users.email")
     assert result.success
+    assert result.sql is not None
     assert "ORDER BY name ASC, email ASC" in result.sql
 
 
@@ -135,7 +136,7 @@ def test_multi_ordering_no_schema_outputs_are_unchanged():
     for text, fragments in expected.items():
         first = generator.generate(text, "postgres")
         second = generator.generate(text, "postgres")
-        assert first.success and second.success
+        assert first.success and second.success and first.sql is not None and second.sql is not None
         assert first.sql == second.sql
         for fragment in fragments:
             assert fragment in first.sql
@@ -149,6 +150,7 @@ def test_query_ir_preserves_legacy_tuple_and_new_list():
         ("name", "ASC"), None, [], False, "postgres",
     )
     sql, _, _, _ = render_sql(legacy)
+    assert sql is not None
     assert "ORDER BY name ASC" in sql
 
     multi = build_ir(
@@ -157,6 +159,8 @@ def test_query_ir_preserves_legacy_tuple_and_new_list():
         orderings=[("name", "ASC"), ("email", "DESC")],
     )
     sql, explanation, _, _ = render_sql(multi)
+    assert sql is not None
+    assert explanation is not None
     assert "ORDER BY name ASC, email DESC" in sql
     assert "排序: name ASC, email DESC" in explanation
 
@@ -172,6 +176,7 @@ def test_multi_ordering_sql_parses_in_all_dialects(dialect):
         schema=USERS_SCHEMA,
     )
     assert result.success
+    assert result.sql is not None
     assert sqlglot.parse_one(result.sql, read=dialect) is not None
 
 

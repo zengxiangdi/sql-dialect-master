@@ -1,7 +1,7 @@
 """Phase 1 contracts for rendering derived distinct count plans."""
 
-import sqlglot
 import pytest
+import sqlglot
 
 from backend.core.nl2sql import NL2SQLGenerator
 from backend.core.nl2sql_pipeline.ir import DistinctCountPlan, build_ir
@@ -118,7 +118,7 @@ def test_orderings_list_is_rendered_on_outer_query():
 
 @pytest.mark.parametrize("field", ["joins", "distinct", "aggregations"])
 def test_plan_conflicting_query_features_fail_closed(field):
-    kwargs = {field: [{"table": "users"}] if field == "joins" else True}
+    kwargs: dict[str, object] = {field: [{"table": "users"}] if field == "joins" else True}
     if field == "aggregations":
         kwargs[field] = ["SUM(amount)"]
     sql, explanation, confidence, _ = render_plan(plan=PLAN, **kwargs)

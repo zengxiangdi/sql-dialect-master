@@ -68,6 +68,12 @@ jobs:
           backend/tests/test_readiness*.py
           backend/tests/test_rate_limit*.py
 
+      - name: Ruff NL2SQL test checks
+        run: ruff check backend/tests/test_nl2sql*.py
+
+      - name: Mypy NL2SQL test checks
+        run: .venv/bin/python -m mypy backend/tests/test_nl2sql*.py
+
       - name: Bandit security scan
         run: |
           # Reviewed static-analysis exceptions:

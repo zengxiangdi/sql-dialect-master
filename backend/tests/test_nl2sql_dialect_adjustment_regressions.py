@@ -1,3 +1,5 @@
+from typing import cast
+
 import pytest
 
 from backend.core.nl2sql import NL2SQLGenerator
@@ -55,4 +57,4 @@ def test_nl2sql_rejects_non_string_text():
     generator = NL2SQLGenerator()
 
     with pytest.raises(TypeError, match="text must be a string"):
-        generator.generate(None, "mysql")
+        generator.generate(cast(str, None), "mysql")

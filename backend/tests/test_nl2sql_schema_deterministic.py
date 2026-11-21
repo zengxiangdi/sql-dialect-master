@@ -10,7 +10,6 @@ from backend.core.nl2sql_schema import (
     validate_schema_references,
 )
 
-
 SCHEMA = {
     "tables": [
         {"name": "public.Users", "columns": [{"name": "ID"}, {"name": "name"}]},
@@ -31,6 +30,11 @@ SCHEMA = {
 
 def parse(sql: str):
     return sqlglot.parse_one(sql, read="postgres")
+
+
+def sql_of(result):
+    assert result.sql is not None
+    return result.sql
 
 
 def test_context_normalizes_case_and_preserves_canonical_names():
@@ -173,7 +177,7 @@ def test_deterministic_schema_plain_select_parses_in_all_dialects(dialect):
     )
     assert result.success is True
     assert result.schema_used is True
-    assert sqlglot.parse_one(result.sql, read=dialect) is not None
+    assert sqlglot.parse_one(sql_of(result), read=dialect) is not None
 
 
 def test_deterministic_schema_uses_enhanced_path_for_top_n_aggregate_date_and_boolean():
@@ -181,25 +185,25 @@ def test_deterministic_schema_uses_enhanced_path_for_top_n_aggregate_date_and_bo
     top_n = generator.generate(
         "find top 5 users by price", "postgres", schema=SINGLE_TABLE_SCHEMA
     )
-    assert top_n.success and "ORDER BY price DESC" in top_n.sql
-    assert "LIMIT 5" in top_n.sql
+    assert top_n.success and "ORDER BY price DESC" in sql_of(top_n)
+    assert "LIMIT 5" in sql_of(top_n)
 
     aggregate = generator.generate(
         "calculate average price for users grouped by name",
         "postgres",
         schema=SINGLE_TABLE_SCHEMA,
     )
-    assert aggregate.success and "GROUP BY name" in aggregate.sql
+    assert aggregate.success and "GROUP BY name" in sql_of(aggregate)
 
     date = generator.generate("last 7 days", "postgres", schema=SINGLE_TABLE_SCHEMA)
-    assert date.success and "created_at" in date.sql
+    assert date.success and "created_at" in sql_of(date)
 
     boolean = generator.generate(
         "find users with price greater than 3 and quantity less than 9",
         "postgres",
         schema=SINGLE_TABLE_SCHEMA,
     )
-    assert boolean.success and "price" in boolean.sql and "quantity" in boolean.sql
+    assert boolean.success and "price" in sql_of(boolean) and "quantity" in sql_of(boolean)
 
 
 @pytest.mark.parametrize(
@@ -292,7 +296,7 @@ def test_schema_generic_data_word_and_implicit_single_table_still_work():
 def test_no_schema_unknown_table_behavior_is_unchanged():
     result = NL2SQLGenerator().generate("show orders", "postgres")
     assert result.success is True
-    assert "FROM orders" in result.sql
+    assert "FROM orders" in sql_of(result)
 
 
 def test_deterministic_schema_empty_columns_allow_qualified_columns():
@@ -304,7 +308,7 @@ def test_deterministic_schema_empty_columns_allow_qualified_columns():
         schema=context,
     )
     assert result.success is True
-    assert "events.anything" in result.sql
+    assert "events.anything" in sql_of(result)
 
 
 RELATION_SCHEMA = SchemaContext.from_mapping(
@@ -330,14 +334,14 @@ def test_schema_relationships_generate_forward_and_reverse_exists():
     forward = generator.generate(
         "find users who have orders", "postgres", schema=RELATION_SCHEMA
     )
-    assert forward.success
+    assert forward.success and forward.sql is not None
     assert "WHERE EXISTS" in forward.sql
     assert "users.id = orders.user_id" in forward.sql
 
     reverse = generator.generate(
         "find orders who have users", "postgres", schema=RELATION_SCHEMA
     )
-    assert reverse.success
+    assert reverse.success and reverse.sql is not None
     assert "WHERE EXISTS" in reverse.sql
     assert "orders.user_id = users.id" in reverse.sql
 
@@ -450,13 +454,13 @@ def test_schema_relationships_generate_not_exists_and_physical_join():
     negative = generator.generate(
         "find users without orders", "postgres", schema=RELATION_SCHEMA
     )
-    assert negative.success
+    assert negative.success and negative.sql is not None
     assert "WHERE NOT EXISTS" in negative.sql
 
     physical = generator.generate(
         "show users left join orders", "postgres", schema=RELATION_SCHEMA
     )
-    assert physical.success
+    assert physical.success and physical.sql is not None
     assert "LEFT JOIN orders" in physical.sql
     assert "users.id = orders.user_id" in physical.sql
 
@@ -491,7 +495,7 @@ def test_schema_unsupported_join_types_fail_closed(prompt):
 def test_unsupported_schema_join_qualifiers_do_not_change_no_schema_behavior(prompt):
     result = NL2SQLGenerator().generate(prompt, "postgres")
     assert result.success is True
-    assert "JOIN orders" in result.sql
+    assert "JOIN orders" in sql_of(result)
 
 
 @pytest.mark.parametrize(
@@ -507,7 +511,7 @@ def test_unsupported_schema_join_qualifiers_do_not_change_no_schema_behavior(pro
 def test_schema_supported_join_types_render_expected_kind(prompt, join_type):
     result = NL2SQLGenerator().generate(prompt, "postgres", schema=RELATION_SCHEMA)
     assert result.success is True
-    assert join_type in result.sql
+    assert join_type in sql_of(result)
 
 
 def test_schema_missing_relationship_fails_closed():
