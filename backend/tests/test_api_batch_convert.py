@@ -1,9 +1,9 @@
 """REST batches preserve item contracts while sharing one bounded worker slot."""
 
-import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from threading import Event
+from typing import cast
 
 import pytest
 from fastapi.testclient import TestClient
@@ -406,7 +406,7 @@ def test_batch_worker_failure_metrics_do_not_invent_item_results(client, monkeyp
         async def run(self, *_args, **_kwargs):
             if status == 503:
                 raise WorkerCapacityError("test worker is busy")
-            raise asyncio.TimeoutError()
+            raise TimeoutError()
 
     monkeypatch.setattr(main, "_get_worker_pool", lambda: UnavailablePool())
     before = batch_metric_snapshot()
@@ -428,7 +428,7 @@ def test_batch_unexpected_failure_metrics_do_not_count_items(client, monkeypatch
         malformed_result = TranspileResult(
             success=True,
             source_sql="SELECT 1",
-            target_sql=123,
+            target_sql=cast(str | None, 123),
             source_dialect="postgres",
             target_dialect="mysql",
         )

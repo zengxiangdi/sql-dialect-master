@@ -1,6 +1,5 @@
 """Optional API LLM routing preserves deterministic and HTTP error contracts."""
 
-import asyncio
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -16,7 +15,6 @@ from backend.api.middleware import DEFAULT_MAX_REQUEST_BODY_BYTES
 from backend.api.workers import WorkerCapacityError
 from backend.core.config import settings
 from backend.core.nl2sql_llm import LLMError, LLMGeneration, LLMN2SQLClient
-
 
 MODEL = "test-provider/test-model"
 API_KEY = "test-openrouter-secret-never-expose"
@@ -325,7 +323,7 @@ def test_failed_llm_fallback_preserves_worker_error_contract(client, monkeypatch
         async def run(self, *_args, **_kwargs):
             if status == 503:
                 raise WorkerCapacityError("Request processing capacity is exhausted")
-            raise asyncio.TimeoutError()
+            raise TimeoutError()
 
     monkeypatch.setattr(main, "_get_worker_pool", lambda: UnavailablePool())
     before = metric_snapshot()

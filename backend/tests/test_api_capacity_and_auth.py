@@ -93,7 +93,7 @@ def test_lifespan_closes_pool_and_a_new_startup_can_serve_requests(monkeypatch):
         assert not hasattr(app.state, "worker_pool")
         assert main._worker_pool is None
         assert main._worker_pool_exit_hook is None
-        async def closed_pool():
+        async def closed_pool(pool=pool):
             with pytest.raises(RuntimeError, match="shutdown"):
                 await pool.run(lambda: 1, timeout=1)
         asyncio.run(closed_pool())

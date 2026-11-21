@@ -1,10 +1,8 @@
-#!/usr/bin/env python3
 """Regression tests for the unified API 4xx error contract."""
 
 from fastapi.testclient import TestClient
 
 from backend.api.main import app
-
 
 client = TestClient(app)
 REQUEST_ID = "12345678-1234-4123-8123-123456789abc"

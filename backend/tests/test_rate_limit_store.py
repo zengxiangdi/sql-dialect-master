@@ -1,13 +1,22 @@
 import sys
 import types
+from typing import Any, cast
 
 import pytest
+from pydantic import SecretStr
 
 from backend.api.rate_limit_store import (
     InMemoryRateLimitStore,
     RedisRateLimitStore,
     create_rate_limit_store,
 )
+
+
+def _settings_factory():
+    """Keep Pydantic Settings' runtime-only constructor kwargs typed locally."""
+    from backend.core.config import AppSettings
+
+    return cast(Any, AppSettings)
 
 
 def test_memory_store_enforces_limit_and_cleans_up():
@@ -40,12 +49,11 @@ def test_store_selection():
     invalid values are rejected at settings construction (B2-4)."""
     from pydantic import ValidationError
 
-    from backend.core.config import AppSettings
-
-    memory_cfg = AppSettings(_env_file=None, rate_limit_backend="memory")
+    Settings = _settings_factory()
+    memory_cfg = Settings(_env_file=None, rate_limit_backend="memory")
     assert isinstance(create_rate_limit_store(memory_cfg), InMemoryRateLimitStore)
     with pytest.raises(ValidationError):
-        AppSettings(_env_file=None, rate_limit_backend="invalid")
+        Settings(_env_file=None, rate_limit_backend="invalid")
 
 
 def test_redis_store_is_atomic_and_checks_connectivity(monkeypatch):
@@ -87,9 +95,8 @@ def test_redis_store_fails_fast_when_unreachable(monkeypatch):
 
 
 def test_redis_store_requires_url():
-    from backend.core.config import AppSettings
-
-    cfg = AppSettings(_env_file=None, rate_limit_backend="redis", redis_url=None)
+    Settings = _settings_factory()
+    cfg = Settings(_env_file=None, rate_limit_backend="redis", redis_url=None)
     with pytest.raises(ValueError, match="Redis URL is required"):
         create_rate_limit_store(cfg)
 
@@ -122,9 +129,8 @@ def test_b24_t1_default_backend_is_memory_without_redis(monkeypatch):
     in-memory store — local/single-process deployments never touch Redis."""
     monkeypatch.delenv("SDM_RATE_LIMIT_BACKEND", raising=False)
     monkeypatch.delenv("SDM_REDIS_URL", raising=False)
-    from backend.core.config import AppSettings
-
-    cfg = AppSettings(_env_file=None)
+    Settings = _settings_factory()
+    cfg = Settings(_env_file=None)
     assert cfg.rate_limit_backend == "memory"
     assert cfg.redis_url is None
     assert isinstance(create_rate_limit_store(cfg), InMemoryRateLimitStore)
@@ -133,7 +139,7 @@ def test_b24_t1_default_backend_is_memory_without_redis(monkeypatch):
 def test_b24_t2_settings_selects_redis_with_fake_client(monkeypatch):
     """Explicit redis Settings select RedisRateLimitStore through the
     factory, using the existing fake-redis isolation (no live Redis)."""
-    from backend.core.config import AppSettings
+    Settings = _settings_factory()
 
     class FakeClient:
         def ping(self):
@@ -149,10 +155,10 @@ def test_b24_t2_settings_selects_redis_with_fake_client(monkeypatch):
         Redis=types.SimpleNamespace(from_url=lambda *args, **kwargs: FakeClient())
     )
     monkeypatch.setitem(sys.modules, "redis", fake_redis)
-    cfg = AppSettings(
+    cfg = Settings(
         _env_file=None,
         rate_limit_backend="redis",
-        redis_url="redis://localhost/0",
+        redis_url=SecretStr("redis://localhost/0"),
     )
     store = create_rate_limit_store(cfg)
     assert isinstance(store, RedisRateLimitStore)
@@ -162,17 +168,15 @@ def test_b24_t2_settings_selects_redis_with_fake_client(monkeypatch):
 def test_b24_t3_redis_without_url_fails_fast_not_downgrade():
     """Redis backend without a URL raises immediately — never silently
     downgrades to the memory store."""
-    from backend.core.config import AppSettings
-
-    cfg = AppSettings(_env_file=None, rate_limit_backend="redis", redis_url=None)
+    Settings = _settings_factory()
+    cfg = Settings(_env_file=None, rate_limit_backend="redis", redis_url=None)
     with pytest.raises(ValueError, match="Redis URL is required"):
         create_rate_limit_store(cfg)
 
 
 def test_b24_t3_redis_with_empty_url_fails_fast():
-    from backend.core.config import AppSettings
-
-    cfg = AppSettings(_env_file=None, rate_limit_backend="redis", redis_url="")
+    Settings = _settings_factory()
+    cfg = Settings(_env_file=None, rate_limit_backend="redis", redis_url=SecretStr(""))
     with pytest.raises(ValueError, match="Redis URL is required"):
         create_rate_limit_store(cfg)
 
@@ -182,10 +186,10 @@ def test_b24_t4_invalid_backend_rejected_at_settings_construction():
     clear error — they are never silently accepted."""
     from pydantic import ValidationError
 
-    from backend.core.config import AppSettings
+    Settings = _settings_factory()
 
     with pytest.raises(ValidationError):
-        AppSettings(_env_file=None, rate_limit_backend="invalid")
+        Settings(_env_file=None, rate_limit_backend="invalid")
 
 
 def test_b24_t4_no_case_or_whitespace_normalization():
@@ -194,12 +198,12 @@ def test_b24_t4_no_case_or_whitespace_normalization():
     not coerced."""
     from pydantic import ValidationError
 
-    from backend.core.config import AppSettings
+    Settings = _settings_factory()
 
     with pytest.raises(ValidationError):
-        AppSettings(_env_file=None, rate_limit_backend="REDIS")
+        Settings(_env_file=None, rate_limit_backend="REDIS")
     with pytest.raises(ValidationError):
-        AppSettings(_env_file=None, rate_limit_backend=" redis ")
+        Settings(_env_file=None, rate_limit_backend=" redis ")
 
 
 def test_b24_t4_factory_boundary_guard_for_untyped_input():
@@ -208,20 +212,20 @@ def test_b24_t4_factory_boundary_guard_for_untyped_input():
     silent downgrade."""
     bogus = types.SimpleNamespace(rate_limit_backend="bogus")
     with pytest.raises(ValueError, match="expected 'memory' or 'redis'"):
-        create_rate_limit_store(bogus)
+        create_rate_limit_store(cast(Any, bogus))
 
 
 def test_b24_t5_secret_url_masked_in_repr_and_serialization():
     """The Redis URL is SecretStr: repr, JSON serialization and model
     dumps never expose the password."""
-    from backend.core.config import AppSettings
-
-    cfg = AppSettings(
+    Settings = _settings_factory()
+    cfg = Settings(
         _env_file=None,
         rate_limit_backend="redis",
-        redis_url="redis://:hunter2secret@localhost/0",
+        redis_url=SecretStr("redis://:hunter2secret@localhost/0"),
     )
     # The factory-facing accessor still yields the real value.
+    assert cfg.redis_url is not None
     assert cfg.redis_url.get_secret_value() == "redis://:hunter2secret@localhost/0"
     assert "hunter2secret" not in repr(cfg)
     assert "hunter2secret" not in cfg.model_dump_json()
@@ -229,9 +233,8 @@ def test_b24_t5_secret_url_masked_in_repr_and_serialization():
 
 
 def test_b24_t5_factory_error_does_not_leak_url():
-    from backend.core.config import AppSettings
-
-    cfg = AppSettings(_env_file=None, rate_limit_backend="redis", redis_url=None)
+    Settings = _settings_factory()
+    cfg = Settings(_env_file=None, rate_limit_backend="redis", redis_url=None)
     with pytest.raises(ValueError) as excinfo:
         create_rate_limit_store(cfg)
     assert "redis://" not in str(excinfo.value)
@@ -240,21 +243,21 @@ def test_b24_t5_factory_error_does_not_leak_url():
 def test_b24_t6_env_vars_map_through_settings(monkeypatch):
     """SDM_RATE_LIMIT_BACKEND / SDM_REDIS_URL load through the unified
     SDM_ prefix mechanism, isolated from any .env file."""
-    from backend.core.config import AppSettings
+    Settings = _settings_factory()
 
     monkeypatch.setenv("SDM_RATE_LIMIT_BACKEND", "redis")
     monkeypatch.setenv("SDM_REDIS_URL", "redis://:envpass@localhost/0")
-    cfg = AppSettings(_env_file=None)
+    cfg = Settings(_env_file=None)
     assert cfg.rate_limit_backend == "redis"
+    assert cfg.redis_url is not None
     assert cfg.redis_url.get_secret_value() == "redis://:envpass@localhost/0"
     assert "envpass" not in repr(cfg)
 
 
 def test_b24_t6_env_absent_defaults_to_memory(monkeypatch):
-    from backend.core.config import AppSettings
-
+    Settings = _settings_factory()
     monkeypatch.delenv("SDM_RATE_LIMIT_BACKEND", raising=False)
     monkeypatch.delenv("SDM_REDIS_URL", raising=False)
-    cfg = AppSettings(_env_file=None)
+    cfg = Settings(_env_file=None)
     assert cfg.rate_limit_backend == "memory"
     assert cfg.redis_url is None

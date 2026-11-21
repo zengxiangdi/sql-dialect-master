@@ -1,12 +1,11 @@
-import re
 import asyncio
+import re
 
+from fastapi.testclient import TestClient
 from starlette.requests import Request
 from starlette.responses import Response
-from fastapi.testclient import TestClient
 
 from backend.api.main import API_VERSION, add_process_time_header, app
-
 
 client = TestClient(app)
 
