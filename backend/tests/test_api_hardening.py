@@ -4,7 +4,6 @@ from backend.api.main import app
 from backend.core.config import settings
 from backend.core.type_mapping import TypeMapper
 
-
 client = TestClient(app)
 
 

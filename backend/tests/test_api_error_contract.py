@@ -1,11 +1,9 @@
-#!/usr/bin/env python3
 """Regression tests for the API exception boundary."""
 
 from fastapi.testclient import TestClient
 
 from backend.api.main import app
 from backend.core.exceptions import TranspileError
-
 
 client = TestClient(app, raise_server_exceptions=False)
 

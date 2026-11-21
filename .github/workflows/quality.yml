@@ -54,6 +54,20 @@ jobs:
           --exclude backend/core/nl2sql_pipeline
           --exclude backend/core/nl2sql_components
 
+      - name: Ruff API test checks
+        run: >-
+          ruff check backend/tests/test_api*.py
+          backend/tests/test_middleware.py
+          backend/tests/test_readiness*.py
+          backend/tests/test_rate_limit*.py
+
+      - name: Mypy API test checks
+        run: >-
+          .venv/bin/python -m mypy backend/tests/test_api*.py
+          backend/tests/test_middleware.py
+          backend/tests/test_readiness*.py
+          backend/tests/test_rate_limit*.py
+
       - name: Bandit security scan
         run: |
           # Reviewed static-analysis exceptions:

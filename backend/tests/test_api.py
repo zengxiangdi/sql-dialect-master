@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """FastAPI Integration Tests for SQL Dialect Master API.
 
 Tests all API endpoints for correct behavior:

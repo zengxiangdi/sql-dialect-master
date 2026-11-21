@@ -5,8 +5,8 @@ from fastapi.testclient import TestClient
 
 from backend.api.middleware import (
     DEFAULT_MAX_REQUEST_BODY_BYTES,
-    RateLimitMiddleware,
     RateLimiter,
+    RateLimitMiddleware,
     SecurityHeadersMiddleware,
     StructuredLoggingMiddleware,
 )
