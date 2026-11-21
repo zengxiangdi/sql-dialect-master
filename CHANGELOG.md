@@ -2,6 +2,45 @@
 
 All notable changes to SQL Dialect Master are documented here.
 
+## [1.14.1] - 2026-11-22
+
+### Fixed
+
+- Masked SQL literals and comments before NL2SQL structural detection so
+  quoted `limit`, `top`, `order by`, `group by`, `distinct`, and aggregate
+  words cannot change the generated query.
+- Corrected TOP-N + date requests to emit `WHERE -> ORDER BY -> LIMIT` and to
+  use the TOP number instead of a date-interval number.
+- Prevented schema table mentions and aggregate intent from being polluted by
+  quoted or commented table/function names.
+- Made intent table/column/operation ordering deterministic across process
+  hash seeds.
+- Restored no-schema `DISTINCT` / `UNIQUE` projection semantics.
+- Kept SQL scanner behavior strict for SQL literals; NL2SQL possessive forms
+  now use a dedicated masking wrapper.
+- Added explicit request length limits for Convert, Batch, Parse, Diff, and
+  NL2SQL fields, returning 422 validation errors instead of a successful
+  parse-error response for over-limit fields.
+- Added semantic runtime skip gates so CI cannot silently lose Tier A
+  PostgreSQL/DuckDB evidence.
+- Resolved Starlette TestClient and AnyIO BlockingPortal deprecation warnings
+  without warning suppression.
+
+### Quality
+
+- Full-backend Ruff and mypy gates are now enforced in CI.
+- Added 105 behavior tests for previously low-coverage core modules.
+- Core module coverage is now at least 90% for every guarded module.
+- Total backend coverage is 93.58%.
+- Semantic test dependency `pytz` is explicit; `httpx2` is test-only.
+- TestClient and AnyIO warning checks pass under
+  `pytest -W error::DeprecationWarning`.
+
+### Notes
+
+- No schema, database, or production configuration changes.
+- No release-blocking dependency vulnerabilities were found.
+
 ## [1.14.0] - 2026-11-18
 
 ### New
