@@ -1,10 +1,12 @@
 """Regression tests for core SQLTranspiler input validation."""
 
+from typing import cast
+
 from backend.core.transpiler import SQLTranspiler
 
 
 def test_transpile_rejects_non_string_sql_with_structured_error() -> None:
-    result = SQLTranspiler().transpile(None, "mysql", "postgres")  # type: ignore[arg-type]
+    result = SQLTranspiler().transpile(cast(str, None), "mysql", "postgres")
 
     assert result.success is False
     assert result.error_code == "VALIDATION_FAILED"
@@ -12,7 +14,7 @@ def test_transpile_rejects_non_string_sql_with_structured_error() -> None:
 
 
 def test_transpile_rejects_non_string_source_with_structured_error() -> None:
-    result = SQLTranspiler().transpile("SELECT 1", None, "postgres")  # type: ignore[arg-type]
+    result = SQLTranspiler().transpile("SELECT 1", cast(str, None), "postgres")
 
     assert result.success is False
     assert result.error_code == "VALIDATION_FAILED"
@@ -20,7 +22,7 @@ def test_transpile_rejects_non_string_source_with_structured_error() -> None:
 
 
 def test_transpile_rejects_non_string_target_with_structured_error() -> None:
-    result = SQLTranspiler().transpile("SELECT 1", "mysql", None)  # type: ignore[arg-type]
+    result = SQLTranspiler().transpile("SELECT 1", "mysql", cast(str, None))
 
     assert result.success is False
     assert result.error_code == "VALIDATION_FAILED"

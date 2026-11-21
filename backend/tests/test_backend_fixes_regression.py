@@ -1,5 +1,7 @@
 """Regression coverage for the production backend fixes."""
 
+from typing import Any, cast
+
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
@@ -7,7 +9,6 @@ from backend.api.main import app
 from backend.core.config import AppSettings
 from backend.core.nl2sql import NL2SQLGenerator
 from backend.core.parser import SQLParser
-
 
 client = TestClient(app)
 
@@ -73,13 +74,13 @@ def test_nl2sql_target_parse_failure_is_not_success(monkeypatch) -> None:
 def test_invalid_runtime_limits_are_rejected_by_settings() -> None:
     for field in ("rate_limit_requests", "rate_limit_window", "request_timeout"):
         try:
-            AppSettings(**{field: 0})
+            cast(Any, AppSettings)(**{field: 0})
         except ValidationError:
             pass
         else:
             raise AssertionError(f"{field} accepted zero")
     try:
-        AppSettings(cache_ttl=-1)
+        cast(Any, AppSettings)(cache_ttl=-1)
     except ValidationError:
         pass
     else:

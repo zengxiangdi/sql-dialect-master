@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNTIME_ROOTS = (REPO_ROOT / "backend" / "api", REPO_ROOT / "backend" / "core", REPO_ROOT / "examples", REPO_ROOT / "scripts")
 
@@ -11,7 +10,7 @@ def _python_files():
         if root.is_file() and root.suffix == ".py":
             candidates = [root]
         else:
-            candidates = root.rglob("*.py")
+            candidates = list(root.rglob("*.py"))
         for path in candidates:
             if path not in seen and ".git" not in path.parts:
                 seen.add(path)
@@ -45,7 +44,7 @@ def test_backend_core_is_the_single_canonical_namespace():
     assert backend_config.__package__ == "backend.core"
 
     try:
-        import core.config as legacy_config  # noqa: F401
+        import core.config as legacy_config
     except ModuleNotFoundError:
         return
 

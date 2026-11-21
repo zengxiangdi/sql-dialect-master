@@ -1,10 +1,10 @@
-#!/usr/bin/env python3
 """Property-Based Tests for SQL Dialect Master using Hypothesis.
 
 These tests verify correctness properties that should hold across all valid inputs.
 """
 import sys
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 from hypothesis import assume, given, settings
@@ -82,7 +82,7 @@ class TestTypeMapMatrixCompleteness:
     @settings(max_examples=50)
     def test_all_types_have_dialect_mapping(self, dialect):
         """Every type should have a mapping for every supported dialect."""
-        for type_name in type_mapper.mappings.keys():
+        for type_name in type_mapper.mappings:
             type_info = type_mapper.mappings[type_name]
             # At least some dialects should be present
             dialect_count = sum(1 for d in SUPPORTED_DIALECTS if d in type_info)
@@ -116,6 +116,7 @@ class TestFunctionDataCompleteness:
         """Every function should have required fields."""
         func = func_encyclopedia.get_function(func_name)
         assume(func is not None)
+        assert func is not None
         
         assert "name" in func, f"Function {func_name} missing 'name'"
         assert "description" in func, f"Function {func_name} missing 'description'"
@@ -128,6 +129,7 @@ class TestFunctionDataCompleteness:
         """Every function should have at least 3 dialect mappings."""
         func = func_encyclopedia.get_function(func_name)
         assume(func is not None)
+        assert func is not None
         
         dialects = func.get("dialects", {})
         assert len(dialects) >= 3, f"Function {func_name} has too few dialect mappings"
@@ -157,7 +159,7 @@ class TestRoundTripConversion:
     """
     
     # Simple SQL templates for testing
-    simple_sqls = [
+    simple_sqls: ClassVar[list[str]] = [
         "SELECT * FROM {table}",
         "SELECT {col} FROM {table} WHERE id = 1",
         "SELECT COUNT(*) FROM {table}",
@@ -181,6 +183,7 @@ class TestRoundTripConversion:
         # A → B
         result1 = transpiler.transpile(sql, source, target)
         assume(result1.success)  # Skip if first conversion fails
+        assert result1.target_sql is not None
         
         # B → A
         result2 = transpiler.transpile(result1.target_sql, target, source)
@@ -200,6 +203,7 @@ class TestRoundTripConversion:
         
         result1 = transpiler.transpile(sql, source, target)
         assume(result1.success)
+        assert result1.target_sql is not None
         
         result2 = transpiler.transpile(result1.target_sql, target, source)
         assert result2.success
@@ -225,6 +229,7 @@ class TestDialectSpecificTransformation:
         # Hive → Oracle should use FETCH or ROWNUM
         result = transpiler.transpile(sql, "hive", "oracle")
         assert result.success
+        assert result.target_sql is not None
         target_upper = result.target_sql.upper()
         assert "FETCH" in target_upper or "ROWNUM" in target_upper or "LIMIT" not in target_upper
     
@@ -234,6 +239,7 @@ class TestDialectSpecificTransformation:
         
         result = transpiler.transpile(sql, "tsql", "hive")
         assert result.success
+        assert result.target_sql is not None
         assert "LIMIT" in result.target_sql.upper() or "TOP" not in result.target_sql.upper()
     
     @given(source=dialect_strategy, target=dialect_strategy)
@@ -244,6 +250,7 @@ class TestDialectSpecificTransformation:
         
         result = transpiler.transpile(sql, source, target)
         assert result.success
+        assert result.target_sql is not None
         assert "ROW_NUMBER" in result.target_sql.upper() or "OVER" in result.target_sql.upper()
 
 
@@ -268,6 +275,7 @@ class TestWindowFramePreservation:
         
         result = transpiler.transpile(sql, source, target)
         assert result.success
+        assert result.target_sql is not None
         # Frame specification should be present
         target_upper = result.target_sql.upper()
         assert "OVER" in target_upper
@@ -280,6 +288,7 @@ class TestWindowFramePreservation:
         
         result = transpiler.transpile(sql, source, target)
         assert result.success
+        assert result.target_sql is not None
         target_upper = result.target_sql.upper()
         assert "PARTITION BY" in target_upper or "OVER" in target_upper
 
@@ -327,7 +336,7 @@ class TestComplexTypeMappingWithNotes:
     appropriate notes about compatibility.
     """
     
-    complex_types = ['ARRAY', 'MAP', 'STRUCT']
+    complex_types: ClassVar[list[str]] = ['ARRAY', 'MAP', 'STRUCT']
     
     def test_complex_types_have_notes(self):
         """Complex types should have notes in their mappings."""
@@ -366,7 +375,7 @@ class TestNL2SQLOutputValidity:
     """
     
     # Sample natural language queries
-    nl_queries = [
+    nl_queries: ClassVar[list[str]] = [
         "查询所有用户",
         "获取订单数量",
         "统计每个部门的员工数",

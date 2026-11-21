@@ -8,6 +8,8 @@ contracts.
 
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 
 from backend.core.exceptions import UnsupportedDialectError, ValidationError
@@ -42,7 +44,7 @@ class TestBasicValidators:
         assert validate_sql("  SELECT 1  ") == "SELECT 1"
 
         with pytest.raises(ValidationError, match="required"):
-            validate_sql(None)
+            validate_sql(cast(str, None))
         with pytest.raises(ValidationError, match="cannot be empty"):
             validate_sql(" \n\t ")
 
@@ -175,15 +177,15 @@ class TestSplitSqlStatementsContract:
         )
         result = split_sql_statements(sql, dialect="oracle")
         assert result == [
-            "BEGIN\n"
-            "  IF enabled THEN\n"
-            "    x := CASE WHEN flag THEN 1 ELSE 2 END;\n"
-            "  END IF;\n"
-            "  LOOP\n"
-            "    NULL;\n"
-            "    EXIT;\n"
-            "  END LOOP;\n"
-            "END",
+            ("BEGIN\n"
+             "  IF enabled THEN\n"
+             "    x := CASE WHEN flag THEN 1 ELSE 2 END;\n"
+             "  END IF;\n"
+             "  LOOP\n"
+             "    NULL;\n"
+             "    EXIT;\n"
+             "  END LOOP;\n"
+             "END"),
             "SELECT 1",
         ]
 

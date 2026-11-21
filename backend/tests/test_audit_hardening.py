@@ -9,6 +9,7 @@ from backend.core.transpiler import SQLTranspiler
 def test_english_inclusive_comparison_preserves_gte():
     result = NL2SQLGenerator().generate("find products with price greater than or equal to 10", "postgres")
     assert result.success
+    assert result.sql is not None
     where = sqlglot.parse_one(result.sql, read="postgres").find(exp.Where)
     assert where is not None
     assert len(list(where.this.find_all(exp.GTE))) == 1
@@ -18,6 +19,7 @@ def test_english_inclusive_comparison_preserves_gte():
 def test_english_inclusive_comparison_preserves_lte():
     result = NL2SQLGenerator().generate("find products with price less than or equal to 10", "postgres")
     assert result.success
+    assert result.sql is not None
     where = sqlglot.parse_one(result.sql, read="postgres").find(exp.Where)
     assert where is not None
     assert len(list(where.this.find_all(exp.LTE))) == 1
@@ -31,6 +33,7 @@ def test_simple_rownum_is_converted_to_limit():
         "postgres",
     )
     assert result.success is True
+    assert result.target_sql is not None
     norm = " ".join(result.target_sql.split())
     assert "LIMIT 10" in norm
     assert "ROWNUM" not in result.target_sql.upper()
@@ -45,6 +48,7 @@ def test_rownum_with_order_by_is_not_silently_rewritten():
         "postgres",
     )
     assert result.success is True
+    assert result.target_sql is not None
     assert "ROWNUM <= 10" in result.target_sql.upper()
     assert "LIMIT 10" not in result.target_sql.upper()
 
@@ -56,6 +60,7 @@ def test_rownum_or_predicate_is_not_silently_rewritten():
         "postgres",
     )
     assert result.success is True
+    assert result.target_sql is not None
     assert "ROWNUM <= 10" in result.target_sql.upper()
     assert "LIMIT 10" not in result.target_sql.upper()
 
@@ -113,7 +118,6 @@ def test_security_does_not_flag_update_with_where():
 
 
 def test_security_uses_one_ast_parse_for_multi_statement_and_dml_checks(monkeypatch):
-    import backend.core.transpiler as transpiler_module
     import sqlglot
 
     original_parse = sqlglot.parse

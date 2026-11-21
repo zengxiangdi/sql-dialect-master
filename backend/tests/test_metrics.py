@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr, ValidationError
 
-from backend.api.main import app
 from backend.api import main
+from backend.api.main import app
 from backend.api.workers import BoundedWorkerPool, WorkerCapacityError
 from backend.core.config import AppSettings, settings
 from backend.core.metadata import PROJECT_VERSION
@@ -27,7 +29,7 @@ def test_metrics_is_disabled_by_default(metrics_config):
 
 def test_enabled_metrics_require_a_token():
     with pytest.raises(ValidationError, match="metrics_token"):
-        AppSettings(_env_file=None, metrics_enabled=True, metrics_token="  ")
+        cast(Any, AppSettings)(_env_file=None, metrics_enabled=True, metrics_token="  ")
 
 
 def test_metrics_authentication_and_exposition(monkeypatch):
@@ -126,8 +128,7 @@ def test_worker_503_and_504_are_visible_without_changing_contract(monkeypatch):
 
     class SlowPool:
         async def run(self, *_args, **_kwargs):
-            import asyncio
-            raise asyncio.TimeoutError()
+            raise TimeoutError()
 
     monkeypatch.setattr(main, "_worker_pool", SlowPool())
     response = TestClient(app).post("/api/parse", json={"sql": "SELECT 1", "dialect": "mysql"})

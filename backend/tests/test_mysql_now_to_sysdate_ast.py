@@ -4,11 +4,13 @@ Covers the helper-level transform and the full production pipeline for
 mysql → oracle.  Expected outputs are hardcoded from the verified
 production contract; no dependency on the legacy rule-engine rule.
 """
+from typing import cast
+
 import pytest
 import sqlglot
 from sqlglot import exp
 
-from backend.core.transpiler import SQLTranspiler
+from backend.core.transpiler import SQLTranspiler, TranspileResult
 
 NOTE = "Converted NOW to SYSDATE (AST)"
 
@@ -20,12 +22,17 @@ NOTE = "Converted NOW to SYSDATE (AST)"
 def _helper(sql: str, target: str = "oracle") -> tuple[exp.Expression, list[str]]:
     """Parse sql as mysql and run the AST transform directly."""
     t = SQLTranspiler.__new__(SQLTranspiler)
-    ast = sqlglot.parse_one(sql, read="mysql")
+    ast = cast(exp.Expression, sqlglot.parse_one(sql, read="mysql"))
     return t._ast_mysql_now_to_sysdate(ast, target)
 
 
 def _norm(sql: str) -> str:
     return " ".join(sql.split())
+
+
+def _target_sql(result: TranspileResult) -> str:
+    assert result.target_sql is not None
+    return result.target_sql
 
 
 # ---------------------------------------------------------------------------
@@ -111,6 +118,8 @@ class TestProductionPipeline:
     """The full transpile() path must produce the expected output and notes
     for every mysql → oracle NOW() case."""
 
+    t: SQLTranspiler
+
     @classmethod
     def setup_class(cls):
         cls.t = SQLTranspiler()
@@ -130,7 +139,7 @@ class TestProductionPipeline:
     def test_output_matches_expected(self, sql, expected):
         result = self.t.transpile(sql, source="mysql", target="oracle", validate=False)
         assert result.success is True, result.error
-        assert _norm(result.target_sql) == expected, f"output mismatch for: {sql}"
+        assert _norm(_target_sql(result)) == expected, f"output mismatch for: {sql}"
 
     @pytest.mark.parametrize(
         "sql",
@@ -148,18 +157,19 @@ class TestProductionPipeline:
         """NOW(6) is not converted; no AST note emitted."""
         result = self.t.transpile("SELECT NOW(6) FROM t", source="mysql", target="oracle", validate=False)
         assert result.success is True
-        assert "NOW(6)" in result.target_sql
+        assert "NOW(6)" in _target_sql(result)
         assert NOTE not in result.transformations
 
     def test_string_literal_no_note(self):
         result = self.t.transpile("SELECT 'NOW()' AS label FROM t", source="mysql", target="oracle", validate=False)
         assert result.success is True
-        assert "'NOW()'" in result.target_sql
-        assert "SYSDATE" not in result.target_sql
+        target_sql = _target_sql(result)
+        assert "'NOW()'" in target_sql
+        assert "SYSDATE" not in target_sql
         assert NOTE not in result.transformations
 
     def test_mylist_identifier_no_note(self):
         result = self.t.transpile("SELECT MYNOW FROM t", source="mysql", target="oracle", validate=False)
         assert result.success is True
-        assert "MYNOW" in result.target_sql
+        assert "MYNOW" in _target_sql(result)
         assert NOTE not in result.transformations

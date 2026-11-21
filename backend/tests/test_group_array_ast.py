@@ -4,11 +4,13 @@ Covers the helper-level transform and the full production pipeline for
 clickhouse → postgres.  Expected outputs are hardcoded from the verified
 production contract; no dependency on the legacy rule-engine rule.
 """
+from typing import cast
+
 import pytest
 import sqlglot
 from sqlglot import exp
 
-from backend.core.transpiler import SQLTranspiler
+from backend.core.transpiler import SQLTranspiler, TranspileResult
 
 NOTE = "Converted groupArray to ARRAY_AGG"
 
@@ -36,12 +38,17 @@ EXPECTED = [
 def _helper(sql: str, target: str = "postgres") -> tuple[exp.Expression, list[str]]:
     """Parse sql as clickhouse and run the AST transform directly."""
     t = SQLTranspiler.__new__(SQLTranspiler)
-    ast = sqlglot.parse_one(sql, read="clickhouse")
+    ast = cast(exp.Expression, sqlglot.parse_one(sql, read="clickhouse"))
     return t._ast_grouparray_to_arrayagg(ast, target)
 
 
 def _norm(sql: str) -> str:
     return " ".join(sql.split())
+
+
+def _target_sql(result: TranspileResult) -> str:
+    assert result.target_sql is not None
+    return result.target_sql
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +138,8 @@ class TestProductionPipeline:
     """The full transpile() path must produce the expected output and notes
     for every clickhouse→postgres case."""
 
+    t: SQLTranspiler
+
     @classmethod
     def setup_class(cls):
         cls.t = SQLTranspiler()
@@ -142,7 +151,7 @@ class TestProductionPipeline:
     def test_output_matches_expected(self, sql, expected):
         result = self.t.transpile(sql, source="clickhouse", target="postgres", validate=False)
         assert result.success is True, result.error
-        assert _norm(result.target_sql) == expected, f"output mismatch for: {sql}"
+        assert _norm(_target_sql(result)) == expected, f"output mismatch for: {sql}"
 
     @pytest.mark.parametrize(
         "sql",
@@ -164,8 +173,9 @@ class TestProductionPipeline:
             source="clickhouse", target="postgres", validate=False,
         )
         assert result.success is True
-        assert "'groupArray(x)'" in result.target_sql
-        assert "ARRAY_AGG" not in result.target_sql
+        target_sql = _target_sql(result)
+        assert "'groupArray(x)'" in target_sql
+        assert "ARRAY_AGG" not in target_sql
         assert NOTE not in result.transformations
 
     def test_comment_case(self):
@@ -176,7 +186,7 @@ class TestProductionPipeline:
             source="clickhouse", target="postgres", validate=False,
         )
         assert result.success is True
-        assert "ARRAY_AGG(x)" in result.target_sql
+        assert "ARRAY_AGG(x)" in _target_sql(result)
         assert NOTE in result.transformations
 
     def test_distinct_preserved_in_pipeline(self):
@@ -185,7 +195,7 @@ class TestProductionPipeline:
             source="clickhouse", target="postgres", validate=False,
         )
         assert result.success is True
-        assert "ARRAY_AGG(DISTINCT x)" in result.target_sql
+        assert "ARRAY_AGG(DISTINCT x)" in _target_sql(result)
 
     def test_no_grouparray_in_output(self):
         """No executable groupArray occurrence must remain in the target output."""
@@ -195,4 +205,4 @@ class TestProductionPipeline:
             "SELECT groupArray(a), groupArray(b) FROM t",
         ]:
             result = self.t.transpile(sql, source="clickhouse", target="postgres", validate=False)
-            assert "GROUPARRAY" not in result.target_sql.upper()
+            assert "GROUPARRAY" not in _target_sql(result).upper()

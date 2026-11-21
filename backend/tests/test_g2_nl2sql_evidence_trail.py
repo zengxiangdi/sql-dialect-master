@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """G2: NL2SQL evidence trail completeness.
 
 Regression tests for the evidence-based confidence model:
@@ -21,6 +20,8 @@ All assertions go through the canonical public entry point
 (``backend.core.nl2sql.NL2SQLGenerator``).
 """
 from __future__ import annotations
+
+from typing import ClassVar
 
 import pytest
 
@@ -64,7 +65,7 @@ def evidence_score(result) -> float:
 class TestEvidenceTrailCompleteness:
     """Successful results must carry a non-empty evidence trail."""
 
-    SUCCESS_INPUTS = [
+    SUCCESS_INPUTS: ClassVar[list[str]] = [
         "find all users",
         "find products with price greater than 100",
         "last 7 days",
@@ -182,7 +183,7 @@ class TestEvidenceItemContent:
 class TestEvidenceItemWeights:
     """Each evidence item must carry the documented fixed weight."""
 
-    WEIGHTS = {
+    WEIGHTS: ClassVar[dict[str, float]] = {
         EVIDENCE_TABLE_KNOWN: 0.1,   # template path; enhanced path uses 0.2
         EVIDENCE_AGGREGATION_PRESENT: 0.15,
         EVIDENCE_COLUMNS_EXPLICIT: 0.1,
@@ -244,7 +245,7 @@ class TestFailSafeEvidenceTrail:
     uniformly inspect *why* the result was rejected.
     """
 
-    UNKNOWN_INPUTS = [
+    UNKNOWN_INPUTS: ClassVar[list[str]] = [
         "find users who have invoices",
         "find users who have logs",
         "find users join invoices",

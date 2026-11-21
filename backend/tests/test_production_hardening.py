@@ -1,5 +1,7 @@
 """Regression tests for second-pass production hardening."""
 
+from typing import cast
+
 from backend.core.config import settings
 from backend.core.nl2sql import NL2SQLGenerator
 from backend.core.parser import SQLParser
@@ -30,7 +32,7 @@ def test_nl2sql_rejects_oversized_text_before_processing() -> None:
 
 def test_nl2sql_non_string_input_preserves_type_contract() -> None:
     try:
-        NL2SQLGenerator("mysql").generate(None)  # type: ignore[arg-type]
+        NL2SQLGenerator("mysql").generate(cast(str, None))
     except TypeError as exc:
         assert str(exc) == "text must be a string"
     else:

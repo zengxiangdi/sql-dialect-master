@@ -32,17 +32,17 @@ Summary of verified behavior after B2-1 + B2-1b + B2-1c:
 """
 from __future__ import annotations
 
-import sqlglot
-from sqlglot import exp
+from typing import ClassVar, cast
 
 import pytest
+import sqlglot
+from sqlglot import exp
 
 from backend.core.rules import (
     DYNAMIC_SEPARATOR_FAIL_NOTE,
     rule_engine,
 )
 from backend.core.transpiler import SQLTranspiler
-
 
 # Fixed-literal cases
 FIXED_CASES = [
@@ -61,13 +61,18 @@ DYNAMIC_CASES = [
 SOURCES = ("postgres", "tsql")
 
 
-def _separator_is_expression(tree: exp.Expression) -> bool:
+def _separator_is_expression(tree: exp.Expr) -> bool:
     """True when any GROUP_CONCAT in the tree has a non-Literal separator."""
     for gc in tree.find_all(exp.GroupConcat):
         sep = gc.args.get("separator")
         if sep is not None and not isinstance(sep, exp.Literal):
             return True
     return False
+
+
+def _target_sql(result) -> str:
+    assert result.target_sql is not None
+    return result.target_sql
 
 
 class TestFixedLiteralSeparator:
@@ -79,7 +84,7 @@ class TestFixedLiteralSeparator:
         result, notes = rule_engine.apply_rules(sql, source, "mysql")
         assert DYNAMIC_SEPARATOR_FAIL_NOTE not in notes, notes
         tree = sqlglot.parse_one(result, read="mysql")
-        assert not _separator_is_expression(tree), (
+        assert not _separator_is_expression(cast(exp.Expr, tree)), (
             f"fixed literal separator must remain a literal, got expression: {result}"
         )
 
@@ -88,8 +93,8 @@ class TestFixedLiteralSeparator:
     def test_transpile_fixed_literal(self, sql, label, source):
         result = SQLTranspiler().transpile(sql, source, "mysql")
         assert result.success is True, result.error
-        tree = sqlglot.parse_one(result.target_sql, read="mysql")
-        assert not _separator_is_expression(tree), result.target_sql
+        tree = sqlglot.parse_one(_target_sql(result), read="mysql")
+        assert not _separator_is_expression(cast(exp.Expr, tree)), _target_sql(result)
 
 
 class TestDynamicSeparatorRuleEngineFailsClosed:
@@ -154,7 +159,7 @@ class TestDynamicSeparatorTranspileDoesNotFalsePositiveOnValidMySQL:
         )
         # Confirm the structural guard itself does not fire on valid output.
         transpiler = SQLTranspiler()
-        guard = transpiler._group_concat_dynamic_separator(result.target_sql)
+        guard = transpiler._group_concat_dynamic_separator(_target_sql(result))
         assert guard is False, (
             f"structural guard must not fire on valid literal separator: "
             f"{result.target_sql}"
@@ -213,8 +218,10 @@ class TestLiteralFidelity:
             "SELECT STRING_AGG(name, 'a''b') FROM t", "postgres", "mysql"
         )
         assert DYNAMIC_SEPARATOR_FAIL_NOTE not in notes
-        tree = sqlglot.parse_one(result, read="mysql")
+        tree = cast(exp.Expr, sqlglot.parse_one(result, read="mysql"))
         gc = tree.find(exp.GroupConcat)
+        assert gc is not None
+        assert gc is not None
         sep = gc.args.get("separator")
         assert isinstance(sep, exp.Literal), result
         # The literal's VALUE must be a'b — escape form may differ per
@@ -252,8 +259,10 @@ class TestB2_1D_TSQLDoubleQuoteConservative:
             "SELECT STRING_AGG(name, ',') FROM t", "tsql", "mysql"
         )
         assert DYNAMIC_SEPARATOR_FAIL_NOTE not in notes, notes
-        tree = sqlglot.parse_one(result, read="mysql")
-        sep = tree.find(exp.GroupConcat).args.get("separator")
+        tree = cast(exp.Expr, sqlglot.parse_one(result, read="mysql"))
+        group_concat = tree.find(exp.GroupConcat)
+        assert group_concat is not None
+        sep = group_concat.args.get("separator")
         assert isinstance(sep, exp.Literal), result
 
     def test_tsql_transpile_path_double_quote_fails_closed(self):
@@ -340,7 +349,7 @@ class TestB2_1C_OriginalTextPreservedOnFailClosed:
     """
 
     # (input_sql, source_dialect)
-    PRESERVATION_CASES = [
+    PRESERVATION_CASES: ClassVar[list[tuple[str, str]]] = [
         # Single-line, trailing text after the call on the same line
         (
             "SELECT STRING_AGG(name, CONCAT(',', UPPER(x))) AS s, id FROM t WHERE id > 10",
@@ -348,8 +357,8 @@ class TestB2_1C_OriginalTextPreservedOnFailClosed:
         ),
         # Multi-line statement with WHERE and GROUP BY
         (
-            "SELECT STRING_AGG(name, CASE WHEN z THEN ',' ELSE ';' END)\n"
-            "FROM t\nWHERE active = 1\nGROUP BY category",
+            ("SELECT STRING_AGG(name, CASE WHEN z THEN ',' ELSE ';' END)\n"
+             "FROM t\nWHERE active = 1\nGROUP BY category"),
             "postgres",
         ),
         # Two aggregate expressions, only the first is dynamic
@@ -359,8 +368,8 @@ class TestB2_1C_OriginalTextPreservedOnFailClosed:
         ),
         # Two dynamic STRING_AGG calls in one statement
         (
-            "SELECT STRING_AGG(name, CONCAT(',', UPPER(x))), "
-            "STRING_AGG(val, CASE WHEN z THEN ',' ELSE ';' END) FROM t",
+            ("SELECT STRING_AGG(name, CONCAT(',', UPPER(x))), "
+             "STRING_AGG(val, CASE WHEN z THEN ',' ELSE ';' END) FROM t"),
             "postgres",
         ),
         # T-SQL with pipe operator (also dynamic, also multi-line)
@@ -407,7 +416,8 @@ class TestB2_1C_OriginalTextPreservedOnFailClosed:
 
 
 if __name__ == "__main__":
-    import subprocess, sys
+    import subprocess
+    import sys
     print(subprocess.check_output(
         [sys.executable, "-m", "pytest", __file__, "-v", "-p", "no:cacheprovider"],
         text=True,

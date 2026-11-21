@@ -22,7 +22,8 @@ contracts:
 import pytest
 import sqlglot
 
-from backend.core.rules import RuleSafety, TRANSFORM_RULES
+from backend.core.rules import TRANSFORM_RULES, RuleSafety
+from backend.core.transpiler import SQLTranspiler
 
 
 def _rule(name: str):
@@ -118,7 +119,7 @@ class TestLexicalApplyContract:
 
     def test_legacy_literal_boundary_parse_json(self):
         """PARSE_JSON inside a string literal must not be rewritten."""
-        out, applied = _rule("snowflake_parse_json_to_postgres").apply(
+        out, _applied = _rule("snowflake_parse_json_to_postgres").apply(
             "SELECT 'PARSE_JSON(col)' AS label FROM t"
         )
         assert "PARSE_JSON(col)" in out, f"literal was mutated: {out!r}"
@@ -128,6 +129,8 @@ class TestProductionPipelineContract:
     """End-to-end: the production pipeline for these dialect pairs must yield
     the authoritative sqlglot output and a valid target state.  The retained
     lexical rules do not change this result; this locks that guarantee."""
+
+    t: SQLTranspiler
 
     @classmethod
     def setup_class(cls):
@@ -151,6 +154,8 @@ class TestProductionPipelineContract:
         result = self.t.transpile(sql, source=source, target=target, pretty=False, validate=True)
         assert result.success is True, result.error
         assert result.target_validation_state in ("target_valid", "generic_only")
+        assert result.target_sql is not None
+        assert result.target_sql is not None
         assert must_contain in result.target_sql, f"expected {must_contain!r} in {result.target_sql!r}"
 
     def test_limit_offset_native_is_authoritative(self):
@@ -158,8 +163,9 @@ class TestProductionPipelineContract:
         rule-engine path agrees (no drift between the two mechanisms)."""
         result = self.t.transpile("SELECT a FROM t LIMIT 10, 5", source="mysql", target="postgres",
                                  pretty=False, validate=True)
-        assert result.success
+        assert result.success and result.target_sql is not None
         # Either the rule-engine or native path must produce LIMIT 5 OFFSET 10.
+        assert result.target_sql is not None
         assert "LIMIT 5 OFFSET 10" in result.target_sql
 
     def test_parse_json_native_cast_is_valid_postgres(self):
@@ -169,8 +175,9 @@ class TestProductionPipelineContract:
             "SELECT PARSE_JSON(col) FROM t", source="snowflake", target="postgres",
             pretty=False, validate=True,
         )
-        assert result.success
+        assert result.success and result.target_sql is not None
         # Output must be valid postgres regardless of which cast form won.
+        assert result.target_sql is not None
         sqlglot.parse_one(result.target_sql, read="postgres")
 
 

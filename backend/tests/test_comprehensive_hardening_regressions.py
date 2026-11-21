@@ -22,6 +22,7 @@ def test_oracle_decode_null_search_preserves_null_semantics():
         validate=False,
     )
     assert result.success is True
+    assert result.target_sql is not None
     assert "IS NULL" in result.target_sql.upper()
     assert "status = NULL" not in result.target_sql.upper()
 
@@ -39,6 +40,7 @@ def test_parser_counts_aggregate_function_without_group_by():
 def _where_expression(text: str):
     result = NL2SQLGenerator().generate(text, "postgres")
     assert result.success
+    assert result.sql is not None
     tree = sqlglot.parse_one(result.sql, read="postgres")
     where = tree.find(exp.Where)
     assert where is not None

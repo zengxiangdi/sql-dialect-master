@@ -1,7 +1,8 @@
-#!/usr/bin/env python3
 """
 D2 — NL2SQL Subquery / JOIN Semantic Completion Tests
 """
+from typing import ClassVar
+
 import pytest
 import sqlglot
 from sqlglot import exp
@@ -164,7 +165,7 @@ class TestDateAndRelationCombination:
 class TestDialectCoverage:
     """Test D2 works across all supported dialects."""
 
-    DIALECTS = ["postgres", "mysql", "oracle", "tsql", "duckdb"]
+    DIALECTS: ClassVar[list[str]] = ["postgres", "mysql", "oracle", "tsql", "duckdb"]
 
     @pytest.mark.parametrize("dialect", DIALECTS)
     def test_users_have_orders_dialect(self, gen, dialect):

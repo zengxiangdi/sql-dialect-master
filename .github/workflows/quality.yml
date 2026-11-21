@@ -74,6 +74,12 @@ jobs:
       - name: Mypy NL2SQL test checks
         run: .venv/bin/python -m mypy backend/tests/test_nl2sql*.py
 
+      - name: Ruff all test checks
+        run: ruff check backend/tests
+
+      - name: Mypy all test checks
+        run: .venv/bin/python -m mypy backend/tests
+
       - name: Bandit security scan
         run: |
           # Reviewed static-analysis exceptions:

@@ -14,6 +14,7 @@ def test_security_enabled_multiple_statements_keep_security_violation(monkeypatc
 
     assert result.success is False
     assert result.error_code == "SECURITY_VIOLATION"
+    assert result.error is not None
     assert "Multiple SQL statements detected" in result.error
 
 
@@ -29,6 +30,7 @@ def test_security_enabled_allow_mode_keeps_validation_failed_for_multiple_statem
 
     assert result.success is False
     assert result.error_code == "VALIDATION_FAILED"
+    assert result.error is not None
     assert "Multiple SQL statements are not supported" in result.error
 
 
@@ -43,4 +45,5 @@ def test_security_disabled_keeps_validation_failed_for_multiple_statements(monke
 
     assert result.success is False
     assert result.error_code == "VALIDATION_FAILED"
+    assert result.error is not None
     assert "Multiple SQL statements are not supported" in result.error

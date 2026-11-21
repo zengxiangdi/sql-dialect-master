@@ -3,11 +3,11 @@
 from fastapi.testclient import TestClient
 
 from backend.api.main import app
+from backend.core.config import settings
 from backend.core.functions_lookup import FunctionEncyclopedia
 from backend.core.nl2sql import NL2SQLGenerator
 from backend.core.transpiler import SQLTranspiler
 from backend.core.type_mapping import TypeMapper
-from backend.core.config import settings
 
 
 def test_nl2sql_rejects_empty_unknown_and_ddl_intent() -> None:
@@ -66,7 +66,8 @@ def test_nl2sql_parameter_metadata_is_only_for_executable_dml_markers() -> None:
 def test_nl2sql_does_not_extract_date_from_update() -> None:
     result = NL2SQLGenerator().generate("update user name", "postgres")
     assert result.success is True
-    assert "date =" not in (result.sql or "").lower()
+    assert result.sql is not None
+    assert "date =" not in result.sql.lower()
 
 
 def test_nl2sql_rejects_absurd_date_range() -> None:
@@ -82,6 +83,7 @@ def test_date_and_limit_accept_reasonable_leading_zeros() -> None:
     assert generator.generate("最近000007天的订单", "mysql").success
     limited = generator.generate("show users limit 0000000007", "postgres")
     assert limited.success
+    assert limited.sql is not None
     assert "LIMIT 7" in limited.sql
     too_long = generator.generate("最近" + "0" * 4500 + "7天的订单", "mysql")
     assert not too_long.success
@@ -105,7 +107,9 @@ def test_public_data_queries_do_not_expose_shared_mutable_records() -> None:
     first = encyclopedia.search("date", limit=1)[0]
     original_name = first["name"]
     first["name"] = "mutated"
-    assert encyclopedia.get_function(original_name)["name"] == original_name
+    function = encyclopedia.get_function(original_name)
+    assert function is not None
+    assert function["name"] == original_name
     mapper = TypeMapper()
     matrix = mapper.get_matrix()
     matrix["INT"]["postgres"] = "mutated"
@@ -161,5 +165,6 @@ def test_mysql_non_comment_expression_cannot_be_dropped(monkeypatch) -> None:
 def test_mysql_adjacent_minus_preserves_expression_and_quoted_values() -> None:
     result = SQLTranspiler().transpile("SELECT a--b, 'a--b' AS txt FROM users", "mysql", "postgres")
     assert result.success
+    assert result.target_sql is not None
     assert "a - -b" in result.target_sql
     assert "'a--b'" in result.target_sql

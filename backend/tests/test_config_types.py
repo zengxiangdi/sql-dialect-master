@@ -1,6 +1,6 @@
 """Regression tests for public TypedDict result contracts."""
 
-from typing import Optional, get_type_hints
+from typing import get_type_hints
 
 from backend.core.config import TranspileResultDict
 
@@ -8,7 +8,7 @@ from backend.core.config import TranspileResultDict
 def test_transpile_result_dict_declares_error_code() -> None:
     annotations = get_type_hints(TranspileResultDict)
     assert "error_code" in annotations
-    assert annotations["error_code"] == Optional[str]
+    assert annotations["error_code"] == str | None
 
 
 def test_transpile_result_dict_accepts_machine_readable_error_code() -> None:

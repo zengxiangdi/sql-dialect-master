@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Consistency tests for canonical version and metadata facts.
 
 These tests guard against the exact drift that existed in the repo

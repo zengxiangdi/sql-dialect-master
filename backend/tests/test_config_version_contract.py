@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Regression tests: parser/validate length gating and env-override contract.
 
 Guards the Phase 2 fixes:
@@ -13,14 +12,14 @@ Guards the Phase 2 fixes:
 """
 from __future__ import annotations
 
-import os
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 
-from backend.core import constants, metadata  # noqa: E402
+from backend.core import constants, metadata
 
 
 class TestConstantsVersionDrift:
@@ -61,19 +60,19 @@ class TestEnvOverrideThroughSettings:
     def test_settings_default_parser_max(self) -> None:
         from backend.core.config import AppSettings
 
-        assert AppSettings().parser_max_sql_length == 100000
+        assert cast(Any, AppSettings)().parser_max_sql_length == 100000
 
     def test_settings_honors_sdmparser_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from backend.core.config import AppSettings
 
         monkeypatch.setenv("SDM_PARSER_MAX_SQL_LENGTH", "500")
-        assert AppSettings().parser_max_sql_length == 500
+        assert cast(Any, AppSettings)().parser_max_sql_length == 500
 
     def test_settings_honors_nl2sql_input_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from backend.core.config import AppSettings
 
         monkeypatch.setenv("SDM_NL2SQL_MAX_INPUT_LENGTH", "1234")
-        assert AppSettings().nl2sql_max_input_length == 1234
+        assert cast(Any, AppSettings)().nl2sql_max_input_length == 1234
 
     def test_parse_rejects_overlength(self) -> None:
         from backend.core.parser import SQLParser
@@ -86,6 +85,7 @@ class TestEnvOverrideThroughSettings:
         big_sql = "SELECT " + ", ".join(f"c{i}" for i in range(20000))
         result = p.parse(big_sql)
         assert result.success is False
+        assert result.error is not None
         assert "exceeds maximum length" in result.error
 
     def test_validate_matches_parse_length_gate(self) -> None:

@@ -3,7 +3,6 @@
 Verifies that high-risk SQL rewrites do not silently change semantics,
 and that uncertainty is explicitly exposed via compatibility notes.
 """
-import pytest
 import sqlglot
 from sqlglot import exp
 
@@ -11,10 +10,19 @@ from backend.core.nl2sql import NL2SQLGenerator
 from backend.core.transpiler import SQLTranspiler
 from backend.core.type_mapping import TypeMapper
 
-
 transpiler = SQLTranspiler()
 generator = NL2SQLGenerator()
 type_mapper = TypeMapper()
+
+
+def _sql(result) -> str:
+    assert result.sql is not None
+    return result.sql
+
+
+def _target_sql(result) -> str:
+    assert result.target_sql is not None
+    return result.target_sql
 
 
 # =============================================================================
@@ -28,7 +36,7 @@ class TestGroupConcat:
         sql = "SELECT GROUP_CONCAT(name) FROM users"
         result = transpiler.transpile(sql, "mysql", "postgres")
         assert result.success
-        assert "STRING_AGG" in result.target_sql.upper()
+        assert "STRING_AGG" in _target_sql(result).upper()
         # Simple column names don't need ::TEXT cast (sqlglot omits it)
         # The important thing is the conversion happened
 
@@ -36,26 +44,26 @@ class TestGroupConcat:
         sql = "SELECT GROUP_CONCAT(DISTINCT name) FROM users"
         result = transpiler.transpile(sql, "mysql", "postgres")
         assert result.success
-        assert "DISTINCT" in result.target_sql.upper()
+        assert "DISTINCT" in _target_sql(result).upper()
 
     def test_separator_preserved(self):
         sql = "SELECT GROUP_CONCAT(name SEPARATOR '|') FROM users"
         result = transpiler.transpile(sql, "mysql", "postgres")
         assert result.success
-        assert "|'" in result.target_sql or "('|')" in result.target_sql
+        assert "|'" in _target_sql(result) or "('|')" in _target_sql(result)
 
     def test_order_by_in_group_concat(self):
         sql = "SELECT GROUP_CONCAT(name ORDER BY created_at) FROM users"
         result = transpiler.transpile(sql, "mysql", "postgres")
         assert result.success
-        assert "ORDER BY" in result.target_sql.upper()
+        assert "ORDER BY" in _target_sql(result).upper()
 
     def test_nested_expression_in_group_concat(self):
         sql = "SELECT GROUP_CONCAT(CONCAT(first_name, last_name)) FROM users"
         result = transpiler.transpile(sql, "mysql", "postgres")
         assert result.success
         # CONCAT should be preserved (sqlglot may or may not rewrite)
-        assert "CONCAT" in result.target_sql.upper() or "||" in result.target_sql
+        assert "CONCAT" in _target_sql(result).upper() or "||" in _target_sql(result)
 
 
 class TestStringAgg:
@@ -65,8 +73,8 @@ class TestStringAgg:
         sql = "SELECT STRING_AGG(name, ',') FROM users"
         result = transpiler.transpile(sql, "postgres", "mysql")
         assert result.success
-        assert "GROUP_CONCAT" in result.target_sql.upper()
-        assert "SEPARATOR" in result.target_sql.upper()
+        assert "GROUP_CONCAT" in _target_sql(result).upper()
+        assert "SEPARATOR" in _target_sql(result).upper()
 
     def test_nested_expression_in_string_agg(self):
         sql = "SELECT STRING_AGG(CONCAT(first_name, last_name), '|') FROM users"
@@ -74,7 +82,7 @@ class TestStringAgg:
         assert result.success
         # CONCAT should not be silently rewritten to COALESCE
         # Note: sqlglot may convert CONCAT to ||, which is semantically equivalent
-        assert "CONCAT" in result.target_sql.upper() or "||" in result.target_sql
+        assert "CONCAT" in _target_sql(result).upper() or "||" in _target_sql(result)
 
 
 class TestListagg:
@@ -88,7 +96,7 @@ class TestListagg:
         # The post-processor rewrites to ARRAY_JOIN(COLLECT_LIST(...)) —
         # the conversion really happens, so the claim is true and must
         # be retained (B2-3: claims verified by final SQL evidence).
-        assert "ARRAY_JOIN" in result.target_sql.upper()
+        assert "ARRAY_JOIN" in _target_sql(result).upper()
         assert any("ARRAY_JOIN" in n for n in result.compatibility_notes)
         # CONNECT BY note must still be filtered (query has no CONNECT BY)
         assert not any("CONNECT BY" in n for n in result.compatibility_notes)
@@ -111,13 +119,13 @@ class TestArrayAgg:
         sql = "SELECT ARRAY_AGG(name) FROM users"
         result = transpiler.transpile(sql, "postgres", "hive")
         assert result.success
-        assert "COLLECT_LIST" in result.target_sql.upper()
+        assert "COLLECT_LIST" in _target_sql(result).upper()
 
     def test_distinct_preserved(self):
         sql = "SELECT ARRAY_AGG(DISTINCT name) FROM users"
         result = transpiler.transpile(sql, "postgres", "hive")
         assert result.success
-        assert "DISTINCT" in result.target_sql.upper()
+        assert "DISTINCT" in _target_sql(result).upper()
 
 
 class TestCollectList:
@@ -127,7 +135,7 @@ class TestCollectList:
         sql = "SELECT COLLECT_LIST(name) FROM users"
         result = transpiler.transpile(sql, "hive", "postgres")
         assert result.success
-        assert "ARRAY_AGG" in result.target_sql.upper()
+        assert "ARRAY_AGG" in _target_sql(result).upper()
 
     def test_nested_expression(self):
         sql = "SELECT COLLECT_LIST(CONCAT(a, b)) FROM users"
@@ -146,26 +154,26 @@ class TestDateTimePreservation:
         sql = "SELECT CURRENT_DATE FROM users"
         result = transpiler.transpile(sql, "mysql", "postgres")
         assert result.success
-        assert "CURRENT_DATE" in result.target_sql.upper()
+        assert "CURRENT_DATE" in _target_sql(result).upper()
 
     def test_current_timestamp_preserved(self):
         sql = "SELECT CURRENT_TIMESTAMP FROM users"
         result = transpiler.transpile(sql, "mysql", "postgres")
         assert result.success
-        assert "CURRENT_TIMESTAMP" in result.target_sql.upper()
+        assert "CURRENT_TIMESTAMP" in _target_sql(result).upper()
 
     def test_now_preserved(self):
         sql = "SELECT NOW() FROM users"
         result = transpiler.transpile(sql, "mysql", "postgres")
         assert result.success
-        assert "NOW()" in result.target_sql.upper()
+        assert "NOW()" in _target_sql(result).upper()
 
     def test_date_add_preserved(self):
         sql = "SELECT DATE_ADD(created_at, INTERVAL 7 DAY) FROM users"
         result = transpiler.transpile(sql, "mysql", "postgres")
         assert result.success
         # Result uses + INTERVAL syntax which is semantically equivalent
-        assert "INTERVAL" in result.target_sql.upper()
+        assert "INTERVAL" in _target_sql(result).upper()
 
     def test_date_sub_preserved(self):
         sql = "SELECT DATE_SUB(created_at, INTERVAL 7 DAY) FROM users"
@@ -176,13 +184,13 @@ class TestDateTimePreservation:
         sql = "SELECT ADD_MONTHS(dt, 1) FROM users"
         result = transpiler.transpile(sql, "oracle", "postgres")
         assert result.success
-        assert "ADD_MONTHS" in result.target_sql.upper()
+        assert "ADD_MONTHS" in _target_sql(result).upper()
 
     def test_date_format_conversion(self):
         sql = "SELECT DATE_FORMAT(dt, '%Y-%m-%d') FROM users"
         result = transpiler.transpile(sql, "mysql", "postgres")
         assert result.success
-        assert "TO_CHAR" in result.target_sql.upper()
+        assert "TO_CHAR" in _target_sql(result).upper()
 
     def test_to_char_preserved(self):
         sql = "SELECT TO_CHAR(dt, 'YYYY-MM-DD') FROM users"
@@ -193,13 +201,13 @@ class TestDateTimePreservation:
         sql = "SELECT 'ROWNUM is a pseudo-column' FROM dual"
         result = transpiler.transpile(sql, "oracle", "postgres")
         assert result.success
-        assert "ROWNUM is a pseudo-column" in result.target_sql
+        assert "ROWNUM is a pseudo-column" in _target_sql(result)
 
     def test_rowcount_not_in_comment(self):
         sql = "SELECT id FROM users -- use ROWNUM for ranking"
         result = transpiler.transpile(sql, "oracle", "postgres")
         assert result.success
-        assert "ROWNUM" in result.target_sql
+        assert "ROWNUM" in _target_sql(result)
 
 
 class TestLimitTop:
@@ -209,19 +217,19 @@ class TestLimitTop:
         sql = "SELECT * FROM users FETCH FIRST 10 ROWS ONLY"
         result = transpiler.transpile(sql, "oracle", "mysql")
         assert result.success
-        assert "LIMIT 10" in result.target_sql.upper()
+        assert "LIMIT 10" in _target_sql(result).upper()
 
     def test_top_to_limit(self):
         sql = "SELECT TOP 10 * FROM users"
         result = transpiler.transpile(sql, "tsql", "mysql")
         assert result.success
-        assert "LIMIT 10" in result.target_sql.upper()
+        assert "LIMIT 10" in _target_sql(result).upper()
 
     def test_top_to_limit_postgres(self):
         sql = "SELECT TOP 10 * FROM users"
         result = transpiler.transpile(sql, "tsql", "postgres")
         assert result.success
-        assert "LIMIT 10" in result.target_sql.upper()
+        assert "LIMIT 10" in _target_sql(result).upper()
 
 
 # =============================================================================
@@ -234,64 +242,64 @@ class TestNL2SQLRegression:
     def test_in_predicate_preserved(self):
         result = generator.generate("orders where id in (1, 2, 3)", dialect="postgres")
         assert result.success
-        assert "WHERE id IN (1, 2, 3)" in result.sql
+        assert "WHERE id IN (1, 2, 3)" in _sql(result)
         # Should NOT add spurious ORDER BY because "order" is substring of "orders"
-        assert "ORDER BY" not in result.sql
+        assert "ORDER BY" not in _sql(result)
 
     def test_not_in_predicate(self):
         result = generator.generate("orders where id not in (1, 2, 3)", dialect="postgres")
         assert result.success
-        assert "NOT IN (1, 2, 3)" in result.sql
+        assert "NOT IN (1, 2, 3)" in _sql(result)
 
     def test_status_in_no_duplicate(self):
         result = generator.generate("users where status in (active, pending)", dialect="postgres")
         assert result.success
         # Should have status IN but NOT status = active (duplicate)
-        sql_lower = result.sql.lower()
+        sql_lower = _sql(result).lower()
         assert "status in" in sql_lower
-        assert result.sql.count("status = 'active'") == 0
+        assert _sql(result).count("status = 'active'") == 0
 
     def test_comparison_preserves_gte(self):
         result = generator.generate("users where age greater than or equal to 18", dialect="postgres")
         assert result.success
-        assert ">=" in result.sql
+        assert ">=" in _sql(result)
 
     def test_comparison_preserves_lte(self):
         result = generator.generate("users where age less than or equal to 18", dialect="postgres")
         assert result.success
-        assert "<=" in result.sql
+        assert "<=" in _sql(result)
 
     def test_null_predicate_is_explicit(self):
         result = generator.generate("users where age is null", dialect="postgres")
         assert result.success
-        assert "IS NULL" in result.sql
-        assert "IS NOT NULL" not in result.sql
+        assert "IS NULL" in _sql(result)
+        assert "IS NOT NULL" not in _sql(result)
 
     def test_not_null_predicate(self):
         result = generator.generate("users where age is not null", dialect="postgres")
         assert result.success
-        assert "IS NOT NULL" in result.sql
+        assert "IS NOT NULL" in _sql(result)
         # Remove IS NOT NULL to check for stray IS NULL
-        cleaned = result.sql.replace("IS NOT NULL", "")
+        cleaned = _sql(result).replace("IS NOT NULL", "")
         assert "IS NULL" not in cleaned
 
     def test_aggregate_with_group_by(self):
         result = generator.generate("count orders by status", dialect="mysql")
         assert result.success
-        tree = sqlglot.parse_one(result.sql, read="mysql")
+        tree = sqlglot.parse_one(_sql(result), read="mysql")
         assert tree.find(exp.Group) is not None
         assert tree.find(exp.Count) is not None
 
     def test_update_has_explicit_predicate(self):
         result = generator.generate("update users set status = active where id = 1", dialect="postgres")
         assert result.success
-        tree = sqlglot.parse_one(result.sql, read="postgres")
+        tree = sqlglot.parse_one(_sql(result), read="postgres")
         assert tree.find(exp.Where) is not None
 
     def test_delete_has_explicit_predicate(self):
         result = generator.generate("delete from users where id = 1", dialect="postgres")
         assert result.success
-        tree = sqlglot.parse_one(result.sql, read="postgres")
+        tree = sqlglot.parse_one(_sql(result), read="postgres")
         assert tree.find(exp.Where) is not None
 
 
@@ -351,19 +359,19 @@ class TestLexicalBoundarySafety:
         sql = "SELECT 'GROUP_CONCAT(CONCAT(a, b))' FROM users"
         result = transpiler.transpile(sql, "mysql", "postgres")
         assert result.success
-        assert "GROUP_CONCAT(CONCAT(a, b))" in result.target_sql
+        assert "GROUP_CONCAT(CONCAT(a, b))" in _target_sql(result)
 
     def test_group_concat_in_comment(self):
         sql = "SELECT GROUP_CONCAT(name) FROM users -- GROUP_CONCAT(CONCAT(a, b))"
         result = transpiler.transpile(sql, "mysql", "postgres")
         assert result.success
-        assert "GROUP_CONCAT(CONCAT(a, b))" in result.target_sql
+        assert "GROUP_CONCAT(CONCAT(a, b))" in _target_sql(result)
 
     def test_string_agg_in_string_literal(self):
         sql = 'SELECT "STRING_AGG(CONCAT(a, b), \',\')" FROM users'
         result = transpiler.transpile(sql, "postgres", "mysql")
         assert result.success
-        assert "STRING_AGG(CONCAT(a, b), ',')" in result.target_sql
+        assert "STRING_AGG(CONCAT(a, b), ',')" in _target_sql(result)
 
     def test_listagg_in_comment(self):
         sql = "SELECT LISTAGG(name, ',') FROM users -- LISTAGG(a, b) WITHIN GROUP"
@@ -383,7 +391,7 @@ class TestFalseNoteFiltering:
         result = transpiler.transpile(sql, "oracle", "hive")
         assert result.success
         # Conversion really happens → the claim is true and retained.
-        assert "ARRAY_JOIN" in result.target_sql.upper()
+        assert "ARRAY_JOIN" in _target_sql(result).upper()
         assert any("ARRAY_JOIN" in n for n in result.compatibility_notes)
 
     def test_connect_by_only_query_no_false_note(self):
@@ -398,6 +406,6 @@ class TestFalseNoteFiltering:
         assert result.success
         # sqlglot keeps CONNECT BY for Hive — claiming "converted to
         # WITH RECURSIVE" would be false and must be suppressed.
-        assert "CONNECT BY" in result.target_sql.upper()
-        assert "WITH RECURSIVE" not in result.target_sql.upper()
+        assert "CONNECT BY" in _target_sql(result).upper()
+        assert "WITH RECURSIVE" not in _target_sql(result).upper()
         assert not any("CONNECT BY" in n for n in result.compatibility_notes)

@@ -62,9 +62,9 @@ def normalize_rows(rows) -> list:
     """
     NULL_SENTINEL = "\x00NULL\x00"  # Sorts before any printable string
 
-    normalized = []
+    normalized: list[tuple[object, ...]] = []
     for row in rows:
-        normed = []
+        normed: list[object] = []
         for v in row:
             if v is None:
                 normed.append(NULL_SENTINEL)

@@ -5,13 +5,14 @@ from sqlglot import exp
 
 from backend.core.nl2sql import NL2SQLGenerator
 
-
 nl2sql = NL2SQLGenerator()
 
 
 def parse_sql(sql: str, dialect: str) -> exp.Expression:
     """Parse generated SQL with its target dialect."""
-    return sqlglot.parse_one(sql, read=dialect)
+    parsed = sqlglot.parse_one(sql, read=dialect)
+    assert isinstance(parsed, exp.Expression)
+    return parsed
 
 
 def test_nl2sql_and_conditions_preserve_both_predicates():
@@ -21,6 +22,7 @@ def test_nl2sql_and_conditions_preserve_both_predicates():
     )
 
     assert result.success
+    assert result.sql is not None
     tree = parse_sql(result.sql, "postgres")
     where = tree.find(exp.Where)
 
@@ -42,6 +44,7 @@ def test_nl2sql_or_conditions_preserve_both_predicates():
     )
 
     assert result.success
+    assert result.sql is not None
     tree = parse_sql(result.sql, "postgres")
     where = tree.find(exp.Where)
 
@@ -57,6 +60,7 @@ def test_nl2sql_chinese_and_conditions_preserve_boolean_structure():
     result = nl2sql.generate("查询价格大于100且数量小于10的产品", "postgres")
 
     assert result.success
+    assert result.sql is not None
     tree = parse_sql(result.sql, "postgres")
     where = tree.find(exp.Where)
 

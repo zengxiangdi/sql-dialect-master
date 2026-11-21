@@ -1,9 +1,10 @@
-#!/usr/bin/env python3
 """
 D1 — VARCHAR Precision Semantic Warnings
 
 Tests for parameterized VARCHAR/VARCHAR2 type mapping with precision-aware warnings.
 """
+from typing import ClassVar
+
 import pytest
 
 from backend.core.type_mapping import TypeMapper
@@ -126,7 +127,7 @@ class TestPrecisionAwareWarnings:
 class TestDialectMatrixCoverage:
     """Test Oracle → all supported target dialects with parameterized VARCHAR."""
 
-    TARGETS = ["postgres", "mysql", "tsql", "duckdb", "hive", "spark", "databricks"]
+    TARGETS: ClassVar[list[str]] = ["postgres", "mysql", "tsql", "duckdb", "hive", "spark", "databricks"]
 
     @pytest.mark.parametrize("target", TARGETS)
     def test_varchar2_2000_maps_to_all_targets(self, mapper, target):

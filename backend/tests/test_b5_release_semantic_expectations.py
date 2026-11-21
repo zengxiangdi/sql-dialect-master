@@ -20,7 +20,8 @@ from backend.utils.validators import split_sql_statements
 
 
 def _payload(result) -> str:
-    sql = result.sql or ""
+    assert result.sql is not None
+    sql = result.sql
     return "\n".join(l for l in sql.splitlines() if not l.strip().startswith("--"))
 
 
@@ -40,6 +41,7 @@ class TestB5_Nl2sqlIndependentExpectations:
     def test_last_3_weeks_value_and_explanation_unit(self):
         result = NL2SQLGenerator().generate("last 3 weeks of orders", "hive")
         assert result.success is True
+        assert result.sql is not None
         assert "DATE_SUB(CURRENT_DATE, 21)" in result.sql
         assert result.explanation == "查询最近3周数据"
 
@@ -62,16 +64,20 @@ class TestB5_Nl2sqlIndependentExpectations:
     def test_chinese_exists_relation_is_relational(self):
         result = NL2SQLGenerator().generate("查询有订单的用户", "hive")
         assert result.success is True
+        assert result.sql is not None
         assert "EXISTS" in result.sql.upper()
         assert "users.id = orders.user_id" in result.sql
         tree = sqlglot.parse_one(_payload(result), read="hive")
-        assert tree.find(exp.From).this.name == "users"
+        from_clause = tree.find(exp.From)
+        assert from_clause is not None
+        assert from_clause.this.name == "users"
 
 
 class TestB5_TranspilerIndependentExpectations:
     def test_limit_becomes_fetch_first_on_oracle(self):
         result = SQLTranspiler().transpile("SELECT * FROM t LIMIT 5", "postgres", "oracle")
         assert result.success is True
+        assert result.target_sql is not None
         assert "FETCH FIRST 5 ROWS ONLY" in result.target_sql
 
     def test_connect_by_becomes_recursive_on_duckdb(self):
@@ -80,6 +86,7 @@ class TestB5_TranspilerIndependentExpectations:
             "oracle", "duckdb",
         )
         assert result.success is True
+        assert result.target_sql is not None
         assert "WITH RECURSIVE" in result.target_sql
 
     def test_listagg_becomes_array_join_on_hive(self):
@@ -88,6 +95,7 @@ class TestB5_TranspilerIndependentExpectations:
             "oracle", "hive",
         )
         assert result.success is True
+        assert result.target_sql is not None
         assert "ARRAY_JOIN(COLLECT_LIST(name), ',')" in result.target_sql
 
 
@@ -100,9 +108,8 @@ class TestB5_TypeMapperIndependentExpectations:
 
     def test_unsupported_target_is_not_success(self):
         import json
-        from pathlib import Path
-
         import tempfile
+        from pathlib import Path
 
         with tempfile.TemporaryDirectory() as tmp:
             data_path = Path(tmp) / "partial.json"

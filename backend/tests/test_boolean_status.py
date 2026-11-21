@@ -5,13 +5,13 @@ from sqlglot import exp
 
 from backend.core.nl2sql import NL2SQLGenerator
 
-
 nl2sql = NL2SQLGenerator()
 
 
 def parse_where(text: str) -> exp.Expression:
     result = nl2sql.generate(text, "postgres")
     assert result.success
+    assert result.sql is not None
     tree = sqlglot.parse_one(result.sql, read="postgres")
     where = tree.find(exp.Where)
     assert where is not None

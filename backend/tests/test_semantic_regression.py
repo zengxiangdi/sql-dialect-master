@@ -7,7 +7,6 @@ from backend.core.nl2sql import NL2SQLGenerator
 from backend.core.transpiler import SQLTranspiler
 from backend.core.type_mapping import TypeMapper
 
-
 nl2sql = NL2SQLGenerator()
 transpiler = SQLTranspiler()
 type_mapper = TypeMapper()
@@ -15,7 +14,9 @@ type_mapper = TypeMapper()
 
 def parse_sql(sql: str, dialect: str) -> exp.Expression:
     """Parse generated SQL with its target dialect and fail with useful context."""
-    return sqlglot.parse_one(sql, read=dialect)
+    parsed = sqlglot.parse_one(sql, read=dialect)
+    assert isinstance(parsed, exp.Expression)
+    return parsed
 
 
 def table_names(tree: exp.Expression) -> set[str]:
@@ -30,6 +31,7 @@ def test_nl2sql_group_count_preserves_table_group_and_aggregation():
     result = nl2sql.generate("count orders by status", "mysql")
 
     assert result.success
+    assert result.sql is not None
     tree = parse_sql(result.sql, "mysql")
 
     assert table_names(tree) == {"orders"}
@@ -44,6 +46,7 @@ def test_nl2sql_condition_preserves_predicate_semantics():
     result = nl2sql.generate("find products with price greater than 100", "postgres")
 
     assert result.success
+    assert result.sql is not None
     tree = parse_sql(result.sql, "postgres")
     where = tree.find(exp.Where)
 
@@ -62,6 +65,7 @@ def test_nl2sql_composed_condition_preserves_order_and_limit():
     )
 
     assert result.success
+    assert result.sql is not None
     tree = parse_sql(result.sql, "postgres")
 
     assert table_names(tree) == {"products"}
@@ -90,6 +94,7 @@ def test_nl2sql_composed_aggregate_preserves_group_and_order():
     )
 
     assert result.success
+    assert result.sql is not None
     tree = parse_sql(result.sql, "postgres")
 
     assert table_names(tree) == {"products"}
@@ -106,6 +111,7 @@ def test_nl2sql_top_n_preserves_order_and_limit():
     result = nl2sql.generate("select top 10 customers", "mysql")
 
     assert result.success
+    assert result.sql is not None
     tree = parse_sql(result.sql, "mysql")
     order = tree.find(exp.Order)
     limit = tree.find(exp.Limit)
@@ -122,6 +128,7 @@ def test_mysql_to_postgres_preserves_selected_columns_filter_and_order():
     result = transpiler.transpile(source_sql, "mysql", "postgres")
 
     assert result.success
+    assert result.target_sql is not None
     source = parse_sql(source_sql, "mysql")
     target = parse_sql(result.target_sql, "postgres")
 
@@ -142,6 +149,7 @@ def test_tsql_to_hive_preserves_top_n_semantics():
     result = transpiler.transpile(source_sql, "tsql", "hive")
 
     assert result.success
+    assert result.target_sql is not None
     target = parse_sql(result.target_sql, "hive")
 
     assert table_names(target) == {"users"}
@@ -161,6 +169,7 @@ def test_hive_to_oracle_preserves_window_partition_and_order():
     result = transpiler.transpile(source_sql, "hive", "oracle")
 
     assert result.success
+    assert result.target_sql is not None
     source = parse_sql(source_sql, "hive")
     target = parse_sql(result.target_sql, "oracle")
 

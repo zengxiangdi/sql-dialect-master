@@ -1,5 +1,7 @@
 """Public contract tests for :mod:`backend.core.parser`."""
 
+from typing import cast
+
 import pytest
 
 from backend.core.config import settings
@@ -16,10 +18,10 @@ def test_constructor_normalizes_supported_dialect_and_rejects_unknown() -> None:
 def test_parse_and_validate_input_errors_and_valid_sql(monkeypatch) -> None:
     parser = SQLParser("postgres")
 
-    non_string = parser.parse(None)  # type: ignore[arg-type]
+    non_string = parser.parse(cast(str, None))
     assert non_string.success is False
     assert non_string.error == "SQL statement must be a string"
-    assert parser.validate(None) == (False, "SQL statement must be a string")  # type: ignore[arg-type]
+    assert parser.validate(cast(str, None)) == (False, "SQL statement must be a string")
 
     for sql in ("", "   "):
         result = parser.parse(sql)
@@ -145,8 +147,8 @@ def test_join_extraction_covers_types_and_on_conditions() -> None:
         ("DROP TABLE users", "DROP"),
         ("ALTER TABLE users ADD COLUMN name TEXT", "ALTER"),
         (
-            "MERGE INTO users u USING incoming i ON u.id = i.id "
-            "WHEN MATCHED THEN UPDATE SET name = i.name",
+            ("MERGE INTO users u USING incoming i ON u.id = i.id "
+             "WHEN MATCHED THEN UPDATE SET name = i.name"),
             "MERGE",
         ),
         ("SELECT 1 UNION SELECT 2", "UNION"),
@@ -164,18 +166,18 @@ def test_query_type_detection(sql: str, query_type: str) -> None:
         ("SELECT 1", "Simple"),
         ("SELECT 1 UNION SELECT 2", "Moderate"),
         (
-            "SELECT u.id, COUNT(*) FROM users u "
-            "JOIN orders o ON o.user_id = u.id "
-            "JOIN events e ON e.user_id = u.id GROUP BY u.id",
+            ("SELECT u.id, COUNT(*) FROM users u "
+             "JOIN orders o ON o.user_id = u.id "
+             "JOIN events e ON e.user_id = u.id GROUP BY u.id"),
             "Complex",
         ),
         (
-            "WITH cte AS (SELECT user_id, SUM(amount) FROM orders GROUP BY user_id) "
-            "SELECT DISTINCT u.id, ROW_NUMBER() OVER (ORDER BY u.id), COUNT(*) "
-            "FROM users u JOIN cte c ON c.user_id = u.id "
-            "LEFT JOIN profiles p ON p.user_id = u.id "
-            "WHERE u.id IN (SELECT id FROM admins) GROUP BY u.id "
-            "UNION SELECT 0",
+            ("WITH cte AS (SELECT user_id, SUM(amount) FROM orders GROUP BY user_id) "
+             "SELECT DISTINCT u.id, ROW_NUMBER() OVER (ORDER BY u.id), COUNT(*) "
+             "FROM users u JOIN cte c ON c.user_id = u.id "
+             "LEFT JOIN profiles p ON p.user_id = u.id "
+             "WHERE u.id IN (SELECT id FROM admins) GROUP BY u.id "
+             "UNION SELECT 0"),
             "Very Complex",
         ),
     ],

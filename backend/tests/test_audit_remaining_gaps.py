@@ -6,7 +6,6 @@ from fastapi.testclient import TestClient
 from backend.api import readiness
 from backend.api.middleware import RateLimitMiddleware, StructuredLoggingMiddleware
 from backend.core.nl2sql import NL2SQLGenerator
-from backend.core.post_processor import PostProcessor
 
 PROBE_HEADERS = {"X-Health-Probe-Token": "test-health-token"}
 
@@ -231,7 +230,7 @@ def test_nl2sql_openapi_exposes_column_hints():
 def test_nl2sql_api_passes_valid_column_hints_to_generator(monkeypatch):
     from backend.api import main as main_module
 
-    captured = {}
+    captured: dict[str, object] = {}
 
     def fake_generate(text, dialect, table_hint=None, column_hints=None):
         captured.update(

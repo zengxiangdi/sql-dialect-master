@@ -3,7 +3,6 @@
 Verifies that PostProcessor._check_warnings is the single effective implementation,
 never monkey-patched, and correctly ignores literals/comments/identifiers.
 """
-import pytest
 
 from backend.core.post_processor import PostProcessor
 
@@ -88,5 +87,5 @@ class TestPostProcessorWarningsOwnership:
         """PostProcessor.process() must include _check_warnings output in notes."""
         p = PostProcessor()
         sql = "INSERT OVERWRITE TABLE t SELECT 1"
-        result, notes = p.process(sql, "hive", "postgres")
+        _result, notes = p.process(sql, "hive", "postgres")
         assert any("INSERT OVERWRITE" in n for n in notes)

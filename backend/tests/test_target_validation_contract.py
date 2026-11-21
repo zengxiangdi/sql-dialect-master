@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Regression test: target-dialect validation must not be masked as success.
 
 When a conversion produces output that the *target* dialect cannot parse

@@ -1,5 +1,4 @@
 """Regression tests for Phase E2: rule safety classification."""
-import pytest
 
 from backend.core.rules import TRANSFORM_RULES, RuleSafety
 

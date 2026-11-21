@@ -84,6 +84,7 @@ def test_rule_apply_surfaces_regex_execution_errors() -> None:
     rule.replacement = r"\2"
 
     import re
+
     import pytest
 
     with pytest.raises(re.error, match="invalid group reference"):

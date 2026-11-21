@@ -1,8 +1,10 @@
+from typing import Any, cast
+
 from backend.benchmarks.security_validation_profile import SECURITY_CASES, run
 
 
 def test_security_validation_profile_shape():
-    payload = run(iterations=4, repeats=1)
+    payload = cast(dict[str, Any], run(iterations=4, repeats=1))
 
     assert set(payload) == {
         "environment",

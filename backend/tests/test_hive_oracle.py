@@ -1,8 +1,9 @@
-#!/usr/bin/env python3
 """Test cases for Hive ↔ Oracle SQL conversion."""
-import pytest
 import sys
 from pathlib import Path
+
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from backend.core.transpiler import SQLTranspiler
@@ -17,73 +18,73 @@ class TestHiveToOracle:
     def test_basic_select(self):
         sql = "SELECT * FROM users WHERE id = 1"
         result = transpiler.transpile(sql, "hive", "oracle")
-        assert result.success
+        assert result.success and result.target_sql is not None
         assert "SELECT" in result.target_sql
     
     def test_limit_to_fetch(self):
         sql = "SELECT * FROM users LIMIT 10"
         result = transpiler.transpile(sql, "hive", "oracle")
-        assert result.success
+        assert result.success and result.target_sql is not None
         assert "FETCH" in result.target_sql or "ROWNUM" in result.target_sql.upper()
     
     def test_string_concat(self):
         sql = "SELECT CONCAT(first_name, ' ', last_name) FROM users"
         result = transpiler.transpile(sql, "hive", "oracle")
-        assert result.success
+        assert result.success and result.target_sql is not None
     
     def test_date_add(self):
         sql = "SELECT DATE_ADD(created_at, 7) FROM orders"
         result = transpiler.transpile(sql, "hive", "oracle")
-        assert result.success
+        assert result.success and result.target_sql is not None
     
     def test_nvl_coalesce(self):
         sql = "SELECT COALESCE(name, 'Unknown') FROM users"
         result = transpiler.transpile(sql, "hive", "oracle")
-        assert result.success
+        assert result.success and result.target_sql is not None
     
     def test_window_row_number(self):
         sql = "SELECT *, ROW_NUMBER() OVER (PARTITION BY dept ORDER BY salary DESC) AS rn FROM employees"
         result = transpiler.transpile(sql, "hive", "oracle")
-        assert result.success
+        assert result.success and result.target_sql is not None
         assert "ROW_NUMBER" in result.target_sql
     
     def test_window_rank(self):
         sql = "SELECT *, RANK() OVER (ORDER BY score DESC) AS rnk FROM students"
         result = transpiler.transpile(sql, "hive", "oracle")
-        assert result.success
+        assert result.success and result.target_sql is not None
     
     def test_case_when(self):
         sql = "SELECT CASE WHEN status = 1 THEN 'Active' ELSE 'Inactive' END FROM users"
         result = transpiler.transpile(sql, "hive", "oracle")
-        assert result.success
+        assert result.success and result.target_sql is not None
         assert "CASE" in result.target_sql
     
     def test_group_by_having(self):
         sql = "SELECT dept, COUNT(*) AS cnt FROM employees GROUP BY dept HAVING COUNT(*) > 5"
         result = transpiler.transpile(sql, "hive", "oracle")
-        assert result.success
+        assert result.success and result.target_sql is not None
         assert "HAVING" in result.target_sql
     
     def test_subquery(self):
         sql = "SELECT * FROM users WHERE id IN (SELECT user_id FROM orders)"
         result = transpiler.transpile(sql, "hive", "oracle")
-        assert result.success
+        assert result.success and result.target_sql is not None
     
     def test_join_inner(self):
         sql = "SELECT u.name, o.amount FROM users u JOIN orders o ON u.id = o.user_id"
         result = transpiler.transpile(sql, "hive", "oracle")
-        assert result.success
+        assert result.success and result.target_sql is not None
         assert "JOIN" in result.target_sql
     
     def test_join_left(self):
         sql = "SELECT u.name, o.amount FROM users u LEFT JOIN orders o ON u.id = o.user_id"
         result = transpiler.transpile(sql, "hive", "oracle")
-        assert result.success
+        assert result.success and result.target_sql is not None
     
     def test_union(self):
         sql = "SELECT id FROM users UNION SELECT id FROM admins"
         result = transpiler.transpile(sql, "hive", "oracle")
-        assert result.success
+        assert result.success and result.target_sql is not None
         assert "UNION" in result.target_sql
     
     def test_cte(self):
@@ -94,7 +95,7 @@ class TestHiveToOracle:
     def test_distinct(self):
         sql = "SELECT DISTINCT category FROM products"
         result = transpiler.transpile(sql, "hive", "oracle")
-        assert result.success
+        assert result.success and result.target_sql is not None
         assert "DISTINCT" in result.target_sql
     
     def test_order_by_multiple(self):
@@ -115,13 +116,13 @@ class TestHiveToOracle:
     def test_between(self):
         sql = "SELECT * FROM orders WHERE amount BETWEEN 100 AND 500"
         result = transpiler.transpile(sql, "hive", "oracle")
-        assert result.success
+        assert result.success and result.target_sql is not None
         assert "BETWEEN" in result.target_sql
     
     def test_like_pattern(self):
         sql = "SELECT * FROM users WHERE name LIKE 'John%'"
         result = transpiler.transpile(sql, "hive", "oracle")
-        assert result.success
+        assert result.success and result.target_sql is not None
         assert "LIKE" in result.target_sql
     
     def test_is_null(self):

@@ -21,30 +21,31 @@ design and is documented as such.
 """
 from __future__ import annotations
 
-from backend.core.rules import RuleCategory, RuleEngine, TransformRule
-from backend.core.post_processor import PostProcessor
-from backend.core.transpiler import SQLTranspiler
+from typing import Any, cast
 
+from backend.core.post_processor import PostProcessor
+from backend.core.rules import RuleCategory, RuleEngine, TransformRule
+from backend.core.transpiler import SQLTranspiler
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 def _make_rule(**overrides):
     """A baseline FOOCALL rule; override any behavior-affecting field."""
-    fields = dict(
-        name="test_foocall",
-        source="postgres",
-        target="mysql",
-        pattern=r"FOOCALL\s*\((\w+)\)",
-        replacement="",
-        note="Converted FOOCALL",
-        category=RuleCategory.FUNCTION,
-        priority=50,
-        enabled=True,
-        function_name="FOOCALL",
-        structured_replacement="CONCAT_A({0})",
-    )
+    fields = {
+        "name": "test_foocall",
+        "source": "postgres",
+        "target": "mysql",
+        "pattern": r"FOOCALL\s*\((\w+)\)",
+        "replacement": "",
+        "note": "Converted FOOCALL",
+        "category": RuleCategory.FUNCTION,
+        "priority": 50,
+        "enabled": True,
+        "function_name": "FOOCALL",
+        "structured_replacement": "CONCAT_A({0})",
+    }
     fields.update(overrides)
-    return TransformRule(**fields)
+    return cast(Any, TransformRule)(**fields)
 
 
 def _make_transpiler(*rules) -> SQLTranspiler:
