@@ -34,7 +34,10 @@ jobs:
           pip install -e ".[dev]" --no-deps
 
       - name: Run full test suite
-        run: pytest --cov=backend --cov-report=term-missing
+        run: pytest --cov=backend --cov-report=term-missing --cov-report=json
+
+      - name: Verify core module coverage
+        run: python scripts/verify_module_coverage.py --coverage-json coverage.json
 
       - name: Run API integration gate
         run: pytest backend/tests/test_audit_remaining_gaps.py -q

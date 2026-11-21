@@ -24,6 +24,14 @@ def valid_function():
     ({"name": "COUNT", "category": "bad", "dialects": {}}, "category"),
     ({"name": "COUNT", "category": "aggregate", "dialects": {"nope": "COUNT(x)"}}, "unsupported dialects"),
     ({**valid_function(), "parameters": [{"name": "x", "type": "x", "required": "yes", "description": "x"}]}, "required.*must be boolean"),
+    (None, r"'functions\[0\]' must be an object"),
+    ({**valid_function(), "description": 42}, "description.*must be strings"),
+    ({**valid_function(), "dialects": []}, "dialects.*must be an object"),
+    ({**valid_function(), "dialects": {"postgres": None}}, "dialects.*values must be strings"),
+    ({**valid_function(), "parameters": {}}, "parameters.*must be a list"),
+    ({**valid_function(), "parameters": [None]}, r"parameters\[0\]'.*must be an object"),
+    ({**valid_function(), "parameters": [{}]}, r"parameters\[0\]\.name.*must be a string"),
+    ({**valid_function(), "examples": {"postgres": 42}}, "examples.*must map strings to strings"),
 ])
 def test_invalid_function_entry_schema(tmp_path, entry, needle):
     path = tmp_path / "functions.json"
@@ -46,6 +54,8 @@ def test_valid_function_entry_loads(tmp_path):
     ({"mappings": {"INTEGER": {"nope": "INT"}}, "precision_warnings": {}}, "unsupported keys"),
     ({"mappings": {"INTEGER": {"postgres": 123}}, "precision_warnings": {}}, "must be a non-empty string"),
     ({"mappings": {"INTEGER": {"postgres": "INT"}}, "precision_warnings": {"INTEGER": 123}}, "precision_warnings must map"),
+    ({"mappings": {" ": {"postgres": "INT"}}}, "mapping keys must be non-empty strings"),
+    ({"mappings": {"INTEGER": {"notes": None}}}, r"mappings\['INTEGER'\]\.notes must be a string"),
 ])
 def test_invalid_type_mapping_entry_schema(tmp_path, payload, needle):
     path = tmp_path / "type_mapping.json"
