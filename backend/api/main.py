@@ -271,28 +271,6 @@ from backend.core.exceptions import ErrorCode, SDMException, UnsupportedDialectE
 ALLOWED_ORIGINS = [origin.strip() for origin in settings.allowed_origins.split(",") if origin.strip()]
 TRUSTED_PROXY_NETWORKS = settings.trusted_proxy_networks
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],  # Restrict to needed methods
-    # Keep preflight explicit so browser clients can send the correlation and
-    # API-key headers used by the React request layer.  Expose operational
-    # response headers as well: without this list browsers silently hide
-    # Retry-After and request timing/correlation metadata from JavaScript even
-    # though the server emits them correctly.
-    allow_headers=["Accept", "Content-Type", "Authorization", "X-API-Key", "X-Request-ID"],
-    expose_headers=[
-        "Retry-After",
-        "X-API-Version",
-        "X-Process-Time",
-        "X-RateLimit-Limit",
-        "X-RateLimit-Remaining",
-        "X-RateLimit-Reset",
-        "X-Request-ID",
-    ],
-)
-
 # Type/function matrices and conversion reports are often much larger than
 # the request itself.  Compress them at the ASGI boundary so browser clients
 # spend less time waiting on the network without changing response schemas.
@@ -354,6 +332,26 @@ async def add_process_time_header(request: Request, call_next):
 # This is the outermost application middleware, so it also observes short
 # circuit responses returned by rate limiting and worker-capacity guards.
 app.add_middleware(MetricsMiddleware)
+
+# Keep CORS outermost so browser clients receive CORS headers on every
+# response, including body-size, validation, rate-limit, and internal errors
+# returned by middleware before an endpoint runs.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Accept", "Content-Type", "Authorization", "X-API-Key", "X-Request-ID"],
+    expose_headers=[
+        "Retry-After",
+        "X-API-Version",
+        "X-Process-Time",
+        "X-RateLimit-Limit",
+        "X-RateLimit-Remaining",
+        "X-RateLimit-Reset",
+        "X-Request-ID",
+    ],
+)
 
 # Dialect info for enhanced responses (from centralized config)
 DIALECT_INFO = get_dialect_api_info()
@@ -1339,7 +1337,10 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     }
     if request_id:
         content["request_id"] = request_id
-    return JSONResponse(status_code=500, content=content)
+    headers = {}
+    if request_id:
+        headers["X-Request-ID"] = request_id
+    return JSONResponse(status_code=500, content=content, headers=headers)
 
 # Run with: uvicorn backend.api.main:app --reload
 if __name__ == "__main__":

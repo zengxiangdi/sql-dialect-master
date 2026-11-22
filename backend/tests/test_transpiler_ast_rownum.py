@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from typing import cast
 
+import pytest
 import sqlglot
 from sqlglot import exp
 
@@ -317,6 +318,47 @@ class TestDoubleRownumBehavior:
         assert not any("(AST)" in note for note in r.transformations)
 
 
+def test_nested_and_preserves_all_remaining_predicates():
+    duckdb = pytest.importorskip("duckdb")
+    result = SQLTranspiler().transpile(
+        "SELECT id FROM items WHERE (ROWNUM <= 5 AND category = 3) AND enabled = 1",
+        "oracle",
+        "postgres",
+    )
+    assert result.success and result.target_sql is not None, result.error
+    assert result.transformations == ["ROWNUM <= 5 converted to LIMIT 5 (AST)"]
+    with duckdb.connect() as connection:
+        connection.execute("CREATE TABLE items(id INTEGER, category INTEGER, enabled INTEGER)")
+        connection.execute("INSERT INTO items VALUES (1, 3, 1), (2, 3, 0), (3, 2, 1)")
+        assert connection.execute(result.target_sql).fetchall() == [(1,)]
+
+
+@pytest.mark.parametrize("sql", [
+    "SELECT id FROM items WHERE NOT (ROWNUM <= 5)",
+    "SELECT id FROM items WHERE ROWNUM <= 5 FETCH FIRST 2 ROWS ONLY",
+    "SELECT id FROM items WHERE ROWNUM <= 5 OFFSET 1 ROWS",
+    "SELECT COUNT(*) FROM items WHERE ROWNUM <= 5",
+    "SELECT ROW_NUMBER() OVER (ORDER BY id) FROM items WHERE ROWNUM <= 5",
+    "SELECT ROWNUM, id FROM items WHERE ROWNUM <= 5",
+    "SELECT id FROM items WHERE ROWNUM <= 5 AND ROWNUM > 0",
+    "SELECT id FROM items WHERE EXISTS (SELECT 1 FROM other_items WHERE ROWNUM <= 5) AND enabled = 1",
+])
+def test_unsupported_rownum_preserves_structure_and_warns(sql: str):
+    result = SQLTranspiler().transpile(sql, "oracle", "postgres", pretty=False)
+    assert result.success and result.target_sql is not None, result.error
+    assert not any("ROWNUM" in note for note in result.transformations)
+    assert "Oracle ROWNUM requires manual conversion for this query shape." in result.warnings
+    assert result.target_sql == sqlglot.transpile(sql, read="oracle", write="postgres", pretty=False)[0]
+
+
+def test_quoted_rownum_identifier_is_not_the_oracle_pseudocolumn():
+    result = SQLTranspiler().transpile(
+        'SELECT id FROM items WHERE "ROWNUM" <= 5', "oracle", "postgres", pretty=False,
+    )
+    assert result.success and result.target_sql is not None, result.error
+    assert result.target_sql == 'SELECT id FROM items WHERE "ROWNUM" <= 5'
+    assert not any("ROWNUM" in warning for warning in result.warnings)
+
+
 if __name__ == "__main__":
-    import pytest
     pytest.main([__file__, "-v"])

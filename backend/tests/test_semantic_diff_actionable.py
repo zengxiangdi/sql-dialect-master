@@ -37,6 +37,27 @@ def test_textually_different_but_structurally_equivalent_sql_is_equivalent():
 
 
 @pytest.mark.parametrize(
+    ("source", "target", "category"),
+    [
+        ("SELECT (1 + 2) * 3", "SELECT 1 + 2 * 3", "projection"),
+        ("SELECT 1 - (2 - 3)", "SELECT 1 - 2 - 3", "projection"),
+        (
+            "SELECT id FROM users WHERE ((age + 2) * 3 > 20)",
+            "SELECT id FROM users WHERE age + 2 * 3 > 20",
+            "predicate",
+        ),
+    ],
+)
+def test_semantic_diff_preserves_arithmetic_grouping(source: str, target: str, category: str) -> None:
+    result = diff_sql_ast(source, target, source_dialect="postgres", target_dialect="postgres")
+
+    assert result.status == "different"
+    assert result.equivalent is False
+    difference = next(item for item in result.structured_differences if item.category == category)
+    assert difference.source_fragment != difference.target_fragment
+
+
+@pytest.mark.parametrize(
     "source, target, expected_status, category",
     [
         (

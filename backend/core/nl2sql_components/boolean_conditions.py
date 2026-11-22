@@ -28,6 +28,19 @@ _COMPARISON_PATTERNS = (
     ),
 )
 
+_GENERIC_COMPARISON_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_$])([A-Za-z_][A-Za-z0-9_$]*)\s*"
+    r"(>=|<=|!=|<>|=|>|<)\s*(-?[0-9]+(?:\.[0-9]+)?)",
+    re.IGNORECASE,
+)
+
+_QUOTED_COMPARISON_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_$])([A-Za-z_][A-Za-z0-9_$]*)\s*"
+    r"(is\s+not|isn't|not|is|<>|!=|>=|<=|=|>|<)\s*"
+    r"(?:'((?:''|[^'])*)'|\"((?:\"\"|[^\"])*)\")",
+    re.IGNORECASE,
+)
+
 _RANGE_PATTERN = re.compile(
     r"(?<![A-Za-z0-9_])(price|quantity|amount|age|score|rating|views|clicks)\s+"
     r"(?:between\s+(-?[0-9]+(?:\.[0-9]+)?)\s+and\s+(-?[0-9]+(?:\.[0-9]+)?)|"
@@ -193,11 +206,33 @@ def _comparison_matches(text: str) -> list[tuple[int, int, str]]:
     matches: list[tuple[int, int, str]] = []
     executable = mask_nl2sql_non_executable(text)
 
+    for match in _QUOTED_COMPARISON_PATTERN.finditer(text):
+        raw = match.group(0)
+        quote = "'" if match.group(3) is not None else '"'
+        quote_offset = raw.find(quote)
+        quote_start = match.start() + quote_offset
+        if executable[match.start():quote_start] != text[match.start():quote_start]:
+            continue
+        value = match.group(3) if match.group(3) is not None else match.group(4)
+        if value is None:
+            continue
+        if quote == "'":
+            value = value.replace("''", "'")
+        else:
+            value = value.replace('""', '"')
+        literal = "'" + value.replace("'", "''") + "'"
+        column, operator = match.group(1), _normalize_operator(match.group(2))
+        matches.append((match.start(), match.end(), f"{column} {operator} {literal}"))
+
     for pattern in _COMPARISON_PATTERNS:
         for match in pattern.finditer(executable):
             first, raw_operator, value = match.groups()
             column = _CN_COLUMNS.get(first, first)
             matches.append((match.start(), match.end(), f"{column} {_normalize_operator(raw_operator)} {value}"))
+
+    for match in _GENERIC_COMPARISON_PATTERN.finditer(executable):
+        column, operator, value = match.groups()
+        matches.append((match.start(), match.end(), f"{column} {operator} {value}"))
 
     for pattern in (_RANGE_PATTERN, _CN_RANGE_PATTERN):
         for match in pattern.finditer(executable):
@@ -213,6 +248,8 @@ def _comparison_matches(text: str) -> list[tuple[int, int, str]]:
     for pattern in (_TEXT_PATTERN, _CN_TEXT_PATTERN):
         for match in pattern.finditer(text):
             first, value = match.groups()
+            if re.search(r"\s+(?:and|or)\b|[()]", value, re.IGNORECASE):
+                continue
             column = _CN_COLUMNS.get(first, first)
             matches.append((match.start(), match.end(), _text_sql(column, value)))
 
@@ -253,7 +290,11 @@ def _comparison_matches(text: str) -> list[tuple[int, int, str]]:
             operator = "NOT IN" if operator_text == "不在" else "IN"
             matches.append((match.start(), value_end, f"{_CN_SET_COLUMNS[column]} {operator} ({values})"))
 
-    matches.extend(_status_matches(text))
+    occupied = [(start, end) for start, end, _ in matches]
+    matches.extend(
+        match for match in _status_matches(text)
+        if not any(start <= match[0] < end or match[0] <= start < match[1] for start, end in occupied)
+    )
 
     matches.sort(key=lambda item: (item[0], item[1]))
     deduped: list[tuple[int, int, str]] = []
@@ -350,18 +391,19 @@ def extract_boolean_conditions(text: str) -> list[str] | None:
     if len(matches) < 2:
         return None
 
+    executable = mask_nl2sql_non_executable(text)
     tokens: list[str] = []
-    prefix = text[: matches[0][0]]
+    prefix = executable[: matches[0][0]]
     tokens.extend(char for char in prefix if char in "()")
 
     for index, current in enumerate(matches):
         tokens.append(f"({current[2]})")
         if index == len(matches) - 1:
-            suffix = text[current[1] :]
+            suffix = executable[current[1] :]
             tokens.extend(char for char in suffix if char in "()")
             continue
 
-        separator = text[current[1] : matches[index + 1][0]]
+        separator = executable[current[1] : matches[index + 1][0]]
         events = []
         for paren in re.finditer(r"[()]", separator):
             events.append((paren.start(), paren.group(0)))

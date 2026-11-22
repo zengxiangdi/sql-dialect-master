@@ -1,6 +1,8 @@
 """P0 regression coverage for deterministic predicate safety."""
 
+import sqlite3
 import time
+from contextlib import closing
 
 import pytest
 import sqlglot
@@ -19,6 +21,7 @@ SCHEMA = SchemaContext.from_mapping(
                     {"name": "id"},
                     {"name": "status"},
                     {"name": "price"},
+                    {"name": "age"},
                     {"name": "amount"},
                     {"name": "created_at"},
                     {"name": "description"},
@@ -125,6 +128,78 @@ def test_status_negation_and_numeric_condition_compose(schema):
     assert result.success
     assert "status != 'active'" in result.sql
     assert "price > 10" in result.sql
+
+
+@pytest.mark.parametrize("schema", [False, True])
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        (
+            "show users id where status = 'Open' or age >= 18",
+            "(status = 'Open') OR (age >= 18)",
+        ),
+        (
+            "show users id where status = 'Open' or status = 'Closed'",
+            "(status = 'Open') OR (status = 'Closed')",
+        ),
+        (
+            "show users id where status = 'Open' /* or */ and age >= 18",
+            "(status = 'Open') AND (age >= 18)",
+        ),
+    ],
+)
+def test_mixed_quoted_and_numeric_predicates_preserve_connectors(
+    text, expected, schema
+):
+    result = generate(text, schema=schema)
+    assert result.success, result.explanation
+    assert expected.lower() in result.sql.lower()
+
+
+def test_quoted_parentheses_and_connectors_do_not_change_boolean_shape():
+    result = generate(
+        "show users id where status = 'A and (B or C)' or age >= 18",
+        schema=True,
+    )
+    assert result.success, result.explanation
+    assert "(status = 'a and (b or c)') or (age >= 18)" in result.sql.lower()
+
+
+@pytest.mark.parametrize("schema", [False, True])
+@pytest.mark.parametrize(
+    ("predicate", "expected_ids"),
+    [
+        ("status = 'Open' or price >= 18", [1, 2, 4]),
+        ("price >= 18 and status = 'Open'", [4]),
+        ("status = 'Open' or status = 'Closed'", [1, 2, 3, 4]),
+        ("(status = 'Open' or price >= 18) and id = 2", [2]),
+        ("status = 'Open' or id = 2", [1, 2, 4]),
+        ("status = 'A and (B or C)' or price >= 18", [2, 4, 5]),
+        ("status = 'Open' /* and ( */ or price >= 18 -- or )", [1, 2, 4]),
+        ("price >= 18 /* or */ and amount >= 20", [4]),
+    ],
+)
+def test_where_preserves_literal_case_columns_and_boolean_logic(
+    predicate: str, expected_ids: list[int], schema: bool,
+) -> None:
+    result = NL2SQLGenerator().generate(
+        f"show users id where {predicate}",
+        "postgres",
+        column_hints=["id"],
+        schema=SCHEMA if schema else None,
+    )
+    assert result.success and result.sql is not None, result.explanation
+
+    with closing(sqlite3.connect(":memory:")) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE users (id INTEGER, status TEXT, price INTEGER, amount INTEGER);
+            INSERT INTO users VALUES (1, 'Open', 1, 10), (2, 'Closed', 20, 10),
+                                     (3, 'Closed', 5, 30), (4, 'Open', 18, 20),
+                                     (5, 'A and (B or C)', 2, 20), (6, 'open', 1, 20);
+            """
+        )
+        assert sorted(record[0] for record in connection.execute(result.sql)) == expected_ids
 
 
 @pytest.mark.parametrize("text,expected", [

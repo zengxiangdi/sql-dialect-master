@@ -21,6 +21,7 @@ from ..nl2sql_components.evidence import (
     EvidenceItem,
     GenerationEvidence,
 )
+from ..p1_sql_scanner import executable_segments
 from .dialect import apply_dialect_adjustments
 from .ir import (
     AggregateOrderingTerm,
@@ -100,6 +101,18 @@ def _render_plan_failure(reason: str) -> tuple[None, str, float, GenerationEvide
     return None, f"Derived distinct count plan rejected: {reason}", 0.0, GenerationEvidence()
 
 
+def _indent_derived_sql(sql: str, dialect: str) -> str:
+    """Indent a derived query while preserving the contents of multiline values."""
+    parts = ["    "]
+    cursor = 0
+    for start, end in executable_segments(sql, dialect=dialect):
+        parts.append(sql[cursor:start])
+        parts.append(sql[start:end].replace("\n", "\n    "))
+        cursor = end
+    parts.append(sql[cursor:])
+    return "".join(parts)
+
+
 def _render_aggregate_orderings(
     terms: tuple[AggregateOrderingTerm, ...], group_by: list[str], count_expression: str,
 ) -> tuple[str, str | None]:
@@ -169,9 +182,7 @@ def _render_distinct_count_plan(
     )
     if inner_conditions:
         inner_sql += "\nWHERE " + " AND ".join(inner_conditions)
-    indented_inner = "\n".join(
-        f"    {line}" for line in inner_sql.splitlines()
-    )
+    indented_inner = _indent_derived_sql(inner_sql, ir.dialect)
 
     select_clause = (
         ", ".join([*ir.group_by, "COUNT(*) AS count"])
@@ -279,12 +290,19 @@ def _render_distinct_count_plan(
     return sql, " | ".join(explanation_parts), evidence.score, evidence
 
 
-def _qualify_subject_condition(condition: str, subject_table: str) -> str:
-    """Qualify simple whose predicates against the outer subject table."""
+def _qualify_subject_condition(condition: str, subject_table: str, dialect: str) -> str:
+    """Qualify unqualified comparison columns in executable SQL."""
     pattern = re.compile(
         r"(?<![\w$.])([A-Za-z_][A-Za-z0-9_$]*)(?=\s*(?:=|!=|<>|>=|<=|>|<))"
     )
-    return pattern.sub(lambda match: f"{subject_table}.{match.group(1)}", condition)
+    parts = []
+    cursor = 0
+    for start, end in executable_segments(condition, dialect=dialect):
+        parts.append(condition[cursor:start])
+        parts.append(pattern.sub(lambda match: f"{subject_table}.{match.group(1)}", condition[start:end]))
+        cursor = end
+    parts.append(condition[cursor:])
+    return "".join(parts)
 
 
 def _render_path_conditions(
@@ -390,7 +408,7 @@ def _render_zero_path_distinct_count_plan(
         else [ir.conditions]
     )
     subject_conditions = [
-        _qualify_subject_condition(condition, plan.subject_table)
+        _qualify_subject_condition(condition, plan.subject_table, ir.dialect)
         for condition in raw_conditions
         if condition.strip()
     ]
@@ -442,9 +460,7 @@ def _render_zero_path_distinct_count_plan(
 
     count_sql = (
         f"SELECT {', '.join(group_aliases)}, COUNT(*) AS count\n"
-        f"FROM (\n"
-        + "\n".join(f"    {line}" for line in pair_sql.splitlines())
-        + "\n) AS _distinct_targets\n"
+        f"FROM (\n{_indent_derived_sql(pair_sql, ir.dialect)}\n) AS _distinct_targets\n"
         f"GROUP BY {', '.join(group_aliases)}"
     )
     join_conditions = " AND ".join(
@@ -460,12 +476,8 @@ def _render_zero_path_distinct_count_plan(
         return _render_plan_failure(ordering_error)
     sql = (
         f"SELECT {select_groups}, COALESCE(c.count, 0) AS count\n"
-        f"FROM (\n"
-        + "\n".join(f"    {line}" for line in baseline_sql.splitlines())
-        + "\n) AS b\n"
-        "LEFT JOIN (\n"
-        + "\n".join(f"    {line}" for line in count_sql.splitlines())
-        + f"\n) AS c ON {join_conditions}"
+        f"FROM (\n{_indent_derived_sql(baseline_sql, ir.dialect)}\n) AS b\n"
+        f"LEFT JOIN (\n{_indent_derived_sql(count_sql, ir.dialect)}\n) AS c ON {join_conditions}"
     )
     if ordering_sql:
         sql += f"\nORDER BY {ordering_sql}"
@@ -595,9 +607,9 @@ def _render_path_distinct_count_plan(
 
     conditions = ir.conditions
     inner_conditions = (
-        [_qualify_subject_condition(condition, plan.subject_table) for condition in conditions if condition.strip()]
+        [_qualify_subject_condition(condition, plan.subject_table, ir.dialect) for condition in conditions if condition.strip()]
         if isinstance(conditions, list)
-        else ([_qualify_subject_condition(conditions, plan.subject_table)] if conditions.strip() else [])
+        else ([_qualify_subject_condition(conditions, plan.subject_table, ir.dialect)] if conditions.strip() else [])
     )
     inner_conditions.extend(rendered_path_conditions)
     if plan.exclude_null_identity:
@@ -611,7 +623,7 @@ def _render_path_distinct_count_plan(
         )
     if inner_conditions:
         inner_sql += "\nWHERE " + " AND ".join(inner_conditions)
-    indented_inner = "\n".join(f"    {line}" for line in inner_sql.splitlines())
+    indented_inner = _indent_derived_sql(inner_sql, ir.dialect)
 
     group_aliases = [f"_group_{index}" for index in range(len(plan.group_identity))]
     select_clause = ", ".join([*group_aliases, "COUNT(*) AS count"])
@@ -795,7 +807,7 @@ def render_sql(ir: QueryIR) -> tuple[str | None, str, float, GenerationEvidence]
                         indent += "    "
                 else:
                     subquery = f"SELECT 1\n    FROM {join['table']}\n    WHERE {join['condition']}"
-                # Merge date conditions into subquery if present
+                # Legacy relational and date conditions apply inside the subquery.
                 if conditions:
                     cond_sql = conditions if isinstance(conditions, str) else " AND ".join(conditions)
                     subquery += f"\n    AND {cond_sql}"
@@ -830,6 +842,9 @@ def render_sql(ir: QueryIR) -> tuple[str | None, str, float, GenerationEvidence]
                 ))
         # If relational EXISTS clauses already opened a WHERE, any remaining
         # top-level conditions attach with AND instead of a second WHERE.
+        if ir.subject_conditions:
+            outer_conditions = [conditions] if isinstance(conditions, str) else conditions
+            conditions = [*outer_conditions, *ir.subject_conditions]
         if conditions:
             condition_sql = conditions if isinstance(conditions, str) else " AND ".join(conditions)
             if relational_where_open:

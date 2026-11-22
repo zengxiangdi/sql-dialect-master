@@ -4,6 +4,7 @@ import sqlite3
 
 import pytest
 import sqlglot
+from sqlglot import exp
 
 from backend.core.nl2sql import NL2SQLGenerator
 from backend.core.nl2sql_schema import SchemaContext
@@ -104,6 +105,18 @@ def test_group_column_overlapping_identity_is_projected_once():
     assert result.sql.count("tenant_id") == 4
     assert "SELECT DISTINCT tenant_id, id" in result.sql
     assert "GROUP BY tenant_id" in result.sql
+
+
+def test_composite_count_preserves_multiline_literal() -> None:
+    value = "ready\nfor shipment"
+    result = generate(
+        f"count distinct orders whose status is '{value}'",
+        schema(primary_key=["tenant_id", "id"]),
+    )
+
+    assert result.success and result.sql is not None, result.explanation
+    tree = sqlglot.parse_one(result.sql, read="postgres")
+    assert [literal.this for literal in tree.find_all(exp.Literal) if literal.is_string] == [value]
 
 
 def test_outer_ordering_and_limit():

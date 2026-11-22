@@ -96,7 +96,7 @@ def extract_conditions(
     """
     # Use the structured boolean extractor first — it correctly handles
     # multiple predicates connected by AND/OR while preserving precedence.
-    boolean_conditions = extract_boolean_conditions(text)
+    boolean_conditions = extract_boolean_conditions(original)
     if boolean_conditions:
         return boolean_conditions
 

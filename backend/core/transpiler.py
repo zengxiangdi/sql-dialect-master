@@ -741,15 +741,20 @@ class SQLTranspiler:
             semantic_blockers: list[str] = []
             if source == "clickhouse" and target == "postgres":
                 ast = cast(exp.Expression, sqlglot.parse_one(sql, read="clickhouse"))
+                ast, arrayjoin_notes, arrayjoin_blockers = self._ast_clickhouse_array_join_to_unnest(ast)
                 ast, group_notes = self._ast_grouparray_to_arrayagg(ast, target)
                 ast_notes.extend(group_notes)
-                ast, arrayjoin_notes = self._ast_clickhouse_array_join_to_unnest(ast, target)
                 ast_notes.extend(arrayjoin_notes)
+                semantic_blockers.extend(arrayjoin_blockers)
                 transpiled = ast.sql(dialect="postgres", pretty=pretty)
             elif source == "oracle" and target in ("postgres", "mysql", "hive", "spark"):
                 ast = cast(exp.Expression, sqlglot.parse_one(sql, read="oracle"))
                 ast, rownum_notes = self._ast_rownum_to_limit(ast, target)
                 ast_notes.extend(rownum_notes)
+                if not rownum_notes and self._oracle_rownum_columns(ast):
+                    security_warnings.append(
+                        "Oracle ROWNUM requires manual conversion for this query shape."
+                    )
                 transpiled = ast.sql(dialect=target, pretty=pretty)
             elif source == "duckdb" and target in ("hive", "spark"):
                 ast = cast(exp.Expression, sqlglot.parse_one(sql, read="duckdb"))
@@ -1028,61 +1033,62 @@ class SQLTranspiler:
             return False
 
     def _ast_rownum_to_limit(self, ast: exp.Expression, target: str) -> tuple[exp.Expression, list[str]]:
-        """AST-first ROWNUM -> LIMIT migration (G6-A1).
-
-        Operates purely on the parsed AST (no string scanning). Migrates the
-        legacy safe ROWNUM -> LIMIT semantics: for a single-SELECT Oracle
-        statement with exactly one qualifying ``ROWNUM <= N`` predicate
-        (bare integer literal N) as the LHS of a comparison, and no ORDER BY /
-        GROUP BY / HAVING / DISTINCT / OR / set operations, remove that
-        predicate from WHERE (keeping any AND-companions) and set LIMIT to N.
-        Returns ``(ast, notes)`` where ``notes`` is empty unless the
-        transformation fired.
-        """
-        # Only single-SELECT shapes are in scope; set operations are out.
+        """Move an outer WHERE ROWNUM bound to LIMIT for row-preserving SELECTs."""
         if not isinstance(ast, exp.Select):
             return ast, []
-
-        # Conservative guards: any of these present means we must skip.
-        if ast.args.get("order") or ast.args.get("group") or ast.args.get("having"):
+        if any(ast.args.get(key) is not None for key in (
+            "order", "group", "having", "distinct", "limit", "offset",
+            "connect", "qualify", "windows",
+        )):
             return ast, []
-        if ast.args.get("distinct"):
+        if any(projection.find(exp.AggFunc, exp.Window, exp.Explode) is not None for projection in ast.expressions):
             return ast, []
 
         where = ast.args.get("where")
-        if where is None:
+        if not isinstance(where, exp.Where):
             return ast, []
-        where = where.this
-
-        # OR anywhere in the WHERE subtree is out of scope.
-        if any(isinstance(node, exp.Or) for node in where.walk()):
+        rownum_columns = self._oracle_rownum_columns(ast)
+        if len(rownum_columns) != 1:
             return ast, []
 
-        # Collect every qualifying predicate: LHS is the ROWNUM column,
-        # operator is <=, RHS is a bare integer literal.
-        qualifying = []
-        for node in where.walk():
-            if not isinstance(node, exp.LTE):
-                continue
-            lhs = node.this
-            rhs = node.expression
-            if not isinstance(lhs, exp.Column) or lhs.name.upper() != "ROWNUM":
-                continue
-            if not isinstance(rhs, exp.Literal) or rhs.is_string or rhs.is_int is False:
-                continue
-            qualifying.append((node, rhs))
-
-        # Exactly one qualifying predicate is required.
-        if len(qualifying) != 1:
+        rownum = rownum_columns[0]
+        predicate = rownum.parent
+        if rownum.table or not isinstance(predicate, exp.LTE) or predicate.this is not rownum:
             return ast, []
-        pred, bound = qualifying[0]
+        bound = predicate.expression
+        if not isinstance(bound, exp.Literal) or not bound.is_int:
+            return ast, []
 
-        # Detach the predicate from the WHERE tree, keeping AND-companions.
-        # ``limit`` returns a new expression; capture the result explicitly.
-        self._remove_predicate_from_where(ast, where, pred)
+        # Check ancestry before touching the tree. A predicate in an OR, NOT,
+        # function, or subquery cannot bound the outer SELECT.
+        branch: exp.Expr = predicate
+        while isinstance(branch.parent, (exp.And, exp.Paren)):
+            branch = branch.parent
+        if branch.parent is not where or where.find(exp.Or) is not None:
+            return ast, []
+
+        # Remove the predicate and its immediate conjunction, preserving
+        # enclosing conjunctions and the grouping of every remaining filter.
+        branch = predicate
+        while isinstance(branch.parent, exp.Paren):
+            branch = branch.parent
+        conjunction = branch.parent
+        if isinstance(conjunction, exp.And):
+            companion = conjunction.expression if conjunction.this is branch else conjunction.this
+            conjunction.replace(companion)
+        else:
+            ast.set("where", None)
+
         ast = ast.limit(bound)
         note = f"ROWNUM <= {bound.this} converted to LIMIT {bound.this} (AST)"
         return ast, [note]
+
+    @staticmethod
+    def _oracle_rownum_columns(ast: exp.Expression) -> list[exp.Column]:
+        return [
+            column for column in ast.find_all(exp.Column)
+            if column.name.upper() == "ROWNUM" and isinstance(column.this, exp.Identifier) and not column.this.quoted
+        ]
 
     def _ast_grouparray_to_arrayagg(self, ast: exp.Expression, target: str) -> tuple[exp.Expression, list[str]]:
         """AST-first groupArray → ARRAY_AGG migration (clickhouse → postgres, G6-R2).
@@ -1114,56 +1120,91 @@ class SQLTranspiler:
             return ast, ["Converted groupArray to ARRAY_AGG"]
         return ast, []
 
-    def _ast_clickhouse_array_join_to_unnest(self, ast: exp.Expression, target: str) -> tuple[exp.Expression, list[str]]:
-        """AST-first ClickHouse ARRAY JOIN → UNNEST migration (clickhouse → postgres, P5).
+    def _ast_clickhouse_array_join_to_unnest(
+        self, ast: exp.Expression,
+    ) -> tuple[exp.Expression, list[str], list[str]]:
+        """Expand one INNER ARRAY JOIN column in a single-table SELECT."""
+        unsupported = "ClickHouse ARRAY JOIN requires manual conversion for this query shape."
+        array_joins = [join for join in ast.find_all(exp.Join) if "ARRAY" in (join.kind, join.side)]
+        if not array_joins:
+            return ast, [], []
+        if not isinstance(ast, exp.Select) or len(array_joins) != 1:
+            return ast, [], [unsupported]
 
-        ClickHouse's ``ARRAY JOIN`` is a collection-join construct with no
-        Postgres equivalent; ``sqlglot.transpile`` passes it through
-        verbatim, leaving output that the target dialect cannot execute.
-        This transform rewrites every ``exp.Join`` with ``kind == "ARRAY"``
-        into a ``CROSS JOIN UNNEST(<collection>) AS <alias>(value)``:
+        join = array_joins[0]
+        from_clause = ast.args.get("from_")
+        table = from_clause.this if isinstance(from_clause, exp.From) else None
+        if (
+            not isinstance(table, exp.Table)
+            or not isinstance(table.this, exp.Identifier)
+            or table.args.get("sample")
+            or join.parent is not ast
+            or len(ast.args.get("joins", [])) != 1
+            or join.kind != "ARRAY"
+            or join.side
+            or join.expressions
+            or any(select is not ast for select in ast.find_all(exp.Select))
+            or ast.args.get("settings")
+            or ast.args.get("prewhere")
+            or (ast.args.get("limit") and ast.args["limit"].expressions)
+            or ast.find(exp.Explode) is not None
+            or any(projection.is_star for projection in ast.expressions)
+        ):
+            return ast, [], [unsupported]
 
-        - bare form (``ARRAY JOIN arr``)         → ``CROSS JOIN UNNEST(arr) AS t(value)``
-        - explicit alias (``ARRAY JOIN arr AS x``) → ``CROSS JOIN UNNEST(arr) AS x(value)``
-        - qualified column (``o.tags``)          → alias preserved, column kept qualified
+        array = join.this
+        explicit_alias = array.args.get("alias") if isinstance(array, exp.Alias) else None
+        column = array.this if explicit_alias is not None else array
+        if (
+            not isinstance(column, exp.Column)
+            or not isinstance(column.this, exp.Identifier)
+            or (column.table and column.table != table.alias_or_name)
+            or column.db
+            or column.catalog
+        ):
+            return ast, [], [unsupported]
 
-        The rewritten ``CROSS JOIN UNNEST(...)`` output is Postgres-valid
-        and carries the same per-element expansion semantics.
-        """
-        found = False
+        # ClickHouse binds an unaliased array name to its elements. An
+        # explicit alias gives the elements a separate name.
+        binding = explicit_alias if isinstance(explicit_alias, exp.Identifier) else column.this
+        if any(projection.alias == binding.name for projection in ast.expressions):
+            return ast, [], [unsupported]
 
-        def _build_unnest_join(join_node: exp.Join) -> exp.Join:
-            node = join_node.this
-            if isinstance(node, exp.Alias):
-                user_alias = node.alias
-                col = node.this
+        # PostgreSQL folds unquoted names to lowercase, so avoid generating
+        # a table alias that collides after case folding.
+        columns = list(ast.find_all(exp.Column))
+        aliases_in_use = {table.alias_or_name.casefold()}
+        aliases_in_use.update(reference.table.casefold() for reference in columns)
+        aliases_in_use.update(reference.name.casefold() for reference in columns)
+        unnest_alias = "_sdm_array"
+        while unnest_alias in aliases_in_use or f"{unnest_alias}_item" in aliases_in_use:
+            unnest_alias += "_"
+        element_name = f"{unnest_alias}_item"
+        if explicit_alias is None and any(
+            reference.name == binding.name and (reference.db or reference.catalog)
+            for reference in columns
+        ):
+            return ast, [], [unsupported]
+        for reference in columns:
+            if (
+                reference is column
+                or reference.name != binding.name
+                or reference.db
+                or reference.catalog
+                or (reference.table and (explicit_alias is not None or reference.table != table.alias_or_name))
+            ):
+                continue
+            element = exp.column(element_name, table=unnest_alias)
+            if reference.parent is ast and reference.arg_key == "expressions":
+                reference.replace(exp.Alias(this=element, alias=binding.copy()))
             else:
-                user_alias = None
-                col = node
-            alias = (
-                exp.TableAlias(
-                    this=exp.Identifier(this=user_alias),
-                    columns=[exp.Identifier(this="value")],
-                )
-                if user_alias
-                else exp.TableAlias(
-                    this=exp.Identifier(this="t"),
-                    columns=[exp.Identifier(this="value")],
-                )
-            )
-            return exp.Join(kind="CROSS", this=exp.Unnest(expressions=[col], alias=alias, offset=False))
+                reference.replace(element)
 
-        def _transform(node):
-            nonlocal found
-            if isinstance(node, exp.Join) and node.kind == "ARRAY":
-                found = True
-                return _build_unnest_join(node)
-            return node
-
-        ast = ast.transform(_transform)
-        if found:
-            return ast, ["Converted ARRAY JOIN to CROSS JOIN UNNEST"]
-        return ast, []
+        alias = exp.TableAlias(
+            this=exp.to_identifier(unnest_alias), columns=[exp.to_identifier(element_name)],
+        )
+        join.replace(exp.Join(kind="CROSS", this=exp.Unnest(expressions=[column.copy()], alias=alias)))
+        return ast, ["Converted ARRAY JOIN to CROSS JOIN UNNEST"], []
 
     def _ast_duckdb_list_to_array(self, ast: exp.Expression, target: str) -> tuple[exp.Expression, list[str]]:
         """AST-first DuckDB LIST datatype → ARRAY migration (duckdb → hive/spark, G6-L).
@@ -1424,6 +1465,16 @@ class SQLTranspiler:
                 return replacement
             if isinstance(node, exp.Concat):
                 values = [value.copy() for value in node.expressions]
+                if target in {"postgres", "duckdb"} and values:
+                    # MySQL propagates NULL through CONCAT. These targets'
+                    # CONCAT skips NULL, while their concatenation operator
+                    # propagates it. Cast each operand once for mixed types.
+                    first, *rest = values
+                    concatenated: exp.Expression = exp.cast(first, "TEXT")
+                    for value in rest:
+                        concatenated = exp.DPipe(this=concatenated, expression=exp.cast(value, "TEXT"))
+                    notes.append(f"Preserved MySQL CONCAT NULL propagation for {target}")
+                    return concatenated
                 if target == "tsql":
                     notes.append("Preserved CONCAT for T-SQL to avoid numeric-plus-string coercion")
                     return exp.Anonymous(this="CONCAT", expressions=values)
@@ -1435,12 +1486,8 @@ class SQLTranspiler:
                     return result
                 if target not in {"mysql", "oracle"}:
                     # Several generators serialize CONCAT as ``||``. That
-                    # is unsafe when one operand is numeric (for example an
-                    # NTILE score) and another is text: PostgreSQL and
-                    # DuckDB reject integer || text, while other engines
-                    # can coerce it inconsistently. Keep the variadic
-                    # function so each target applies its documented string
-                    # conversion rules.
+                    # can coerce mixed numeric and string operands differently.
+                    # Keep the variadic function for these targets.
                     notes.append(f"Preserved variadic CONCAT for {target} string coercion")
                     return exp.Anonymous(this="CONCAT", expressions=values)
             if target == "snowflake" and isinstance(node, exp.TimeToStr):
@@ -1499,23 +1546,6 @@ class SQLTranspiler:
         # duplicating a blocker in the public error contract.
         blockers = list(dict.fromkeys(blockers))
         return ast, notes, blockers
-
-    @staticmethod
-    def _remove_predicate_from_where(
-        ast: exp.Expression, where: exp.Expression, pred: exp.Expression
-    ) -> None:
-        """Remove ``pred`` from the WHERE clause of ``ast``.
-
-        If ``pred`` is the whole WHERE, drop the WHERE entirely. If it is one
-        branch of a top-level ``And``, keep the other branch.
-        """
-        parent = pred.parent
-        if parent is not None and isinstance(parent, exp.And):
-            companion = parent.expression if parent.this is pred else parent.this
-            where.replace(companion)
-        else:
-            # pred is the entire WHERE expression.
-            ast.set("where", None)
 
     def _rule_cache_state(self):
         """Return a mutation-sensitive structural signature for the current rules.

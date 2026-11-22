@@ -50,16 +50,14 @@ def _replace_bind_parameters(sql: str, dialect: str) -> str:
 def validate_sql(sql: str, dialect: str) -> float:
     """Validate generated SQL syntax and return confidence adjustment.
 
-    Strips comment lines, parses the executable payload with the target
+    Strips leading line comments, parses the payload with the target
     dialect's sqlglot reader, and returns:
         +0.15  parser accepted
         -0.2   parser rejected
          0.0   nothing to validate (empty after stripping comments)
     """
     try:
-        sql_to_validate = "\n".join(
-            line for line in sql.split("\n") if not line.strip().startswith("--")
-        )
+        sql_to_validate = re.sub(r"\A(?:[ \t]*--[^\n]*(?:\n|$)|[ \t\r]*\n)*", "", sql)
         if sql_to_validate.strip():
             try:
                 parse_single_sql(sql_to_validate, dialect)

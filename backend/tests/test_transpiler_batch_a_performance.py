@@ -126,8 +126,8 @@ def test_mysql_ast_normalizations_keep_target_sql_and_notes(monkeypatch):
         (
             "SELECT CONCAT(first_name, last_name) AS x FROM t",
             "postgres",
-            "SELECT CONCAT(first_name, last_name) AS x FROM t",
-            ["Preserved variadic CONCAT for postgres string coercion"],
+            "SELECT CAST(first_name AS TEXT) || CAST(last_name AS TEXT) AS x FROM t",
+            ["Preserved MySQL CONCAT NULL propagation for postgres"],
         ),
         (
             "SELECT a, SUM(b) FROM t GROUP BY a WITH ROLLUP",

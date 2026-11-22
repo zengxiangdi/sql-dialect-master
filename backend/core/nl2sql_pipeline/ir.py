@@ -96,6 +96,8 @@ class QueryIR:
     distinct_count_plan: DistinctCountPlan | None = None
     path_distinct_count_plan: PathDistinctCountPlan | None = None
     aggregate_orderings: tuple[AggregateOrderingTerm, ...] | None = None
+    # Subject-owned predicates in relational queries are evaluated outside EXISTS.
+    subject_conditions: list[str] = field(default_factory=list)
 
 
 def build_ir(
@@ -114,6 +116,7 @@ def build_ir(
     distinct_count_plan: DistinctCountPlan | None = None,
     path_distinct_count_plan: PathDistinctCountPlan | None = None,
     aggregate_orderings: tuple[AggregateOrderingTerm, ...] | None = None,
+    subject_conditions: list[str] | None = None,
 ) -> QueryIR:
     """Thin positional-arg adapter mirroring the legacy call site.
 
@@ -136,4 +139,5 @@ def build_ir(
         distinct_count_plan=distinct_count_plan,
         path_distinct_count_plan=path_distinct_count_plan,
         aggregate_orderings=aggregate_orderings,
+        subject_conditions=subject_conditions if subject_conditions is not None else [],
     )

@@ -130,6 +130,17 @@ class TestDuckDBExistsValues:
 
 
 class TestDuckDBTranspiledRuntimeEquivalence:
+    def test_mysql_concat_preserves_null_and_number_coercion(self, conn, transpiler):
+        source_sql = "SELECT CONCAT(name, ':', id) FROM employees ORDER BY id"
+        result = transpiler.transpile(source_sql, "mysql", "duckdb", pretty=False)
+
+        assert result.success, result.error
+        assert result.target_sql is not None
+        assert conn.execute(result.target_sql).fetchall() == [
+            ("Alice:1",), ("Bob:2",), ("Carol:3",), ("Dave:4",),
+            ("Eve:5",), ("Frank:6",), (None,),
+        ]
+
     """Transpile source→duckdb and execute BOTH sides on DuckDB
     (Tier A when duckdb is the target; Tier B for other targets)."""
 

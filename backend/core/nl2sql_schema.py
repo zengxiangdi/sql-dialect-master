@@ -136,6 +136,7 @@ class SchemaContext:
                 valid = False
                 continue
             columns: set[str] = set()
+            column_keys: set[str] = set()
             has_metadata = bool(raw_columns)
             for raw_column in raw_columns:
                 if not isinstance(raw_column, Mapping):
@@ -146,6 +147,11 @@ class SchemaContext:
                 except SchemaValidationError:
                     valid = False
                     continue
+                column_key = _key(column_name)
+                if column_key in column_keys:
+                    valid = False
+                    continue
+                column_keys.add(column_key)
                 columns.add(column_name)
             primary_key: tuple[str, ...] = ()
             if "primary_key" in raw_table:

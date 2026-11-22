@@ -67,13 +67,6 @@ class SemanticDiff:
     evidence: str | None = None
 
 
-def _strip_redundant_parentheses(node: exp.Expression) -> exp.Expression:
-    """Remove grouping around a single predicate without changing boolean precedence."""
-    if isinstance(node, exp.Paren) and not isinstance(node.this, (exp.And, exp.Or)):
-        return node.this.copy()
-    return node.copy()
-
-
 def _parse_and_normalize(sql: str, dialect: str) -> exp.Expression:
     if not isinstance(sql, str) or not sql.strip():
         raise ValueError("SQL must be a non-empty string")
@@ -81,10 +74,11 @@ def _parse_and_normalize(sql: str, dialect: str) -> exp.Expression:
     from .sql_statements import parse_single_sql
 
     tree = parse_single_sql(sql, dialect)
-    for node in list(tree.find_all(exp.Paren)):
-        if isinstance(node.this, (exp.And, exp.Or)):
-            continue
-        node.replace(node.this.copy())
+    # A filter clause is already an expression boundary. Parentheses inside
+    # expressions can affect precedence or associativity when rendered.
+    for clause in tree.find_all(exp.Where, exp.Having, exp.Qualify):
+        while isinstance(clause.this, exp.Paren) and not clause.this.comments:
+            clause.set("this", clause.this.this)
     return tree
 
 

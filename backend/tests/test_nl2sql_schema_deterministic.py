@@ -46,6 +46,21 @@ def test_context_normalizes_case_and_preserves_canonical_names():
     assert context.column_owners("NAME")[0].name == "public.Users"
 
 
+def test_context_rejects_casefold_colliding_columns_and_keeps_unique_spelling():
+    collision = SchemaContext.from_mapping({
+        "tables": [{"name": "users", "columns": [{"name": "Id"}, {"name": "id"}]}],
+        "relationships": [],
+    })
+    assert collision.is_valid is False
+
+    unique = SchemaContext.from_mapping({
+        "tables": [{"name": "users", "columns": [{"name": "UserID"}]}],
+        "relationships": [],
+    })
+    assert unique.is_valid is True
+    assert unique.canonical_column(unique.tables[0], "userid") == "UserID"
+
+
 def test_qualified_names_and_ambiguous_basenames_are_indexed():
     context = SchemaContext.from_mapping(SCHEMA)
 

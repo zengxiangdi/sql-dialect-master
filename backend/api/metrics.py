@@ -236,6 +236,8 @@ class MetricsMiddleware:
                 status_code = message.get("status", 500)
             await send(message)
 
-        await self.app(scope, receive, send_wrapper)
-        request = Request(scope)
-        record_http_request(request, status_code, time.perf_counter() - started)
+        try:
+            await self.app(scope, receive, send_wrapper)
+        finally:
+            request = Request(scope)
+            record_http_request(request, status_code, time.perf_counter() - started)
