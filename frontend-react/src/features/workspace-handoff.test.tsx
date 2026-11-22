@@ -126,9 +126,10 @@ describe("workspace handoff and dialect selection", () => {
   it("opens Diff from a successful Convert result", async () => {
     const fetchMock = vi.fn().mockImplementation(async (url: string) => url === "/health"
       ? response({ status: "alive" })
-      : response({ success: true, source_sql: "SELECT 1", target_sql: "SELECT 1", source_dialect: "mysql", target_dialect: "postgres", warnings: [], compatibility_notes: [], transformations: [], target_validation_state: "target_valid" }));
+      : response({ success: true, source_sql: "SELECT id, name FROM users WHERE active = 1;", target_sql: "SELECT id, name FROM users WHERE active = 1;", source_dialect: "mysql", target_dialect: "postgres", warnings: [], compatibility_notes: [], transformations: [], target_validation_state: "target_valid" }));
     vi.stubGlobal("fetch", fetchMock);
     render(<MemoryRouter initialEntries={["/convert?source=mysql&target=postgres"]}><LocationProbe /><AppProvider><ConvertPage /></AppProvider></MemoryRouter>);
+    fireEvent.change(screen.getByLabelText("Source SQL editor"), { target: { value: "SELECT id, name FROM users WHERE active = 1;" } });
     fireEvent.click(screen.getByRole("button", { name: "Convert SQL" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Open Diff" })).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Open Diff" }));

@@ -3,8 +3,8 @@ import { useState, type ButtonHTMLAttributes, type ReactNode, type TextareaHTMLA
 import type { Dialect, Status } from "../lib/types";
 import { DIALECT_ICONS, DIALECT_LABELS } from "../lib/types";
 
-export function Button({ variant = "secondary", loading, icon, children, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "secondary" | "ghost" | "danger"; loading?: boolean; icon?: ReactNode }) {
-  return <button className={`button button-${variant}`} disabled={props.disabled || loading} aria-busy={loading || undefined} {...props}>{loading ? <Loader2 size={15} className="spin" aria-hidden="true" /> : icon}{children}</button>;
+export function Button({ variant = "secondary", loading, icon, children, disabled, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "secondary" | "ghost" | "danger"; loading?: boolean; icon?: ReactNode }) {
+  return <button className={`button button-${variant}`} disabled={disabled || loading} aria-busy={loading || undefined} {...props}>{loading ? <Loader2 size={15} className="spin" aria-hidden="true" /> : icon}{children}</button>;
 }
 
 export function IconButton({ label, children, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { label: string }) {

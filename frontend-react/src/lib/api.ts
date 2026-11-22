@@ -53,13 +53,33 @@ async function request<T>(path: string, init: RequestInit = {}, timeout = 30000)
       }
     }
     const response = await fetch(`${apiBase()}${path}`, { ...init, headers, signal: controller.signal });
-    const payload = await response.json().catch(() => ({}));
+    const contentType = response.headers.get("content-type")?.toLowerCase() || "";
+    const raw = typeof response.text === "function" ? await response.text() : null;
+    let payload: unknown = null;
+    if (raw === null) {
+      const json = (response as Response & { json?: () => Promise<unknown> }).json;
+      if (typeof json === "function") payload = await json.call(response);
+    } else if (raw.trim()) {
+      if (!contentType.includes("application/json")) {
+        throw new ApiError(`Unexpected response from API (${response.status})`, response.status);
+      }
+      try {
+        payload = JSON.parse(raw);
+      } catch {
+        throw new ApiError(`Invalid JSON response from API (${response.status})`, response.status);
+      }
+    }
     if (!response.ok) {
-      const detail = payload?.error?.message || payload?.detail || payload?.error || `Request failed (${response.status})`;
+      const body = payload && typeof payload === "object" ? payload as Record<string, any> : {};
+      const error = body.error && typeof body.error === "object" ? body.error as Record<string, any> : null;
+      const detail = error?.message || body.detail || body.error || `Request failed (${response.status})`;
       // FastAPI's normalized error envelope uses `error.code`; older API
       // versions used `error_code`, so accept both while migrating clients.
-      const errorCode = payload?.error?.code ?? payload?.error?.error_code;
+      const errorCode = error?.code ?? error?.error_code;
       throw new ApiError(String(detail), response.status, errorCode == null ? undefined : String(errorCode), response.headers.get("Retry-After") ?? undefined);
+    }
+    if (payload === null || typeof payload !== "object") {
+      throw new ApiError("API returned an empty response", response.status);
     }
     return payload as T;
   } catch (error) {

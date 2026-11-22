@@ -632,6 +632,33 @@ class ParseRequest(BaseModel):
     dialect: str = Field("hive", description="SQL dialect")
 
 
+class ParseElementsResponse(BaseModel):
+    """Structured parser metadata returned by the analysis endpoint."""
+
+    query_type: str
+    tables: list[dict[str, Any]] = Field(default_factory=list)
+    columns: list[dict[str, Any]] = Field(default_factory=list)
+    functions: list[dict[str, Any]] = Field(default_factory=list)
+    joins: list[dict[str, Any]] = Field(default_factory=list)
+    has_subquery: bool = False
+    has_cte: bool = False
+    has_window: bool = False
+    has_aggregation: bool = False
+    has_distinct: bool = False
+    has_union: bool = False
+    has_order_by: bool = False
+    has_limit: bool = False
+
+
+class ParseResponse(BaseModel):
+    """Response contract for SQL analysis metadata."""
+
+    success: bool
+    dialect: str
+    elements: ParseElementsResponse
+    timestamp: str = Field(default_factory=lambda: _now_iso())
+
+
 class DiffRequest(BaseModel):
     """Semantic SQL comparison request."""
 
@@ -873,7 +900,7 @@ async def convert_sql_batch(request: BatchConvertRequest):
     return response
 
 
-@app.post("/api/parse", tags=["conversion"])
+@app.post("/api/parse", response_model=ParseResponse, tags=["conversion"])
 async def parse_sql(request: ParseRequest):
     """
     Parse SQL and extract elements.
