@@ -16,6 +16,7 @@ from sqlglot import exp
 from backend.core import nl2sql_llm
 from backend.core.config import AppSettings
 from backend.core.nl2sql_llm import (
+    MAX_LLM_RESPONSE_BYTES,
     LLMError,
     LLMGeneration,
     LLMN2SQLClient,
@@ -449,6 +450,15 @@ def test_non_json_response_is_rejected_without_body_leaks():
     with pytest.raises(LLMError, match="invalid_response") as caught:
         generate_with(lambda _request: httpx.Response(200, text=PRIVATE_KEY))
     assert PRIVATE_KEY not in repr(caught.value)
+
+
+def test_oversized_provider_response_is_rejected_before_json_processing():
+    response = httpx.Response(
+        200,
+        content=b"{" + b"x" * MAX_LLM_RESPONSE_BYTES + b"}",
+    )
+    with pytest.raises(LLMError, match="invalid_response"):
+        generate_with(lambda _request: response)
 
 
 @pytest.mark.parametrize("content", [None, "", " \n\t "])

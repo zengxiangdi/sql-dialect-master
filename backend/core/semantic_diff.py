@@ -200,8 +200,18 @@ def _category_fragments(
     if category == "ordering" and source_select is not None and target_select is not None:
         return _fragment_sql(source_select.args.get("order")), _fragment_sql(target_select.args.get("order"))
     if category == "row_limit" and source_select is not None and target_select is not None:
-        source = _fragment_sql(source_select.args.get("limit")) or _fragment_sql(source_select.args.get("offset"))
-        target = _fragment_sql(target_select.args.get("limit")) or _fragment_sql(target_select.args.get("offset"))
+        source = " ".join(
+            fragment for fragment in (
+                _fragment_sql(source_select.args.get("limit")),
+                _fragment_sql(source_select.args.get("offset")),
+            ) if fragment
+        )
+        target = " ".join(
+            fragment for fragment in (
+                _fragment_sql(target_select.args.get("limit")),
+                _fragment_sql(target_select.args.get("offset")),
+            ) if fragment
+        )
         return source, target
     if category == "join":
         return _list_fragment_sql(source_tree.find_all(exp.Join)), _list_fragment_sql(target_tree.find_all(exp.Join))

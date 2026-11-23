@@ -17,6 +17,7 @@ did against the legacy class.
 """
 import logging
 import re
+from collections import deque
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from typing import Any
@@ -41,6 +42,7 @@ from ..nl2sql_components.tokenizer import Tokenizer
 from ..nl2sql_pipeline.scanner import mask_nl2sql_non_executable
 from ..nl2sql_schema import (
     SchemaContext,
+    SchemaRelationshipContext,
     SchemaTableContext,
     SchemaValidationError,
     validate_schema_references,
@@ -2321,17 +2323,19 @@ class PipelineNL2SQLGenerator:
             )
 
         def shortest_path(target: SchemaTableContext) -> list[tuple[SchemaTableContext, str]] | None:
-            queue: list[tuple[SchemaTableContext, list[tuple[SchemaTableContext, str]]]] = [(subject, [])]
+            adjacency: dict[str, list[tuple[SchemaRelationshipContext, str]]] = {}
+            for edge in schema.relationships:
+                left = edge.from_table.casefold()
+                right = edge.to_table.casefold()
+                adjacency.setdefault(left, []).append((edge, right))
+                adjacency.setdefault(right, []).append((edge, left))
+            queue: deque[tuple[SchemaTableContext, list[tuple[SchemaTableContext, str]]]] = deque([(subject, [])])
             candidates: list[list[tuple[SchemaTableContext, str]]] = []
             while queue:
-                current, path = queue.pop(0)
+                current, path = queue.popleft()
                 if len(path) >= 2:
                     continue
-                for edge in schema.relationships:
-                    endpoints = {edge.from_table.casefold(), edge.to_table.casefold()}
-                    if current.key not in endpoints:
-                        continue
-                    next_name = edge.to_table if edge.from_table.casefold() == current.key else edge.from_table
+                for edge, next_name in adjacency.get(current.key, ()):
                     next_candidates = schema.table_candidates(next_name)
                     if len(next_candidates) != 1:
                         continue
@@ -2667,22 +2671,23 @@ class PipelineNL2SQLGenerator:
                 raise SchemaValidationError("direct relationship does not cover composite identity")
             return subject, (oriented_step(direct[0], subject, target),), group_match.span()
 
-        queue: list[tuple[SchemaTableContext, list[_nl2sql_ir.PathStep]]] = [(subject, [])]
+        adjacency: dict[str, list[tuple[SchemaRelationshipContext, str]]] = {}
+        for edge in schema.relationships:
+            left = edge.from_table.casefold()
+            right = edge.to_table.casefold()
+            adjacency.setdefault(left, []).append((edge, right))
+            adjacency.setdefault(right, []).append((edge, left))
+        queue: deque[tuple[SchemaTableContext, list[_nl2sql_ir.PathStep]]] = deque([(subject, [])])
         paths: list[list[_nl2sql_ir.PathStep]] = []
+        shortest_length: int | None = None
         expansions = 0
         while queue:
-            current, path = queue.pop(0)
+            current, path = queue.popleft()
+            if shortest_length is not None and len(path) >= shortest_length:
+                continue
             if len(path) >= 3:
                 continue
-            for edge in schema.relationships:
-                endpoints = {edge.from_table.casefold(), edge.to_table.casefold()}
-                if current.key not in endpoints:
-                    continue
-                next_name = (
-                    edge.to_table
-                    if edge.from_table.casefold() == current.key
-                    else edge.from_table
-                )
+            for edge, next_name in adjacency.get(current.key, ()):
                 candidates = schema.table_candidates(next_name)
                 if len(candidates) != 1:
                     continue
@@ -2699,8 +2704,10 @@ class PipelineNL2SQLGenerator:
                 next_path = [*path, oriented_step(edge, current, next_table)]
                 if next_table.key == target.key:
                     paths.append(next_path)
+                    shortest_length = len(next_path) if shortest_length is None else shortest_length
                 else:
-                    queue.append((next_table, next_path))
+                    if shortest_length is None or len(next_path) < shortest_length:
+                        queue.append((next_table, next_path))
         if not paths:
             raise SchemaValidationError("multi-hop target path is missing")
         shortest_length = min(len(path) for path in paths)

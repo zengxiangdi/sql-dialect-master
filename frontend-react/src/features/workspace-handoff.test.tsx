@@ -12,6 +12,8 @@ function response(payload: unknown) {
   return { ok: true, status: 200, headers: new Headers(), json: async () => payload };
 }
 
+const SAMPLE_SQL = "SELECT id, name FROM users WHERE active = 1;";
+
 function LocationProbe() {
   const location = useLocation();
   return <span data-testid="location">{location.pathname}{location.search}</span>;
@@ -126,10 +128,10 @@ describe("workspace handoff and dialect selection", () => {
   it("opens Diff from a successful Convert result", async () => {
     const fetchMock = vi.fn().mockImplementation(async (url: string) => url === "/health"
       ? response({ status: "alive" })
-      : response({ success: true, source_sql: "SELECT id, name FROM users WHERE active = 1;", target_sql: "SELECT id, name FROM users WHERE active = 1;", source_dialect: "mysql", target_dialect: "postgres", warnings: [], compatibility_notes: [], transformations: [], target_validation_state: "target_valid" }));
+      : response({ success: true, source_sql: SAMPLE_SQL, target_sql: SAMPLE_SQL, source_dialect: "mysql", target_dialect: "postgres", warnings: [], compatibility_notes: [], transformations: [], target_validation_state: "target_valid" }));
     vi.stubGlobal("fetch", fetchMock);
     render(<MemoryRouter initialEntries={["/convert?source=mysql&target=postgres"]}><LocationProbe /><AppProvider><ConvertPage /></AppProvider></MemoryRouter>);
-    fireEvent.change(screen.getByLabelText("Source SQL editor"), { target: { value: "SELECT id, name FROM users WHERE active = 1;" } });
+    fireEvent.change(screen.getByLabelText("Source SQL editor"), { target: { value: SAMPLE_SQL } });
     fireEvent.click(screen.getByRole("button", { name: "Convert SQL" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Open Diff" })).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Open Diff" }));

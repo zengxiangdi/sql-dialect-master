@@ -30,7 +30,7 @@ export interface ConvertResponse {
   compatibility_notes: string[];
   transformations: string[];
   warnings: string[];
-  target_validation_state: "target_valid" | "generic_only" | "invalid";
+  target_validation_state: "target_valid" | "generic_only" | "invalid" | "not_checked";
   timestamp?: string;
 }
 

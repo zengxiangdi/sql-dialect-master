@@ -22,6 +22,7 @@ _ERROR_REASONS = frozenset({
 _VALIDATING_LLM_SQL = ContextVar("validating_llm_sql", default=False)
 _SQLGLOT_LOGGER = logging.getLogger("sqlglot")
 _SQL_FENCE = re.compile(r"```(?:sql)?[ \t]*\r?\n(.*?)\r?\n?```", re.IGNORECASE | re.DOTALL)
+MAX_LLM_RESPONSE_BYTES = 1_048_576
 
 
 class LLMError(Exception):
@@ -193,6 +194,8 @@ class LLMN2SQLClient:
             raise LLMError("http_5xx")
         if not 200 <= response.status_code < 300:
             raise LLMError("http_error")
+        if len(response.content) > MAX_LLM_RESPONSE_BYTES:
+            raise LLMError("invalid_response")
         try:
             body = response.json()
             choices = body["choices"]

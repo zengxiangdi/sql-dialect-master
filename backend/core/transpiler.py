@@ -109,7 +109,7 @@ class TranspileResult:
     compatibility_notes: list[str] = field(default_factory=list)
     transformations: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
-    target_validation_state: str = "target_valid"
+    target_validation_state: str = "not_checked"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -698,7 +698,8 @@ class SQLTranspiler:
         if not sql.strip():
             return TranspileResult(
                 success=False, source_sql=sql, source_dialect=source, target_dialect=target,
-                error="Empty SQL statement", error_code=ErrorCode.VALIDATION_FAILED.value
+                error="Empty SQL statement", error_code=ErrorCode.VALIDATION_FAILED.value,
+                target_validation_state="not_checked",
             )
 
         if self._cache_enabled:
@@ -919,7 +920,7 @@ class SQLTranspiler:
                     target_validation_state="invalid",
                 )
 
-            target_validation_state = "target_valid"
+            target_validation_state = "not_checked"
 
             # B2-1d: when the dynamic-separator fail-closed path fires,
             # strip both known success notes so a failed result does not

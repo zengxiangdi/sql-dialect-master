@@ -416,7 +416,7 @@ class ConvertResponse(BaseModel):
     transformations: list[str] = Field(default_factory=list, description="Applied transformations")
     warnings: list[str] = Field(default_factory=list, description="Conversion warnings")
     target_validation_state: str = Field(
-        "target_valid",
+        "not_checked",
         description=(
             "Target-dialect parse status of the produced output. "
             '"target_valid": target parser accepted the output; '

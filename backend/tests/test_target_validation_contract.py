@@ -37,7 +37,19 @@ class TestTargetValidationStates:
             "target_valid",
             "generic_only",
             "invalid",
+            "not_checked",
         )
+
+    def test_validate_false_and_early_failures_are_not_marked_target_valid(
+        self, transpiler: SQLTranspiler
+    ) -> None:
+        unchecked = transpiler.transpile("SELECT 1", "postgres", "mysql", validate=False)
+        empty = transpiler.transpile("", "postgres", "mysql")
+
+        assert unchecked.success is True
+        assert unchecked.target_validation_state == "not_checked"
+        assert empty.success is False
+        assert empty.target_validation_state == "not_checked"
 
     def test_to_dict_includes_target_validation_state(
         self, transpiler: SQLTranspiler
