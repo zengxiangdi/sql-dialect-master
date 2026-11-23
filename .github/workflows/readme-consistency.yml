@@ -3,6 +3,7 @@ name: README Consistency
 on:
   push:
     branches: [main, "feat/**", "fix/**", "chore/**"]
+    tags: ["v*.*.*"]
   pull_request:
     branches: [main]
   workflow_dispatch:

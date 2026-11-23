@@ -3,6 +3,7 @@ name: Quality
 on:
   push:
     branches: [main, "feat/**", "fix/**", "chore/**", "audit/**"]
+    tags: ["v*.*.*"]
   pull_request:
     branches: [main]
 
