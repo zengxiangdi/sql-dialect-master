@@ -36,11 +36,25 @@ jobs:
           RELEASE_SHA="$(git rev-parse HEAD^{commit})"
           run_id=""
           for attempt in $(seq 1 60); do
-            run_id="$(gh run list --workflow ci.yml --commit "$RELEASE_SHA" --limit 10 \
-              --json databaseId --jq '.[0].databaseId' 2>/dev/null || true)"
+            run_id="$(gh run list --workflow ci.yml --commit "$RELEASE_SHA" --limit 20 \
+              --json databaseId,status,conclusion --jq '[.[] | select(.status != "completed" or .conclusion == "success")] | first | .databaseId // empty' 2>/dev/null || true)"
+            failed="$(gh run list --workflow ci.yml --commit "$RELEASE_SHA" --limit 20 \
+              --json status,conclusion --jq '[.[] | select(.status == "completed" and .conclusion != "success")] | length' 2>/dev/null || echo 0)"
+            if [ "$failed" -gt 0 ]; then
+              echo "A CI run for $RELEASE_SHA failed" >&2
+              gh run list --workflow ci.yml --commit "$RELEASE_SHA" --limit 20
+              exit 1
+            fi
             if [ -n "$run_id" ]; then
               echo "Watching CI run $run_id"
               gh run watch "$run_id" --exit-status
+            fi
+            completed="$(gh run list --workflow ci.yml --commit "$RELEASE_SHA" --limit 20 \
+              --json status,conclusion --jq '[.[] | select(.status == "completed" and .conclusion == "success")] | length' 2>/dev/null || echo 0)"
+            total="$(gh run list --workflow ci.yml --commit "$RELEASE_SHA" --limit 20 \
+              --json databaseId --jq 'length' 2>/dev/null || echo 0)"
+            if [ "$total" -gt 0 ] && [ "$completed" -eq "$total" ]; then
+              echo "All CI runs for $RELEASE_SHA succeeded"
               exit 0
             fi
             echo "Waiting for CI run for $RELEASE_SHA (attempt $attempt/60)"

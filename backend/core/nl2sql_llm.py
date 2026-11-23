@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from contextvars import ContextVar
 from dataclasses import dataclass
 
@@ -175,6 +176,7 @@ class LLMN2SQLClient:
                 },
             ],
         }
+        started = time.monotonic()
         try:
             async with httpx.AsyncClient(
                 timeout=configured.nl2sql_llm_timeout,
@@ -184,6 +186,8 @@ class LLMN2SQLClient:
                 response = await client.post(
                     f"{configured.nl2sql_llm_base_url}/chat/completions", headers=headers, json=payload,
                 )
+                if time.monotonic() - started > configured.nl2sql_llm_timeout:
+                    raise LLMError("timeout")
         except httpx.TimeoutException:
             raise LLMError("timeout") from None
         except (httpx.HTTPError, ValueError):

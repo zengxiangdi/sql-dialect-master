@@ -10,6 +10,7 @@ Enterprise-grade multi-database SQL conversion API:
 Exact counts are derived from the canonical data files at runtime —
 see backend.core.metadata — and must not be restated here.
 """
+import asyncio
 import atexit
 import copy
 import logging
@@ -1151,10 +1152,16 @@ async def generate_sql(request: NL2SQLRequest):
             # Keep the legacy no-schema client call compatible with direct
             # callers and providers that implement the existing signature.
             schema_options = {"schema": schema} if schema is not None else {}
-            generation = await LLMN2SQLClient().generate(
-                request.text, dialect, request.table_hint, request.column_hints,
-                **schema_options,
-            )
+            try:
+                generation = await asyncio.wait_for(
+                    LLMN2SQLClient().generate(
+                        request.text, dialect, request.table_hint, request.column_hints,
+                        **schema_options,
+                    ),
+                    timeout=settings.nl2sql_llm_timeout + 0.5,
+                )
+            except TimeoutError:
+                raise LLMError("timeout") from None
             sql = (
                 validate_llm_sql(generation.sql, dialect)
                 if schema is None
