@@ -669,6 +669,7 @@ class SemanticDiffResponse(BaseModel):
     target_normalized: str | None = None
     differences: list[str] = Field(default_factory=list)
     parse_error: str | None = None
+    error: str | None = None
     status: str
     difference_categories: list[str] = Field(default_factory=list)
     structured_differences: list[dict[str, Any]] = Field(default_factory=list)
