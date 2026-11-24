@@ -77,6 +77,22 @@ function CommandPalette({ close, inputRef }: { close: () => void; inputRef: Reac
   const commands = [{ label: "New conversion", to: "/convert", icon: WandSparkles }, { label: "Natural language to SQL", to: "/nl2sql", icon: BrainCircuit }, { label: "Semantic diff", to: "/diff", icon: GitCompareArrows }, { label: "Function encyclopedia", to: "/functions", icon: BookOpen }, { label: "Conversion history", to: "/history", icon: FileClock }, { label: "Settings", to: "/settings", icon: Settings2 }];
   const [query, setQuery] = useState(""); const [activeIndex, setActiveIndex] = useState(0); const filtered = commands.filter((item) => item.label.toLowerCase().includes(query.toLowerCase()));
   useEffect(() => setActiveIndex(0), [query]);
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Tab") return;
+      const focusable = Array.from(
+        document.querySelectorAll<HTMLElement>('.command-palette a, .command-palette input, .command-palette button'),
+      ).filter((element) => !element.hasAttribute("disabled"));
+      if (!focusable.length) return;
+      const current = document.activeElement as HTMLElement | null;
+      const index = current ? focusable.indexOf(current) : -1;
+      const next = focusable[(index + (event.shiftKey ? -1 : 1) + focusable.length) % focusable.length];
+      event.preventDefault();
+      next.focus();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, []);
   const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "ArrowDown") { event.preventDefault(); setActiveIndex((index) => filtered.length ? (index + 1) % filtered.length : 0); }
     else if (event.key === "ArrowUp") { event.preventDefault(); setActiveIndex((index) => filtered.length ? (index - 1 + filtered.length) % filtered.length : 0); }
