@@ -34,30 +34,35 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           RELEASE_SHA="$(git rev-parse HEAD^{commit})"
-          run_id=""
+          required_workflows=(ci.yml quality.yml benchmark.yml codeql.yml frontend.yml readme-consistency.yml)
           for attempt in $(seq 1 60); do
-            run_id="$(gh run list --workflow ci.yml --commit "$RELEASE_SHA" --limit 20 \
-              --json databaseId,status,conclusion --jq '[.[] | select(.status != "completed" or .conclusion == "success")] | first | .databaseId // empty' 2>/dev/null || true)"
-            failed="$(gh run list --workflow ci.yml --commit "$RELEASE_SHA" --limit 20 \
-              --json status,conclusion --jq '[.[] | select(.status == "completed" and .conclusion != "success")] | length' 2>/dev/null || echo 0)"
-            if [ "$failed" -gt 0 ]; then
-              echo "A CI run for $RELEASE_SHA failed" >&2
-              gh run list --workflow ci.yml --commit "$RELEASE_SHA" --limit 20
-              exit 1
-            fi
-            if [ -n "$run_id" ]; then
-              echo "Watching CI run $run_id"
-              gh run watch "$run_id" --exit-status
-            fi
-            completed="$(gh run list --workflow ci.yml --commit "$RELEASE_SHA" --limit 20 \
-              --json status,conclusion --jq '[.[] | select(.status == "completed" and .conclusion == "success")] | length' 2>/dev/null || echo 0)"
-            total="$(gh run list --workflow ci.yml --commit "$RELEASE_SHA" --limit 20 \
-              --json databaseId --jq 'length' 2>/dev/null || echo 0)"
-            if [ "$total" -gt 0 ] && [ "$completed" -eq "$total" ]; then
-              echo "All CI runs for $RELEASE_SHA succeeded"
+            pending=0
+            missing=0
+            for workflow in "${required_workflows[@]}"; do
+              run_json="$(gh run list --workflow "$workflow" --commit "$RELEASE_SHA" --limit 20 \
+                --json databaseId,status,conclusion --jq '.[0] // empty' 2>/dev/null || true)"
+              if [ -z "$run_json" ]; then
+                echo "Waiting for $workflow run for $RELEASE_SHA"
+                missing=$((missing + 1))
+                continue
+              fi
+              status="$(printf '%s' "$run_json" | jq -r '.status')"
+              conclusion="$(printf '%s' "$run_json" | jq -r '.conclusion // empty')"
+              if [ "$status" = "completed" ]; then
+                if [ "$conclusion" != "success" ]; then
+                  echo "$workflow failed for $RELEASE_SHA" >&2
+                  printf '%s\n' "$run_json" >&2
+                  exit 1
+                fi
+              else
+                pending=$((pending + 1))
+              fi
+            done
+            if [ "$missing" -eq 0 ] && [ "$pending" -eq 0 ]; then
+              echo "All required workflows succeeded for $RELEASE_SHA"
               exit 0
             fi
-            echo "Waiting for CI run for $RELEASE_SHA (attempt $attempt/60)"
+            echo "Waiting for required workflows for $RELEASE_SHA (attempt $attempt/60)"
             sleep 10
           done
           echo "Timed out waiting for CI checks for $RELEASE_SHA" >&2
