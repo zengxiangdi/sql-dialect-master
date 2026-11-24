@@ -707,11 +707,14 @@ class TypeMappingsResponse(BaseModel):
 
 
 class TypeDetailResponse(BaseModel):
+    """Detailed type comparison returned by ``TypeMapper.compare_types``."""
+
     success: bool
-    type_name: str | None = None
-    mapping: dict[str, Any] = Field(default_factory=dict)
-    dialects: dict[str, Any] = Field(default_factory=dict)
+    type: str
     category: str | None = None
+    dialects: dict[str, str] = Field(default_factory=dict)
+    notes: str = ""
+    availability: dict[str, Any] = Field(default_factory=dict)
     model_config = ConfigDict(extra="allow")
 
 
