@@ -678,6 +678,54 @@ class SemanticDiffResponse(BaseModel):
     evidence: str | None = None
 
 
+class FunctionListResponse(BaseModel):
+    success: bool
+    functions: list[dict[str, Any]] = Field(default_factory=list)
+    count: int
+    total: int
+    stats: dict[str, Any] = Field(default_factory=dict)
+
+
+class FunctionCategoriesResponse(BaseModel):
+    success: bool
+    categories: list[dict[str, Any]] = Field(default_factory=list)
+    count: int
+
+
+class FunctionDetailResponse(BaseModel):
+    success: bool
+    function: dict[str, Any]
+    comparison: dict[str, Any]
+
+
+class TypeMappingsResponse(BaseModel):
+    success: bool
+    mappings: list[dict[str, Any]] = Field(default_factory=list)
+    dialects: list[str] = Field(default_factory=list)
+    type_count: int
+    precision_warnings: dict[str, str] = Field(default_factory=dict)
+
+
+class TypeDetailResponse(BaseModel):
+    success: bool
+    type_name: str | None = None
+    mapping: dict[str, Any] = Field(default_factory=dict)
+    dialects: dict[str, Any] = Field(default_factory=dict)
+    category: str | None = None
+    model_config = ConfigDict(extra="allow")
+
+
+class TypeMapResponse(BaseModel):
+    success: bool
+    timestamp: str
+    type_name: str | None = None
+    target_type: str | None = None
+    mapping_status: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+    error: str | None = None
+    model_config = ConfigDict(extra="allow")
+
+
 class DiffRequest(BaseModel):
     """Semantic SQL comparison request."""
 
@@ -957,7 +1005,7 @@ async def compare_semantic_diff(request: DiffRequest):
         payload["error"] = result.parse_error
     return payload
 
-@app.get("/api/functions", tags=["functions"])
+@app.get("/api/functions", response_model=FunctionListResponse, tags=["functions"])
 async def list_functions(
     search: str | None = Query(None, description="Search term for function name"),
     category: str | None = Query(None, description="Filter by category (string, date, math, etc.)"),
@@ -998,7 +1046,7 @@ async def list_functions(
         "stats": func_encyclopedia.get_stats()
     }
 
-@app.get("/api/functions/categories", tags=["functions"])
+@app.get("/api/functions/categories", response_model=FunctionCategoriesResponse, tags=["functions"])
 async def get_function_categories():
     """
     Get all function categories with counts.
@@ -1012,7 +1060,7 @@ async def get_function_categories():
         "count": len(categories)
     }
 
-@app.get("/api/functions/{name}", tags=["functions"])
+@app.get("/api/functions/{name}", response_model=FunctionDetailResponse, tags=["functions"])
 async def get_function(name: str):
     """
     Get detailed function information.
@@ -1033,7 +1081,7 @@ async def get_function(name: str):
         "comparison": comparison
     }
 
-@app.get("/api/types", tags=["types"])
+@app.get("/api/types", response_model=TypeMappingsResponse, tags=["types"])
 async def list_types(
     source: str | None = Query(None, description="Filter by source dialect"),
     target: str | None = Query(None, description="Filter by target dialect")
@@ -1067,7 +1115,7 @@ async def list_types(
         "precision_warnings": type_mapper.get_precision_warnings()
     }
 
-@app.get("/api/types/{type_name}", tags=["types"])
+@app.get("/api/types/{type_name}", response_model=TypeDetailResponse, tags=["types"])
 async def get_type(type_name: str):
     """
     Get type mapping details for a specific type.
@@ -1085,7 +1133,7 @@ async def get_type(type_name: str):
         **comparison
     }
 
-@app.post("/api/types/map", tags=["types"])
+@app.post("/api/types/map", response_model=TypeMapResponse, tags=["types"])
 async def map_type(request: TypeMapRequest):
     """
     Map a type from source to target dialect.
