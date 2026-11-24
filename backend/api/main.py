@@ -660,6 +660,23 @@ class ParseResponse(BaseModel):
     timestamp: str = Field(default_factory=lambda: _now_iso())
 
 
+class SemanticDiffResponse(BaseModel):
+    """Response contract for target-aware semantic comparison."""
+
+    success: bool
+    equivalent: bool
+    source_normalized: str | None = None
+    target_normalized: str | None = None
+    differences: list[str] = Field(default_factory=list)
+    parse_error: str | None = None
+    status: str
+    difference_categories: list[str] = Field(default_factory=list)
+    structured_differences: list[dict[str, Any]] = Field(default_factory=list)
+    semantic_classification: str
+    confidence: float
+    evidence: str | None = None
+
+
 class DiffRequest(BaseModel):
     """Semantic SQL comparison request."""
 
@@ -921,7 +938,7 @@ async def parse_sql(request: ParseRequest):
     }
 
 
-@app.post("/api/diff", tags=["conversion"])
+@app.post("/api/diff", response_model=SemanticDiffResponse, tags=["conversion"])
 async def compare_semantic_diff(request: DiffRequest):
     """Compare source and target SQL without executing either statement."""
     source_dialect = normalize_dialect(request.source_dialect, "source dialect")
