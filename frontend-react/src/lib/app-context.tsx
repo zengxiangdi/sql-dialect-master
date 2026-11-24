@@ -43,7 +43,10 @@ function readHistory(): HistoryItem[] {
 }
 
 export function AppProvider({ children }: { children: ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>(() => (safeGetItem("sdm.theme") as Theme) || "dark");
+  const [theme, setThemeState] = useState<Theme>(() => {
+    const stored = safeGetItem("sdm.theme");
+    return stored === "light" || stored === "dark" ? stored : "dark";
+  });
   const [history, setHistory] = useState<HistoryItem[]>(readHistory);
   const [apiBase, setApiBaseState] = useState(() => safeGetItem("sdm.apiBase") || "");
   const [apiKey, setApiKeyState] = useState(() => safeGetItem("sdm.apiKey") || "");
