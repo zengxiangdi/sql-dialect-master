@@ -222,6 +222,15 @@ class TestDuckDBTranspiledRuntimeEquivalence:
         value = rows[0][0]
         assert set(str(value).split(",")) == {"Alice", "Bob", "Carol", "Eve", "Frank"}
 
+    def test_postgres_integer_division_preserves_duckdb_result(self, conn, transpiler):
+        result = transpiler.transpile(
+            "SELECT 3 / 4 AS quotient", "postgres", "duckdb", pretty=False, validate=True
+        )
+        assert result.success, result.error
+        rows, error = execute_or_skip(conn, result.target_sql)
+        assert error is None, error
+        assert rows == [(0,)]
+
 
 class TestDuckDBDateTimeFunctions:
     """Date-function execution on DuckDB (Tier A for duckdb target;

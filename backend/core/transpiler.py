@@ -48,6 +48,20 @@ _SYSTEM_CATALOG_NAMES = frozenset(
 )
 
 
+def _ast_preserve_integer_division(ast: exp.Expression, source: str, target: str) -> exp.Expression:
+    """Preserve integer division for PostgreSQL-to-DuckDB rewrites."""
+    if source != "postgres" or target != "duckdb":
+        return ast
+    def transform(node: exp.Expression) -> exp.Expression:
+        if not isinstance(node, exp.Div):
+            return node
+        left, right = node.this, node.expression
+        if isinstance(left, exp.Literal) and left.is_int and isinstance(right, exp.Literal) and right.is_int:
+            return exp.IntDiv(this=left.copy(), expression=right.copy())
+        return node
+    return ast.transform(transform)
+
+
 def _contains_sql_keyword(sql: str, keyword: str) -> bool:
     """Return true when a keyword appears as a standalone SQL token."""
     return re.search(rf"\b{re.escape(keyword)}\b", sql, re.IGNORECASE) is not None
@@ -827,6 +841,10 @@ class SQLTranspiler:
                     )[0]
             else:
                 transpiled = sqlglot.transpile(parser_sql, read=source, write=target, pretty=pretty)[0]
+            if source == "postgres" and target == "duckdb":
+                normalized_ast = cast(exp.Expression, sqlglot.parse_one(transpiled, read=target))
+                normalized_ast = _ast_preserve_integer_division(normalized_ast, source, target)
+                transpiled = normalized_ast.sql(dialect=target, pretty=pretty)
             final_sql, transformations = self.post_processor.process(transpiled, source, target)
             if ast_notes:
                 transformations = ast_notes + transformations
