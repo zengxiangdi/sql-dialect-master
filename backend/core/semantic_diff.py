@@ -74,6 +74,8 @@ def _parse_and_normalize(sql: str, dialect: str) -> exp.Expression:
     from .sql_statements import parse_single_sql
 
     tree = parse_single_sql(sql, dialect)
+    for node in tree.walk():
+        node.comments = []
     # A filter clause is already an expression boundary. Parentheses inside
     # expressions can affect precedence or associativity when rendered.
     for clause in tree.find_all(exp.Where, exp.Having, exp.Qualify):
@@ -147,9 +149,15 @@ def _difference_categories(
         target_where = _fragment_sql(target_select.args.get("where"))
         if source_where != target_where:
             categories.add("predicate")
-            if any("NULL" in fragment.upper() for fragment in (source_where, target_where)):
+            if any(
+                isinstance(node, exp.Null)
+                for tree in (source_tree, target_tree)
+                for node in tree.walk()
+            ):
                 categories.add("null_semantics")
-        if _fragment_sql(source_select.args.get("having")) != _fragment_sql(target_select.args.get("having")):
+        source_having = _fragment_sql(source_select.args.get("having"))
+        target_having = _fragment_sql(target_select.args.get("having"))
+        if source_having != target_having:
             categories.update({"predicate", "grouping"})
         if _fragment_sql(source_select.args.get("group")) != _fragment_sql(target_select.args.get("group")):
             categories.add("grouping")
@@ -189,14 +197,33 @@ def _category_fragments(
     source_select = source_tree if isinstance(source_tree, exp.Select) else source_tree.find(exp.Select)
     target_select = target_tree if isinstance(target_tree, exp.Select) else target_tree.find(exp.Select)
     if category in {"predicate", "null_semantics"} and source_select is not None and target_select is not None:
+        source_where = _fragment_sql(source_select.args.get("where"))
+        target_where = _fragment_sql(target_select.args.get("where"))
+        if not source_where and not target_where:
+            return (
+                _fragment_sql(source_select.args.get("having")),
+                _fragment_sql(target_select.args.get("having")),
+            )
         return (
-            _fragment_sql(source_select.args.get("where")),
-            _fragment_sql(target_select.args.get("where")),
+            source_where,
+            target_where,
         )
     if category == "projection" and source_select is not None and target_select is not None:
         return _list_fragment_sql(source_select.expressions), _list_fragment_sql(target_select.expressions)
     if category == "grouping" and source_select is not None and target_select is not None:
-        return _fragment_sql(source_select.args.get("group")), _fragment_sql(target_select.args.get("group"))
+        source = " ".join(
+            fragment for fragment in (
+                _fragment_sql(source_select.args.get("group")),
+                _fragment_sql(source_select.args.get("having")),
+            ) if fragment
+        )
+        target = " ".join(
+            fragment for fragment in (
+                _fragment_sql(target_select.args.get("group")),
+                _fragment_sql(target_select.args.get("having")),
+            ) if fragment
+        )
+        return source, target
     if category == "ordering" and source_select is not None and target_select is not None:
         return _fragment_sql(source_select.args.get("order")), _fragment_sql(target_select.args.get("order"))
     if category == "row_limit" and source_select is not None and target_select is not None:

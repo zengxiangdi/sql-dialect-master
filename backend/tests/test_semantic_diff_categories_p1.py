@@ -74,3 +74,43 @@ def test_limit_only_change_reports_row_limit():
     )
 
     assert result.difference_categories == ["literal_or_type", "row_limit"]
+
+
+def test_offset_evidence_includes_offset_values():
+    result = diff_sql_ast(
+        "SELECT id FROM users LIMIT 5 OFFSET 1",
+        "SELECT id FROM users LIMIT 5 OFFSET 3",
+        source_dialect="postgres",
+        target_dialect="postgres",
+    )
+
+    row_limit = next(item for item in result.structured_differences if item.category == "row_limit")
+    assert "OFFSET 1" in row_limit.source_fragment.upper()
+    assert "OFFSET 3" in row_limit.target_fragment.upper()
+
+
+def test_having_evidence_contains_changed_threshold():
+    result = diff_sql_ast(
+        "SELECT department, COUNT(*) FROM users GROUP BY department HAVING COUNT(*) > 1",
+        "SELECT department, COUNT(*) FROM users GROUP BY department HAVING COUNT(*) > 2",
+        source_dialect="postgres",
+        target_dialect="postgres",
+    )
+
+    predicate = next(item for item in result.structured_differences if item.category == "predicate")
+    grouping = next(item for item in result.structured_differences if item.category == "grouping")
+    assert "> 1" in predicate.source_fragment
+    assert "> 2" in predicate.target_fragment
+    assert "> 1" in grouping.source_fragment
+    assert "> 2" in grouping.target_fragment
+
+
+def test_null_semantics_category_ignores_string_literal_text():
+    result = diff_sql_ast(
+        "SELECT 'NULL' FROM users",
+        "SELECT 'NULL VALUE' FROM users",
+        source_dialect="postgres",
+        target_dialect="postgres",
+    )
+
+    assert "null_semantics" not in result.difference_categories
