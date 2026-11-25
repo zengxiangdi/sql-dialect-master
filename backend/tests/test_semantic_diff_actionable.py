@@ -60,6 +60,44 @@ def test_semantic_diff_preserves_arithmetic_grouping(source: str, target: str, c
 @pytest.mark.parametrize(
     "source, target",
     [
+        ("SELECT (a + b) - c", "SELECT a + b - c"),
+        ("SELECT (a - b) - c", "SELECT a - b - c"),
+        ("SELECT (a * b) / c", "SELECT a * b / c"),
+        ("SELECT (a / b) / c", "SELECT a / b / c"),
+        ("SELECT (a / b) * c", "SELECT a / b * c"),
+        ("SELECT a + (b - c)", "SELECT a + b - c"),
+        ("SELECT NOT (a = 1)", "SELECT NOT a = 1"),
+        ("SELECT id FROM users WHERE (a + 2) > 5", "SELECT id FROM users WHERE a + 2 > 5"),
+    ],
+)
+def test_semantic_diff_accepts_safe_arithmetic_parentheses(source: str, target: str) -> None:
+    result = diff_sql_ast(source, target, source_dialect="postgres", target_dialect="postgres")
+
+    assert result.status == "equivalent"
+    assert result.equivalent is True
+
+
+@pytest.mark.parametrize(
+    "source, target",
+    [
+        ("SELECT (a + b) * c", "SELECT a + b * c"),
+        ("SELECT a - (b + c)", "SELECT a - b + c"),
+        ("SELECT a - (b - c)", "SELECT a - b - c"),
+        ("SELECT a * (b / c)", "SELECT a * b / c"),
+        ("SELECT a / (b * c)", "SELECT a / b * c"),
+        ("SELECT NOT (a OR b)", "SELECT NOT a OR b"),
+    ],
+)
+def test_semantic_diff_keeps_unsafe_arithmetic_parentheses(source: str, target: str) -> None:
+    result = diff_sql_ast(source, target, source_dialect="postgres", target_dialect="postgres")
+
+    assert result.status == "different"
+    assert result.equivalent is False
+
+
+@pytest.mark.parametrize(
+    "source, target",
+    [
         ("SELECT (1 + 2)", "SELECT 1 + 2"),
         ("SELECT id FROM users WHERE (a + 2) > 5", "SELECT id FROM users WHERE a + 2 > 5"),
         ("SELECT id FROM users WHERE (a = 1)", "SELECT id FROM users WHERE a = 1"),

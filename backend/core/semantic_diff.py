@@ -131,7 +131,13 @@ def _can_remove_parentheses(paren: exp.Paren) -> bool:
         return inner_precedence >= 3
     if inner_precedence < parent_precedence:
         return False
-    if isinstance(parent, (exp.Sub, exp.Div, exp.Mod)) and parent.expression is paren:
+    if parent.this is paren:
+        return True
+    if isinstance(parent, (exp.Sub, exp.Div, exp.Mod)):
+        return False
+    if isinstance(parent, exp.Mul) and any(
+        isinstance(node, (exp.Div, exp.Mod)) for node in inner.walk()
+    ):
         return False
     return isinstance(parent, (exp.Add, exp.Mul, exp.And, exp.Or))
 
