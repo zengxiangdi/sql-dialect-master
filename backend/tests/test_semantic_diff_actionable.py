@@ -135,6 +135,49 @@ def test_semantic_diff_reports_null_predicate_changes() -> None:
     assert "null_semantics" in result.difference_categories
 
 
+def test_semantic_diff_ignores_unchanged_null_predicate_when_other_predicate_changes() -> None:
+    result = diff_sql_ast(
+        "SELECT 1 FROM users WHERE a = 1 AND b IS NULL",
+        "SELECT 1 FROM users WHERE a = 2 AND b IS NULL",
+        source_dialect="postgres",
+        target_dialect="postgres",
+    )
+
+    assert "predicate" in result.difference_categories
+    assert "literal_or_type" in result.difference_categories
+    assert "null_semantics" not in result.difference_categories
+
+
+def test_semantic_diff_reports_changed_null_predicate_alongside_other_predicate() -> None:
+    result = diff_sql_ast(
+        "SELECT 1 FROM users WHERE a = 1 AND b IS NULL",
+        "SELECT 1 FROM users WHERE a = 2 AND b IS NOT NULL",
+        source_dialect="postgres",
+        target_dialect="postgres",
+    )
+
+    assert "predicate" in result.difference_categories
+    assert "null_semantics" in result.difference_categories
+
+
+def test_semantic_diff_scopes_null_semantics_to_having() -> None:
+    unchanged = diff_sql_ast(
+        "SELECT dept, COUNT(*) FROM users GROUP BY dept HAVING a = 1 AND b IS NULL",
+        "SELECT dept, COUNT(*) FROM users GROUP BY dept HAVING a = 2 AND b IS NULL",
+        source_dialect="postgres",
+        target_dialect="postgres",
+    )
+    changed = diff_sql_ast(
+        "SELECT dept, COUNT(*) FROM users GROUP BY dept HAVING a IS NULL",
+        "SELECT dept, COUNT(*) FROM users GROUP BY dept HAVING a IS NOT NULL",
+        source_dialect="postgres",
+        target_dialect="postgres",
+    )
+
+    assert "null_semantics" not in unchanged.difference_categories
+    assert "null_semantics" in changed.difference_categories
+
+
 @pytest.mark.parametrize(
     "source, target, expected_status, category",
     [

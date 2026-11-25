@@ -206,13 +206,32 @@ def _list_fragment_sql(nodes) -> str:
     return "\n".join(_fragment_sql(node) for node in nodes)
 
 
-def _contains_null_semantics(*fragments: exp.Expr | None) -> bool:
-    return any(
-        isinstance(node, exp.Null)
-        for fragment in fragments
-        if fragment is not None
-        for node in fragment.walk()
-    )
+_NULL_COMPARISON_TYPES = (
+    exp.EQ,
+    exp.NEQ,
+    exp.GT,
+    exp.GTE,
+    exp.LT,
+    exp.LTE,
+)
+_NULL_SEMANTIC_TYPES = (exp.Is, exp.Like, exp.In, exp.Between, *_NULL_COMPARISON_TYPES)
+
+
+def _null_semantic_fragments(fragment: exp.Expr | None) -> frozenset[str]:
+    """Return normalized NULL-bearing predicates in one WHERE/HAVING fragment."""
+    if fragment is None:
+        return frozenset()
+    results: set[str] = set()
+    for node in fragment.walk():
+        if not isinstance(node, exp.Null):
+            continue
+        semantic_parent = node.parent
+        while semantic_parent is not None and not isinstance(
+            semantic_parent, _NULL_SEMANTIC_TYPES
+        ):
+            semantic_parent = semantic_parent.parent
+        results.add(_fragment_sql(semantic_parent or node))
+    return frozenset(results)
 
 
 def _difference_categories(
@@ -232,16 +251,16 @@ def _difference_categories(
         target_where = _fragment_sql(target_select.args.get("where"))
         if source_where != target_where:
             categories.add("predicate")
-            if _contains_null_semantics(
-                source_select.args.get("where"), target_select.args.get("where")
+            if _null_semantic_fragments(source_select.args.get("where")) != _null_semantic_fragments(
+                target_select.args.get("where")
             ):
                 categories.add("null_semantics")
         source_having = _fragment_sql(source_select.args.get("having"))
         target_having = _fragment_sql(target_select.args.get("having"))
         if source_having != target_having:
             categories.update({"predicate", "grouping"})
-            if _contains_null_semantics(
-                source_select.args.get("having"), target_select.args.get("having")
+            if _null_semantic_fragments(source_select.args.get("having")) != _null_semantic_fragments(
+                target_select.args.get("having")
             ):
                 categories.add("null_semantics")
         if _fragment_sql(source_select.args.get("group")) != _fragment_sql(target_select.args.get("group")):
