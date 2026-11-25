@@ -1,6 +1,6 @@
 # Core runtime versions retained for the engineering baseline.
 sqlglot==30.18.0
-fastapi==0.141.1
+fastapi==0.165.0
 # Starlette 1.7 fixes TestClient's deprecated AnyIO BlockingPortal alias.
 starlette==1.7.0
 # TestClient uses httpx2; runtime LLM requests continue to use httpx below.
