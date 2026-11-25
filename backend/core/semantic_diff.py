@@ -115,6 +115,10 @@ def _can_remove_parentheses(paren: exp.Paren) -> bool:
     if parent is None:
         return True
     inner = paren.this
+    if isinstance(inner, (exp.Column, exp.Literal, exp.Identifier)):
+        return True
+    if isinstance(inner, exp.Func) and _expression_precedence(inner) is None:
+        return not isinstance(inner, (exp.Tuple, exp.Subquery))
     if isinstance(parent, (exp.Where, exp.Having, exp.Qualify, exp.Select, exp.Alias)):
         return True
 

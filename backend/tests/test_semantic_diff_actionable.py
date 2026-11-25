@@ -179,6 +179,48 @@ def test_semantic_diff_scopes_null_semantics_to_having() -> None:
 
 
 @pytest.mark.parametrize(
+    "source, target",
+    [
+        ("SELECT a * (b)", "SELECT a * b"),
+        ("SELECT (a) + b", "SELECT a + b"),
+        ("SELECT a = (1)", "SELECT a = 1"),
+        ("SELECT id FROM users WHERE (a) = 1", "SELECT id FROM users WHERE a = 1"),
+        ("SELECT id FROM users WHERE a AND (b)", "SELECT id FROM users WHERE a AND b"),
+        ("SELECT f((a)) FROM users", "SELECT f(a) FROM users"),
+    ],
+)
+def test_semantic_diff_removes_atomic_parentheses(source: str, target: str) -> None:
+    result = diff_sql_ast(source, target, source_dialect="postgres", target_dialect="postgres")
+
+    assert result.status == "equivalent"
+    assert result.equivalent is True
+
+
+def test_semantic_diff_keeps_row_constructor_parentheses() -> None:
+    result = diff_sql_ast(
+        "SELECT (a, b) FROM users",
+        "SELECT a, b FROM users",
+        source_dialect="postgres",
+        target_dialect="postgres",
+    )
+
+    assert result.status == "different"
+    assert result.equivalent is False
+
+
+def test_semantic_diff_keeps_subquery_and_in_parentheses() -> None:
+    result = diff_sql_ast(
+        "SELECT * FROM users WHERE id IN (SELECT id FROM accounts)",
+        "SELECT * FROM users WHERE id IN (SELECT id FROM accounts)",
+        source_dialect="postgres",
+        target_dialect="postgres",
+    )
+
+    assert result.status == "equivalent"
+    assert result.equivalent is True
+
+
+@pytest.mark.parametrize(
     "source, target, expected_status, category",
     [
         (
