@@ -199,7 +199,7 @@ class SQLParser:
         tables = []
         seen = set()
         for table in ast.find_all(exp.Table):
-            key = (table.name, table.alias)
+            key = (self._scope_identity(table), table.catalog, table.db, table.name, table.alias)
             if key not in seen:
                 seen.add(key)
                 tables.append({
@@ -215,7 +215,7 @@ class SQLParser:
         columns = []
         seen = set()
         for col in ast.find_all(exp.Column):
-            key = (col.name, col.table)
+            key = (self._scope_identity(col), col.name, col.table)
             if key not in seen:
                 seen.add(key)
                 columns.append({
@@ -224,6 +224,16 @@ class SQLParser:
                     "alias": None
                 })
         return columns
+
+    @staticmethod
+    def _scope_identity(node: exp.Expression) -> int | None:
+        """Identify the nearest SELECT scope for analysis de-duplication."""
+        parent = node.parent
+        while parent is not None:
+            if isinstance(parent, exp.Select):
+                return id(parent)
+            parent = parent.parent
+        return None
 
     def _extract_functions(self, ast: exp.Expression) -> list[dict[str, Any]]:
         """Extract all function calls."""
@@ -291,7 +301,11 @@ class SQLParser:
             joins.append({
                 "type": join_type,
                 "table": table_name,
-                "on_condition": str(join.args.get('on')) if join.args.get('on') else None
+                "on_condition": str(join.args.get('on')) if join.args.get('on') else None,
+                **(
+                    {"using_columns": [column.name for column in join.args["using"]]}
+                    if join.args.get("using") else {}
+                ),
             })
         return joins
 

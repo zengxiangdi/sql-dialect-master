@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Validate a release tag and the artifacts built for that tag.
 
 The checks intentionally use only the standard library so they can run before

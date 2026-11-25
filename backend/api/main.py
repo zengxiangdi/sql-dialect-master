@@ -10,6 +10,7 @@ Enterprise-grade multi-database SQL conversion API:
 Exact counts are derived from the canonical data files at runtime —
 see backend.core.metadata — and must not be restated here.
 """
+import asyncio
 import atexit
 import copy
 import logging
@@ -271,28 +272,6 @@ from backend.core.exceptions import ErrorCode, SDMException, UnsupportedDialectE
 ALLOWED_ORIGINS = [origin.strip() for origin in settings.allowed_origins.split(",") if origin.strip()]
 TRUSTED_PROXY_NETWORKS = settings.trusted_proxy_networks
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],  # Restrict to needed methods
-    # Keep preflight explicit so browser clients can send the correlation and
-    # API-key headers used by the React request layer.  Expose operational
-    # response headers as well: without this list browsers silently hide
-    # Retry-After and request timing/correlation metadata from JavaScript even
-    # though the server emits them correctly.
-    allow_headers=["Accept", "Content-Type", "Authorization", "X-API-Key", "X-Request-ID"],
-    expose_headers=[
-        "Retry-After",
-        "X-API-Version",
-        "X-Process-Time",
-        "X-RateLimit-Limit",
-        "X-RateLimit-Remaining",
-        "X-RateLimit-Reset",
-        "X-Request-ID",
-    ],
-)
-
 # Type/function matrices and conversion reports are often much larger than
 # the request itself.  Compress them at the ASGI boundary so browser clients
 # spend less time waiting on the network without changing response schemas.
@@ -354,6 +333,26 @@ async def add_process_time_header(request: Request, call_next):
 # This is the outermost application middleware, so it also observes short
 # circuit responses returned by rate limiting and worker-capacity guards.
 app.add_middleware(MetricsMiddleware)
+
+# Keep CORS outermost so browser clients receive CORS headers on every
+# response, including body-size, validation, rate-limit, and internal errors
+# returned by middleware before an endpoint runs.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Accept", "Content-Type", "Authorization", "X-API-Key", "X-Request-ID"],
+    expose_headers=[
+        "Retry-After",
+        "X-API-Version",
+        "X-Process-Time",
+        "X-RateLimit-Limit",
+        "X-RateLimit-Remaining",
+        "X-RateLimit-Reset",
+        "X-Request-ID",
+    ],
+)
 
 # Dialect info for enhanced responses (from centralized config)
 DIALECT_INFO = get_dialect_api_info()
@@ -418,7 +417,7 @@ class ConvertResponse(BaseModel):
     transformations: list[str] = Field(default_factory=list, description="Applied transformations")
     warnings: list[str] = Field(default_factory=list, description="Conversion warnings")
     target_validation_state: str = Field(
-        "target_valid",
+        "not_checked",
         description=(
             "Target-dialect parse status of the produced output. "
             '"target_valid": target parser accepted the output; '
@@ -632,6 +631,102 @@ class ParseRequest(BaseModel):
         description="SQL statement to parse",
     )
     dialect: str = Field("hive", description="SQL dialect")
+
+
+class ParseElementsResponse(BaseModel):
+    """Structured parser metadata returned by the analysis endpoint."""
+
+    query_type: str
+    tables: list[dict[str, Any]] = Field(default_factory=list)
+    columns: list[dict[str, Any]] = Field(default_factory=list)
+    functions: list[dict[str, Any]] = Field(default_factory=list)
+    joins: list[dict[str, Any]] = Field(default_factory=list)
+    has_subquery: bool = False
+    has_cte: bool = False
+    has_window: bool = False
+    has_aggregation: bool = False
+    has_distinct: bool = False
+    has_union: bool = False
+    has_order_by: bool = False
+    has_limit: bool = False
+
+
+class ParseResponse(BaseModel):
+    """Response contract for SQL analysis metadata."""
+
+    success: bool
+    dialect: str
+    elements: ParseElementsResponse
+    timestamp: str = Field(default_factory=lambda: _now_iso())
+
+
+class SemanticDiffResponse(BaseModel):
+    """Response contract for target-aware semantic comparison."""
+
+    success: bool
+    equivalent: bool
+    source_normalized: str | None = None
+    target_normalized: str | None = None
+    differences: list[str] = Field(default_factory=list)
+    parse_error: str | None = None
+    error: str | None = None
+    status: str
+    difference_categories: list[str] = Field(default_factory=list)
+    structured_differences: list[dict[str, Any]] = Field(default_factory=list)
+    semantic_classification: str
+    confidence: float
+    evidence: str | None = None
+
+
+class FunctionListResponse(BaseModel):
+    success: bool
+    functions: list[dict[str, Any]] = Field(default_factory=list)
+    count: int
+    total: int
+    stats: dict[str, Any] = Field(default_factory=dict)
+
+
+class FunctionCategoriesResponse(BaseModel):
+    success: bool
+    categories: list[dict[str, Any]] = Field(default_factory=list)
+    count: int
+
+
+class FunctionDetailResponse(BaseModel):
+    success: bool
+    function: dict[str, Any]
+    comparison: dict[str, Any]
+
+
+class TypeMappingsResponse(BaseModel):
+    success: bool
+    mappings: list[dict[str, Any]] = Field(default_factory=list)
+    dialects: list[str] = Field(default_factory=list)
+    type_count: int
+    precision_warnings: dict[str, str] = Field(default_factory=dict)
+
+
+class TypeDetailResponse(BaseModel):
+    """Detailed type comparison returned by ``TypeMapper.compare_types``."""
+
+    success: bool
+    type: str
+    category: str | None = None
+    dialects: dict[str, str] = Field(default_factory=dict)
+    notes: str = ""
+    availability: dict[str, Any] = Field(default_factory=dict)
+    model_config = ConfigDict(extra="allow")
+
+
+class TypeMapResponse(BaseModel):
+    success: bool
+    timestamp: str
+    type_name: str | None = None
+    target_type: str | None = None
+    mapping_status: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+    error: str | None = None
+    model_config = ConfigDict(extra="allow")
 
 
 class DiffRequest(BaseModel):
@@ -875,7 +970,7 @@ async def convert_sql_batch(request: BatchConvertRequest):
     return response
 
 
-@app.post("/api/parse", tags=["conversion"])
+@app.post("/api/parse", response_model=ParseResponse, tags=["conversion"])
 async def parse_sql(request: ParseRequest):
     """
     Parse SQL and extract elements.
@@ -895,7 +990,7 @@ async def parse_sql(request: ParseRequest):
     }
 
 
-@app.post("/api/diff", tags=["conversion"])
+@app.post("/api/diff", response_model=SemanticDiffResponse, tags=["conversion"])
 async def compare_semantic_diff(request: DiffRequest):
     """Compare source and target SQL without executing either statement."""
     source_dialect = normalize_dialect(request.source_dialect, "source dialect")
@@ -913,7 +1008,7 @@ async def compare_semantic_diff(request: DiffRequest):
         payload["error"] = result.parse_error
     return payload
 
-@app.get("/api/functions", tags=["functions"])
+@app.get("/api/functions", response_model=FunctionListResponse, tags=["functions"])
 async def list_functions(
     search: str | None = Query(None, description="Search term for function name"),
     category: str | None = Query(None, description="Filter by category (string, date, math, etc.)"),
@@ -954,7 +1049,7 @@ async def list_functions(
         "stats": func_encyclopedia.get_stats()
     }
 
-@app.get("/api/functions/categories", tags=["functions"])
+@app.get("/api/functions/categories", response_model=FunctionCategoriesResponse, tags=["functions"])
 async def get_function_categories():
     """
     Get all function categories with counts.
@@ -968,7 +1063,7 @@ async def get_function_categories():
         "count": len(categories)
     }
 
-@app.get("/api/functions/{name}", tags=["functions"])
+@app.get("/api/functions/{name}", response_model=FunctionDetailResponse, tags=["functions"])
 async def get_function(name: str):
     """
     Get detailed function information.
@@ -989,7 +1084,7 @@ async def get_function(name: str):
         "comparison": comparison
     }
 
-@app.get("/api/types", tags=["types"])
+@app.get("/api/types", response_model=TypeMappingsResponse, tags=["types"])
 async def list_types(
     source: str | None = Query(None, description="Filter by source dialect"),
     target: str | None = Query(None, description="Filter by target dialect")
@@ -1023,7 +1118,7 @@ async def list_types(
         "precision_warnings": type_mapper.get_precision_warnings()
     }
 
-@app.get("/api/types/{type_name}", tags=["types"])
+@app.get("/api/types/{type_name}", response_model=TypeDetailResponse, tags=["types"])
 async def get_type(type_name: str):
     """
     Get type mapping details for a specific type.
@@ -1041,7 +1136,7 @@ async def get_type(type_name: str):
         **comparison
     }
 
-@app.post("/api/types/map", tags=["types"])
+@app.post("/api/types/map", response_model=TypeMapResponse, tags=["types"])
 async def map_type(request: TypeMapRequest):
     """
     Map a type from source to target dialect.
@@ -1126,10 +1221,16 @@ async def generate_sql(request: NL2SQLRequest):
             # Keep the legacy no-schema client call compatible with direct
             # callers and providers that implement the existing signature.
             schema_options = {"schema": schema} if schema is not None else {}
-            generation = await LLMN2SQLClient().generate(
-                request.text, dialect, request.table_hint, request.column_hints,
-                **schema_options,
-            )
+            try:
+                generation = await asyncio.wait_for(
+                    LLMN2SQLClient().generate(
+                        request.text, dialect, request.table_hint, request.column_hints,
+                        **schema_options,
+                    ),
+                    timeout=settings.nl2sql_llm_timeout + 0.5,
+                )
+            except TimeoutError:
+                raise LLMError("timeout") from None
             sql = (
                 validate_llm_sql(generation.sql, dialect)
                 if schema is None
@@ -1339,7 +1440,10 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     }
     if request_id:
         content["request_id"] = request_id
-    return JSONResponse(status_code=500, content=content)
+    headers = {}
+    if request_id:
+        headers["X-Request-ID"] = request_id
+    return JSONResponse(status_code=500, content=content, headers=headers)
 
 # Run with: uvicorn backend.api.main:app --reload
 if __name__ == "__main__":

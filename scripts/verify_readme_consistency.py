@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Validate that user-facing README facts match repository sources."""
 
 from __future__ import annotations

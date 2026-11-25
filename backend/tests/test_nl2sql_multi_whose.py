@@ -2,6 +2,7 @@
 
 import itertools
 import sqlite3
+from contextlib import closing
 
 import pytest
 import sqlglot
@@ -370,6 +371,47 @@ def test_path_ordinary_where_remains_unsupported_with_multiple_whose(zero):
         "and products.status is enabled where orders.id > 0" + (" including zero" if zero else ""),
         twohop_schema(),
     ))
+
+
+@pytest.mark.parametrize("zero", [False, True])
+@pytest.mark.parametrize("owner", ["users", "orders", "products"])
+def test_path_filter_preserves_multiline_literals(owner: str, zero: bool) -> None:
+    value = "grade = A\r\n-- grade <= B"
+    result = generate(
+        f"count distinct products per user whose {owner}.status is '{value}'"
+        + (" including zero" if zero else ""),
+        twohop_schema(),
+    )
+
+    assert result.success and result.sql is not None, result.explanation
+    tree = sqlglot.parse_one(result.sql, read="postgres")
+    values = [literal.this for literal in tree.find_all(exp.Literal) if literal.is_string]
+    assert values == [value] * (2 if zero and owner == "users" else 1)
+
+
+@pytest.mark.parametrize(
+    ("suffix", "expected"),
+    [("", [(1, 1, 1)]), (" including zero", [(1, 1, 1), (1, 3, 0)])],
+)
+def test_path_count_matches_original_subject_literal(suffix: str, expected: list[tuple[int, int, int]]) -> None:
+    result = generate(
+        "count distinct products per user whose users.status is 'grade = A'" + suffix,
+        twohop_schema(),
+    )
+
+    assert result.success and result.sql is not None, result.explanation
+    with closing(sqlite3.connect(":memory:")) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE users(tenant_id INTEGER, id INTEGER, status TEXT);
+            CREATE TABLE orders(tenant_id INTEGER, id INTEGER, user_id INTEGER, product_id INTEGER);
+            CREATE TABLE products(tenant_id INTEGER, id INTEGER);
+            INSERT INTO users VALUES (1, 1, 'grade = A'), (1, 2, 'users.grade = A'), (1, 3, 'grade = A');
+            INSERT INTO orders VALUES (1, 10, 1, 10), (1, 11, 2, 10);
+            INSERT INTO products VALUES (1, 10);
+            """
+        )
+        assert sorted(connection.execute(result.sql).fetchall()) == expected
 
 
 @pytest.mark.parametrize("engine", ["sqlite", "duckdb"])

@@ -22,6 +22,7 @@ interface AppContextValue {
   setApiBase: (value: string) => void;
   apiKey: string;
   setApiKey: (value: string) => void;
+  saveApiConnection: (base: string, key: string) => boolean;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -42,7 +43,10 @@ function readHistory(): HistoryItem[] {
 }
 
 export function AppProvider({ children }: { children: ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>(() => (safeGetItem("sdm.theme") as Theme) || "dark");
+  const [theme, setThemeState] = useState<Theme>(() => {
+    const stored = safeGetItem("sdm.theme");
+    return stored === "light" || stored === "dark" ? stored : "dark";
+  });
   const [history, setHistory] = useState<HistoryItem[]>(readHistory);
   const [apiBase, setApiBaseState] = useState(() => safeGetItem("sdm.apiBase") || "");
   const [apiKey, setApiKeyState] = useState(() => safeGetItem("sdm.apiKey") || "");
@@ -50,8 +54,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => { document.documentElement.dataset.theme = theme; safeSetItem("sdm.theme", theme); }, [theme]);
   useEffect(() => { safeSetJson(HISTORY_STORAGE_KEY, normalizeHistory(history)); }, [history]);
   const setTheme = useCallback((value: Theme) => setThemeState(value), []);
-  const setApiBase = useCallback((value: string) => { setApiBaseState(value); safeSetItem("sdm.apiBase", value); }, []);
-  const setApiKey = useCallback((value: string) => { setApiKeyState(value); safeSetItem("sdm.apiKey", value); }, []);
+  const setApiBase = useCallback((value: string) => setApiBaseState(value), []);
+  const setApiKey = useCallback((value: string) => setApiKeyState(value), []);
+  const saveApiConnection = useCallback((base: string, key: string) => {
+    const previousBase = safeGetItem("sdm.apiBase");
+    const previousKey = safeGetItem("sdm.apiKey");
+    if (!safeSetItem("sdm.apiBase", base) || !safeSetItem("sdm.apiKey", key)) {
+      if (previousBase === null) safeRemoveItem("sdm.apiBase");
+      else safeSetItem("sdm.apiBase", previousBase);
+      if (previousKey === null) safeRemoveItem("sdm.apiKey");
+      else safeSetItem("sdm.apiKey", previousKey);
+      return false;
+    }
+    setApiBaseState(base);
+    setApiKeyState(key);
+    return true;
+  }, []);
   const addHistory = useCallback((item: Omit<HistoryItem, "id" | "createdAt">) => {
     const id = crypto.randomUUID?.() || `history-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     setHistory((items) => normalizeHistory([{ ...item, id, createdAt: new Date().toISOString() }, ...items]));
@@ -59,7 +77,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const removeHistory = useCallback((id: string) => setHistory((items) => items.filter((item) => item.id !== id)), []);
   const toggleFavorite = useCallback((id: string) => setHistory((items) => items.map((item) => item.id === id ? { ...item, favorite: !item.favorite } : item)), []);
   const clearHistory = useCallback(() => { setHistory([]); safeRemoveItem(HISTORY_STORAGE_KEY); }, []);
-  const value = useMemo(() => ({ theme, setTheme, history, addHistory, removeHistory, toggleFavorite, clearHistory, apiBase, setApiBase, apiKey, setApiKey }), [theme, setTheme, history, addHistory, removeHistory, toggleFavorite, clearHistory, apiBase, setApiBase, apiKey, setApiKey]);
+  const value = useMemo(() => ({ theme, setTheme, history, addHistory, removeHistory, toggleFavorite, clearHistory, apiBase, setApiBase, apiKey, setApiKey, saveApiConnection }), [theme, setTheme, history, addHistory, removeHistory, toggleFavorite, clearHistory, apiBase, setApiBase, apiKey, setApiKey, saveApiConnection]);
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
 

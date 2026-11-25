@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Verify that Tier A semantic tests did not silently skip in CI."""
 
 from __future__ import annotations
@@ -7,7 +6,6 @@ import argparse
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
-
 
 TIER_A_MODULE_MARKERS = (
     "test_d3_date_runtime.py",
@@ -54,9 +52,7 @@ def _is_allowed_skip(module: str, reason: str, *, ci: bool) -> bool:
         )
     ):
         return True
-    if not ci and any(marker in reason for marker in LOCAL_POSTGRES_SKIP_MARKERS):
-        return True
-    return False
+    return not ci and any(marker in reason for marker in LOCAL_POSTGRES_SKIP_MARKERS)
 
 
 def find_violations(junit_path: Path, *, ci: bool = False) -> list[str]:

@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from contextvars import ContextVar
 from dataclasses import dataclass
 
@@ -22,6 +23,7 @@ _ERROR_REASONS = frozenset({
 _VALIDATING_LLM_SQL = ContextVar("validating_llm_sql", default=False)
 _SQLGLOT_LOGGER = logging.getLogger("sqlglot")
 _SQL_FENCE = re.compile(r"```(?:sql)?[ \t]*\r?\n(.*?)\r?\n?```", re.IGNORECASE | re.DOTALL)
+MAX_LLM_RESPONSE_BYTES = 1_048_576
 
 
 class LLMError(Exception):
@@ -174,6 +176,7 @@ class LLMN2SQLClient:
                 },
             ],
         }
+        started = time.monotonic()
         try:
             async with httpx.AsyncClient(
                 timeout=configured.nl2sql_llm_timeout,
@@ -183,6 +186,8 @@ class LLMN2SQLClient:
                 response = await client.post(
                     f"{configured.nl2sql_llm_base_url}/chat/completions", headers=headers, json=payload,
                 )
+                if time.monotonic() - started > configured.nl2sql_llm_timeout:
+                    raise LLMError("timeout")
         except httpx.TimeoutException:
             raise LLMError("timeout") from None
         except (httpx.HTTPError, ValueError):
@@ -193,6 +198,8 @@ class LLMN2SQLClient:
             raise LLMError("http_5xx")
         if not 200 <= response.status_code < 300:
             raise LLMError("http_error")
+        if len(response.content) > MAX_LLM_RESPONSE_BYTES:
+            raise LLMError("invalid_response")
         try:
             body = response.json()
             choices = body["choices"]

@@ -130,6 +130,17 @@ class TestDuckDBExistsValues:
 
 
 class TestDuckDBTranspiledRuntimeEquivalence:
+    def test_mysql_concat_preserves_null_and_number_coercion(self, conn, transpiler):
+        source_sql = "SELECT CONCAT(name, ':', id) FROM employees ORDER BY id"
+        result = transpiler.transpile(source_sql, "mysql", "duckdb", pretty=False)
+
+        assert result.success, result.error
+        assert result.target_sql is not None
+        assert conn.execute(result.target_sql).fetchall() == [
+            ("Alice:1",), ("Bob:2",), ("Carol:3",), ("Dave:4",),
+            ("Eve:5",), ("Frank:6",), (None,),
+        ]
+
     """Transpile source→duckdb and execute BOTH sides on DuckDB
     (Tier A when duckdb is the target; Tier B for other targets)."""
 
@@ -210,6 +221,15 @@ class TestDuckDBTranspiledRuntimeEquivalence:
         # normalized (comma-split, sorted) form.
         value = rows[0][0]
         assert set(str(value).split(",")) == {"Alice", "Bob", "Carol", "Eve", "Frank"}
+
+    def test_postgres_integer_division_preserves_duckdb_result(self, conn, transpiler):
+        result = transpiler.transpile(
+            "SELECT 3 / 4 AS quotient", "postgres", "duckdb", pretty=False, validate=True
+        )
+        assert result.success, result.error
+        rows, error = execute_or_skip(conn, result.target_sql)
+        assert error is None, error
+        assert rows == [(0,)]
 
 
 class TestDuckDBDateTimeFunctions:

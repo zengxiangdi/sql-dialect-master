@@ -30,7 +30,7 @@ export interface ConvertResponse {
   compatibility_notes: string[];
   transformations: string[];
   warnings: string[];
-  target_validation_state: "target_valid" | "generic_only" | "invalid";
+  target_validation_state: "target_valid" | "generic_only" | "invalid" | "not_checked";
   timestamp?: string;
 }
 
@@ -100,7 +100,7 @@ export interface ParseResponse {
     tables?: Array<{ name: string; alias?: string | null; schema?: string | null; catalog?: string | null }>;
     columns?: Array<{ name: string; table?: string | null; alias?: string | null }>;
     functions?: Array<{ name: string }>;
-    joins?: Array<{ type: string; table: string; on_condition?: string | null }>;
+    joins?: Array<{ type: string; table: string; on_condition?: string | null; using_columns?: string[] }>;
     has_cte?: boolean;
     has_window?: boolean;
     has_aggregation?: boolean;

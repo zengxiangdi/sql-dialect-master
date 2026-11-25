@@ -120,6 +120,26 @@ def test_parser_deduplicates_repeated_tables_columns_and_functions() -> None:
     ]
 
 
+def test_parser_preserves_same_names_across_schema_and_union_scopes() -> None:
+    result = SQLParser("postgres").parse(
+        "SELECT id FROM reporting.orders UNION ALL SELECT id FROM billing.orders"
+    )
+    assert result.success is True, result.error
+    assert [(table["schema"], table["name"]) for table in result.tables] == [
+        ("reporting", "orders"),
+        ("billing", "orders"),
+    ]
+    assert len(result.columns) == 2
+
+
+def test_parser_exposes_using_join_columns() -> None:
+    result = SQLParser("postgres").parse("SELECT * FROM users JOIN orders USING (id)")
+    assert result.success is True, result.error
+    assert result.joins == [
+        {"type": "INNER", "table": "orders", "on_condition": None, "using_columns": ["id"]}
+    ]
+
+
 def test_join_extraction_covers_types_and_on_conditions() -> None:
     result = SQLParser("postgres").parse(
         "SELECT * FROM users u CROSS JOIN audit a "

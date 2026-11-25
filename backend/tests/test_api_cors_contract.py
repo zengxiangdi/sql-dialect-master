@@ -61,6 +61,23 @@ def test_gzipped_error_keeps_the_same_machine_readable_contract() -> None:
     assert response.headers.get("Content-Encoding") is None
 
 
+def test_early_errors_keep_cors_headers_for_allowed_origins(monkeypatch) -> None:
+    headers = {"Origin": ORIGIN}
+    monkeypatch.setattr("backend.api.main.rate_limiter.is_allowed", lambda _client: (False, 0, 17))
+    limited = client.get("/api/dialects", headers=headers)
+    assert limited.status_code == 429
+    assert limited.headers["Access-Control-Allow-Origin"] == ORIGIN
+    monkeypatch.undo()
+
+    oversized = client.post(
+        "/api/convert",
+        json={"sql": "x" * (512 * 1024), "source_dialect": "mysql", "target_dialect": "postgres"},
+        headers=headers,
+    )
+    assert oversized.status_code == 413
+    assert oversized.headers["Access-Control-Allow-Origin"] == ORIGIN
+
+
 def test_cors_preflight_does_not_consume_business_rate_limit() -> None:
     local_app = FastAPI()
     local_app.add_middleware(

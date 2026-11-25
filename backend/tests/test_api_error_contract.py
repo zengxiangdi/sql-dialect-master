@@ -3,9 +3,19 @@
 from fastapi.testclient import TestClient
 
 from backend.api.main import app
+from backend.api.metrics import HTTP_REQUESTS
 from backend.core.exceptions import TranspileError
 
 client = TestClient(app, raise_server_exceptions=False)
+
+
+def _server_error_metric_total() -> float:
+    return sum(
+        sample.value
+        for metric in HTTP_REQUESTS.collect()
+        for sample in metric.samples
+        if sample.name.endswith("_total") and sample.labels.get("status_class") == "5xx"
+    )
 
 
 def test_unhandled_exception_returns_generic_internal_error(monkeypatch):
@@ -16,6 +26,7 @@ def test_unhandled_exception_returns_generic_internal_error(monkeypatch):
 
     monkeypatch.setattr("backend.api.main.transpiler.transpile", explode)
 
+    before = _server_error_metric_total()
     response = client.post(
         "/api/convert",
         json={
@@ -33,6 +44,8 @@ def test_unhandled_exception_returns_generic_internal_error(monkeypatch):
     assert data["error"]["message"] == "Internal server error"
     assert "secret database password" not in response.text
     assert data["request_id"] == "12345678-1234-4123-8123-123456789abc"
+    assert response.headers["X-Request-ID"] == "12345678-1234-4123-8123-123456789abc"
+    assert _server_error_metric_total() == before + 1
 
 
 def test_sdm_exception_returns_stable_error_code(monkeypatch):

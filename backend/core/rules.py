@@ -500,7 +500,7 @@ class TransformRule:
             return self._apply_structured(sql, source_dialect)
 
         pattern = getattr(self, "_compiled_pattern", None)
-        if pattern is None:
+        if pattern is None or getattr(pattern, "pattern", None) != self.pattern:
             pattern = re.compile(self.pattern, re.IGNORECASE)
             self._compiled_pattern = pattern
 
@@ -863,6 +863,7 @@ class RuleEngine:
         # small pair-keyed cache so the hot conversion path does not rescan
         # every rule on every statement.  Mutating operations invalidate it.
         self._applicable_rules_cache: dict[tuple[str, str], list[TransformRule]] = {}
+        self._applicable_rules_cache_state: dict[tuple[str, str], tuple] = {}
         self._sort_rules()
         self._compile_patterns()
 
@@ -929,10 +930,17 @@ class RuleEngine:
             List of applicable rules
         """
         key = (source.strip().lower(), target.strip().lower())
+        state = tuple(
+            (rule.name, rule.source, rule.target, rule.enabled, rule.priority)
+            for rule in self.rules
+        )
         cached = self._applicable_rules_cache.get(key)
+        if cached is not None and self._applicable_rules_cache_state.get(key) != state:
+            cached = None
         if cached is None:
             cached = [r for r in self.rules if r.matches_dialects(*key)]
             self._applicable_rules_cache[key] = cached
+            self._applicable_rules_cache_state[key] = state
         # Preserve the historical fresh-list behavior for callers that may
         # mutate the returned collection without changing engine state.
         return list(cached)

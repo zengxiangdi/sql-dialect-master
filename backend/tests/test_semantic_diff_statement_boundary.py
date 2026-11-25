@@ -14,3 +14,15 @@ def test_semantic_diff_rejects_extra_statements(sql):
 def test_semantic_diff_accepts_single_statement_with_trailing_comment():
     result = diff_sql_ast("SELECT 1; -- comment", "SELECT 1", "postgres", "postgres")
     assert result.semantic_classification in {"equivalent", "structurally_equivalent"}
+
+
+def test_semantic_diff_comments_do_not_change_sql_semantics():
+    result = diff_sql_ast(
+        "SELECT 1 -- source comment",
+        "SELECT 1 -- target comment",
+        "postgres",
+        "postgres",
+    )
+
+    assert result.status == "equivalent"
+    assert result.equivalent is True

@@ -230,7 +230,12 @@ class TestTypesEndpoint:
     def test_get_specific_type(self):
         """Get specific type mapping."""
         response = client.get("/api/types/VARCHAR")
-        assert response.status_code in [200, 404]
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert data["type"] == "VARCHAR"
+        assert data["dialects"]["postgres"] == "VARCHAR(n)"
+        assert data["availability"]["coverage"] == "12/12"
     
     def test_type_mapping_request(self):
         """Map type between dialects."""

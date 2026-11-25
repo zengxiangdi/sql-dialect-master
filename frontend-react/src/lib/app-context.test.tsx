@@ -117,3 +117,25 @@ describe("history favorites in app context", () => {
     expect(screen.getByRole("button", { name: "Toggle favorite SELECT new" })).toHaveAttribute("aria-pressed", "true");
   });
 });
+
+describe("theme storage", () => {
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    localStorage.clear();
+  });
+
+  it("falls back to dark for an invalid persisted theme", () => {
+    localStorage.setItem("sdm.theme", "solarized");
+
+    function ThemeConsumer() {
+      const { theme } = useApp();
+      return <output aria-label="Theme">{theme}</output>;
+    }
+
+    render(<AppProvider><ThemeConsumer /></AppProvider>);
+
+    expect(screen.getByLabelText("Theme")).toHaveTextContent("dark");
+    expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+  });
+});

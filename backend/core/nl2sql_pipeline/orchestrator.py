@@ -17,6 +17,7 @@ did against the legacy class.
 """
 import logging
 import re
+from collections import deque
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from typing import Any
@@ -41,6 +42,7 @@ from ..nl2sql_components.tokenizer import Tokenizer
 from ..nl2sql_pipeline.scanner import mask_nl2sql_non_executable
 from ..nl2sql_schema import (
     SchemaContext,
+    SchemaRelationshipContext,
     SchemaTableContext,
     SchemaValidationError,
     validate_schema_references,
@@ -478,7 +480,7 @@ class PipelineNL2SQLGenerator:
             analysis.get("tables")
             or analysis.get("columns")
             or analysis.get("operations")
-            or extract_boolean_conditions(text_lower)
+            or extract_boolean_conditions(text)
             or recognized_time
         )
         if schema is not None:
@@ -510,7 +512,7 @@ class PipelineNL2SQLGenerator:
                 schema,
             )
 
-        boolean_conditions = extract_boolean_conditions(text_lower)
+        boolean_conditions = extract_boolean_conditions(text)
         has_explicit_null_predicate = any(
             keyword in text_lower
             for keyword in [
@@ -984,7 +986,7 @@ class PipelineNL2SQLGenerator:
         projection_source = text
         if suppress_quantity_token:
             projection_source = re.sub(r"数量", " " * len("数量"), projection_source)
-        projection_text = mask_nl2sql_non_executable(self._schema_projection_text(projection_source))
+        projection_text = self._schema_projection_text(mask_nl2sql_non_executable(projection_source))
         candidates: list[tuple[int, int, str]] = []
         column_names = list(table.columns)
         for column in column_names:
@@ -1056,7 +1058,7 @@ class PipelineNL2SQLGenerator:
 
     @staticmethod
     def _schema_projection_text(text: str) -> str:
-        """Mask explicit ordering clauses so their columns are not projected."""
+        """Mask explicit ordering in executable text so its columns are not projected."""
         match = re.search(
             r"\b(?:order(?:ed)?|sort(?:ed)?)\s+by\b",
             text,
@@ -2274,8 +2276,11 @@ class PipelineNL2SQLGenerator:
         text: str,
         table_hint: str | None,
         schema: SchemaContext,
+        *,
+        whose_spans: tuple[tuple[int, int], ...] = (),
     ) -> tuple[SchemaTableContext, list[dict]]:
-        mentions = self._schema_table_mentions(text, schema)
+        relationship_text = self._schema_mask_spans(text, whose_spans)
+        mentions = self._schema_table_mentions(relationship_text, schema)
         if len(mentions) < 2:
             return self._schema_resolve_table(text, table_hint, schema), []
 
@@ -2285,7 +2290,7 @@ class PipelineNL2SQLGenerator:
                 raise SchemaValidationError("table hint is not a unique schema table")
             subject = subject_candidates[0]
         else:
-            cn_relation = self._cn_relation_table(text.lower())
+            cn_relation = self._cn_relation_table(relationship_text.lower())
             if cn_relation:
                 relation_candidates = schema.table_candidates(cn_relation)
                 subject_candidates_list = [
@@ -2318,17 +2323,19 @@ class PipelineNL2SQLGenerator:
             )
 
         def shortest_path(target: SchemaTableContext) -> list[tuple[SchemaTableContext, str]] | None:
-            queue: list[tuple[SchemaTableContext, list[tuple[SchemaTableContext, str]]]] = [(subject, [])]
+            adjacency: dict[str, list[tuple[SchemaRelationshipContext, str]]] = {}
+            for edge in schema.relationships:
+                left = edge.from_table.casefold()
+                right = edge.to_table.casefold()
+                adjacency.setdefault(left, []).append((edge, right))
+                adjacency.setdefault(right, []).append((edge, left))
+            queue: deque[tuple[SchemaTableContext, list[tuple[SchemaTableContext, str]]]] = deque([(subject, [])])
             candidates: list[list[tuple[SchemaTableContext, str]]] = []
             while queue:
-                current, path = queue.pop(0)
+                current, path = queue.popleft()
                 if len(path) >= 2:
                     continue
-                for edge in schema.relationships:
-                    endpoints = {edge.from_table.casefold(), edge.to_table.casefold()}
-                    if current.key not in endpoints:
-                        continue
-                    next_name = edge.to_table if edge.from_table.casefold() == current.key else edge.from_table
+                for edge, next_name in adjacency.get(current.key, ()):
                     next_candidates = schema.table_candidates(next_name)
                     if len(next_candidates) != 1:
                         continue
@@ -2348,8 +2355,8 @@ class PipelineNL2SQLGenerator:
                 raise SchemaValidationError("schema relationship path is ambiguous")
             return shortest_paths[0]
 
-        relational = self._has_relational_keyword(text.lower())
-        lowered = text.lower()
+        lowered = relationship_text.lower()
+        relational = self._has_relational_keyword(lowered)
         unsupported_outer = (
             re.search(r"\bouter\s+join\b", lowered)
             and not re.search(r"\b(?:left|right)\s+outer\s+join\b", lowered)
@@ -2361,22 +2368,22 @@ class PipelineNL2SQLGenerator:
             )
             or re.search(r"\b(?:left|right|inner)?\s*(?:semi|anti)\s+join\b", lowered)
             or re.search(r"\blateral\s+join\b", lowered)
-            or any(phrase in text for phrase in ("自然连接", "半连接", "反连接", "横向连接"))
+            or any(phrase in relationship_text for phrase in ("自然连接", "半连接", "反连接", "横向连接"))
         )
         if (
             re.search(r"\bfull(?:\s+outer)?\s+join\b", lowered)
             or unsupported_outer
             or re.search(r"\bcross\s+join\b", lowered)
             or unsupported_qualifier
-            or any(phrase in text for phrase in ("全连接", "交叉连接"))
+            or any(phrase in relationship_text for phrase in ("全连接", "交叉连接"))
         ):
             raise SchemaValidationError("unsupported schema-aware join type")
-        join_spec = parse_join_spec(text)
+        join_spec = parse_join_spec(relationship_text)
         if not relational and join_spec is None:
             raise SchemaValidationError("multiple tables lack explicit relationship intent")
         if relational:
             if any(
-                keyword in text.lower()
+                keyword in lowered
                 for keyword in ["without", "not have", "no ", "没有任何", "没有"]
             ):
                 join_type = "NOT EXISTS"
@@ -2664,22 +2671,23 @@ class PipelineNL2SQLGenerator:
                 raise SchemaValidationError("direct relationship does not cover composite identity")
             return subject, (oriented_step(direct[0], subject, target),), group_match.span()
 
-        queue: list[tuple[SchemaTableContext, list[_nl2sql_ir.PathStep]]] = [(subject, [])]
+        adjacency: dict[str, list[tuple[SchemaRelationshipContext, str]]] = {}
+        for edge in schema.relationships:
+            left = edge.from_table.casefold()
+            right = edge.to_table.casefold()
+            adjacency.setdefault(left, []).append((edge, right))
+            adjacency.setdefault(right, []).append((edge, left))
+        queue: deque[tuple[SchemaTableContext, list[_nl2sql_ir.PathStep]]] = deque([(subject, [])])
         paths: list[list[_nl2sql_ir.PathStep]] = []
+        shortest_length: int | None = None
         expansions = 0
         while queue:
-            current, path = queue.pop(0)
+            current, path = queue.popleft()
+            if shortest_length is not None and len(path) >= shortest_length:
+                continue
             if len(path) >= 3:
                 continue
-            for edge in schema.relationships:
-                endpoints = {edge.from_table.casefold(), edge.to_table.casefold()}
-                if current.key not in endpoints:
-                    continue
-                next_name = (
-                    edge.to_table
-                    if edge.from_table.casefold() == current.key
-                    else edge.from_table
-                )
+            for edge, next_name in adjacency.get(current.key, ()):
                 candidates = schema.table_candidates(next_name)
                 if len(candidates) != 1:
                     continue
@@ -2696,8 +2704,10 @@ class PipelineNL2SQLGenerator:
                 next_path = [*path, oriented_step(edge, current, next_table)]
                 if next_table.key == target.key:
                     paths.append(next_path)
+                    shortest_length = len(next_path) if shortest_length is None else shortest_length
                 else:
-                    queue.append((next_table, next_path))
+                    if shortest_length is None or len(next_path) < shortest_length:
+                        queue.append((next_table, next_path))
         if not paths:
             raise SchemaValidationError("multi-hop target path is missing")
         shortest_length = min(len(path) for path in paths)
@@ -2828,7 +2838,9 @@ class PipelineNL2SQLGenerator:
                 start, end = label_resolution[2]
                 metric_text = text_lower[:start] + " " * (end - start) + text_lower[end:]
             else:
-                table_context, joins = self._schema_resolve_joins(text, table_hint, schema)
+                table_context, joins = self._schema_resolve_joins(
+                    text, table_hint, schema, whose_spans=whose_spans,
+                )
                 metric_text = text_lower
             whose_conditions: list[str] = []
             path_conditions: list[_nl2sql_ir.PathCondition] = []
@@ -2890,6 +2902,10 @@ class PipelineNL2SQLGenerator:
             unique_count_intent = bool(unique_count_spans)
             if unique_count_intent:
                 executable_conditions = mask_nl2sql_non_executable(condition_original)
+                if multihop_unique_resolution is not None and re.search(
+                    r"(?<![\w$.])where(?![\w$.])", executable_conditions, re.IGNORECASE,
+                ):
+                    raise SchemaValidationError("path unique count only supports whose predicates")
                 clause_match = re.search(
                     r"\b(?:order(?:ed)?\s+by|sort(?:ed)?\s+by|top\s+\d+|limit\s+\d+|first\s+\d+|only\s+\d+)\b|前\s*\d+|\b\d+\s*(?:条|个|行|rows?)\b",
                     executable_conditions,
@@ -2928,7 +2944,12 @@ class PipelineNL2SQLGenerator:
                     schema,
                 )
             ordinary_conditions = list(conditions)
-            if whose_conditions:
+            subject_conditions: list[str] = []
+            if whose_conditions and any(join.get("relational") for join in joins):
+                subject_conditions = [
+                    f"{table_context.name}.{condition}" for condition in whose_conditions
+                ]
+            elif whose_conditions:
                 conditions = [*conditions, *whose_conditions]
             if physical_chain_resolution is not None:
                 for item in parsed_whose_list:
@@ -3056,7 +3077,8 @@ class PipelineNL2SQLGenerator:
                     )
                 distinct = False
             if any(join.get("path") for join in joins) and (
-                conditions or aggregations or group_by or label_resolution is not None or distinct
+                conditions or subject_conditions or aggregations or group_by
+                or label_resolution is not None or distinct
             ):
                 raise SchemaValidationError(
                     "multi-hop paths cannot be combined with filters or aggregation"
@@ -3192,6 +3214,7 @@ class PipelineNL2SQLGenerator:
                 distinct_count_plan=distinct_count_plan,
                 path_distinct_count_plan=path_distinct_count_plan,
                 aggregate_orderings=aggregate_orderings,
+                subject_conditions=subject_conditions,
             )
             result = self._apply_confidence_policy(NL2SQLResult(
                 success=sql is not None,
@@ -3403,6 +3426,7 @@ class PipelineNL2SQLGenerator:
         distinct_count_plan=None,
         path_distinct_count_plan=None,
         aggregate_orderings=None,
+        subject_conditions=None,
     ) -> tuple:
         """Build SQL statement from extracted components.
 
@@ -3417,6 +3441,7 @@ class PipelineNL2SQLGenerator:
             distinct_count_plan=distinct_count_plan,
             path_distinct_count_plan=path_distinct_count_plan,
             aggregate_orderings=aggregate_orderings,
+            subject_conditions=subject_conditions,
         )
         return _render_sql_impl(ir)
 

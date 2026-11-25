@@ -3,6 +3,7 @@ name: React Frontend
 on:
   push:
     branches: [main, "feat/**", "fix/**", "chore/**"]
+    tags: ["v*.*.*"]
     paths:
       - "frontend-react/**"
       - ".github/workflows/frontend.yml"

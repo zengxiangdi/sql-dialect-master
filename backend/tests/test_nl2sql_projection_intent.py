@@ -113,6 +113,24 @@ def test_schema_projection_ignores_columns_inside_literals(text):
     assert "email" not in result.sql.split("FROM", 1)[0]
 
 
+@pytest.mark.parametrize(
+    ("text", "columns"),
+    [
+        ("/* order by id */ show users email", ["email"]),
+        ("-- order by id\nshow users email", ["email"]),
+        ("show users email /* order by id */ and nickname", ["email", "nickname"]),
+        ("show users 'sort by name' email", ["email"]),
+    ],
+)
+def test_schema_projection_ignores_ordering_in_non_executable_text(text: str, columns: list[str]) -> None:
+    result = generate(text + " order by created_at")
+
+    assert result.success and result.sql is not None, result.explanation
+    tree = sqlglot.parse_one(result.sql, read="postgres")
+    assert [column.name for column in tree.expressions] == columns
+    assert tree.args["order"].expressions[0].this.name == "created_at"
+
+
 def test_schema_projection_supports_qualified_column():
     qualified = SchemaContext.from_mapping({
         "tables": [{"name": "public.users", "columns": [{"name": "email"}]}]

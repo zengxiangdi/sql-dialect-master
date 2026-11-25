@@ -313,6 +313,30 @@ def test_multiple_path_whose_predicates_constrain_count_input():
     assert "条件: 2个" in result.explanation
 
 
+@pytest.mark.parametrize("tail", [
+    "where unsupported_flag is true",
+    "including zero where unsupported_flag is true",
+    "ordered by count desc where unsupported_flag is true",
+])
+def test_path_count_rejects_unparsed_ordinary_where(tail: str) -> None:
+    result = generate(f"count distinct products per user {tail}", twohop_schema())
+
+    assert result.success is False
+    assert result.sql is None
+
+
+def test_path_count_allows_where_in_quoted_value_and_comment() -> None:
+    result = generate(
+        "count distinct products per user whose users.status is 'where' "
+        "/* where unsupported_flag is true */",
+        twohop_schema(),
+    )
+
+    assert result.success, result.explanation
+    assert result.sql is not None
+    assert "users.status = 'where'" in result.sql
+
+
 def test_zero_filtered_out_subject_and_duplicates_runtime_sqlite():
     result = generate(
         "count distinct orders per user whose orders.status is active including zero",

@@ -27,5 +27,5 @@ npm run build
 ```
 
 The production build is emitted to `dist/` and can be served by a static web
-server or CDN. FastAPI remains an API service; configure `SDM_ALLOWED_ORIGINS`
+server or CDN. Configure the static server to fall back unknown paths to `index.html` because the app uses browser history routes such as `/analysis` and `/settings`. FastAPI remains an API service; configure `SDM_ALLOWED_ORIGINS`
 with the deployed React origin.
