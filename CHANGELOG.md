@@ -2,6 +2,55 @@
 
 All notable changes to SQL Dialect Master are documented here.
 
+## [1.15.0] - 2026-11-26
+
+### Fixed
+
+- Preserved arithmetic precedence and associativity in Semantic Diff while
+  normalizing redundant expression parentheses.
+- Scoped `null_semantics` to predicates that actually change, and preserved
+  OFFSET/HAVING/comment evidence.
+- Scoped Oracle `ROWNUM` rewrites across nested predicates, `NOT`, aggregates,
+  windows, and existing FETCH/OFFSET clauses.
+- Made unsupported ClickHouse `ARRAY JOIN` shapes fail closed instead of
+  dropping aliases, bindings, or left-join row semantics.
+- Preserved MySQL `CONCAT` NULL propagation and PostgreSQL integer-division
+  behavior when targeting DuckDB.
+- Preserved quoted AND/OR/parentheses/comment semantics in ordinary NL2SQL
+  WHERE filtering, and kept subject predicates outside EXISTS/NOT EXISTS
+  subqueries.
+- Preserved path-count string literals and multiline values; rejected
+  casefold-conflicting schema columns; refreshed RuleEngine caches after
+  direct rule mutations.
+- Fixed schema projection masking, table-hint ownership, extra-group
+  rejection, and invalid grouped-query rendering.
+- Made parser table/column extraction scope-aware across schemas, UNION and
+  nested SELECTs; exposed `JOIN USING` columns.
+- Added API response models for parse/diff/catalog/type endpoints.
+- Restored CORS headers on early 429/413/422/500 responses, request IDs on
+  generic 500s, and 5xx HTTP metrics.
+- Bounded LLM API deadline and response size; added frontend request snapshot,
+  stale-result isolation, strict success response parsing, atomic settings
+  save, handoff dialect preservation, and command-palette focus trapping.
+- Required all quality workflows before release; added tag-triggered quality
+  checks and local release-workflow verification.
+
+### Quality
+
+- Full-backend Ruff and mypy gates: clean.
+- Full suite: 5181 passed, 38 skipped in the local audit environment.
+- Coverage: 93.63%; all 8 guarded modules >=90%.
+- Strict deprecation warning, Bandit, pip check, and release metadata checks
+  pass.
+
+### Notes
+
+- Native PostgreSQL/MySQL/Oracle/ClickHouse execution, Redis multi-process
+  behavior, GitHub required-check enforcement, and production SPA/API smoke
+  checks still require external environments.
+- No production server, firewall, database, or deployment configuration
+  changes are included.
+
 ## [1.14.1] - 2026-11-22
 
 ### Fixed
