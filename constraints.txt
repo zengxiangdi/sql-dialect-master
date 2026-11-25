@@ -6,7 +6,7 @@ starlette==1.7.0
 # TestClient uses httpx2; runtime LLM requests continue to use httpx below.
 httpx2==2.16.2
 uvicorn==0.52.4
-pydantic==2.13.5
+pydantic==2.14.4
 pydantic-settings==2.15.0
 httpx==0.28.1
 certifi==2026.10.19
