@@ -24,7 +24,7 @@ def _make_transpiler(engine=None):
 def test_unchanged_rules_reuse_rule_version_hash(monkeypatch):
     transpiler = _make_transpiler(RuleEngine([_make_rule()]))
     calls = 0
-    import backend.core.transpiler as transpiler_module
+    from backend.core import transpiler as transpiler_module
 
     original_sha256 = transpiler_module.hashlib.sha256
 
@@ -46,7 +46,7 @@ def test_direct_rule_mutation_invalidates_cached_rule_version(monkeypatch):
     rule = _make_rule()
     transpiler = _make_transpiler(RuleEngine([rule]))
     calls = 0
-    import backend.core.transpiler as transpiler_module
+    from backend.core import transpiler as transpiler_module
 
     original_sha256 = transpiler_module.hashlib.sha256
 
@@ -69,7 +69,7 @@ def test_direct_engine_rules_list_mutation_invalidates_cached_rule_version(monke
     engine = RuleEngine([_make_rule("rule_a")])
     transpiler = _make_transpiler(engine)
     calls = 0
-    import backend.core.transpiler as transpiler_module
+    from backend.core import transpiler as transpiler_module
 
     original_sha256 = transpiler_module.hashlib.sha256
 

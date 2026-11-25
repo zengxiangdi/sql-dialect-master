@@ -311,7 +311,7 @@ class TestEvidenceIdStability:
 
     @staticmethod
     def _all_evidence_id_values() -> list[str]:
-        import backend.core.nl2sql_components.evidence as ev
+        from backend.core.nl2sql_components import evidence as ev
         return [
             getattr(ev, name)
             for name in dir(ev)

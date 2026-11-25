@@ -716,6 +716,7 @@ class SQLTranspiler:
                 target_validation_state="not_checked",
             )
 
+        cache_key: str | None = None
         if self._cache_enabled:
             cache_key = self._cache_key(sql, source, target, pretty, validate)
             cached = self._cache.get(cache_key)
@@ -1026,7 +1027,7 @@ class SQLTranspiler:
                 target_validation_state=target_validation_state,
             )
 
-            if self._cache_enabled:
+            if self._cache_enabled and cache_key is not None:
                 self._cache.set(cache_key, copy.deepcopy(result.to_dict()))
             return result
         except Exception as e:  # noqa: BLE001 - transpiler public error boundary

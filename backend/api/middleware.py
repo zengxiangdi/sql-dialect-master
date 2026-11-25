@@ -226,6 +226,7 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
                 if parsed.variant == uuid.RFC_4122:
                     return candidate
             except (ValueError, AttributeError, TypeError):
+                # Invalid caller-supplied IDs are replaced with a fresh UUID.
                 pass
         return str(uuid.uuid4())
 

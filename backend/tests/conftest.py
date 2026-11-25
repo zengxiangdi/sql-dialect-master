@@ -35,5 +35,6 @@ def reset_global_api_rate_limit_store():
         if isinstance(expirations, dict):
             expirations.clear()
     except ImportError:
+        # Tests that omit the API module do not have a process-wide limiter to reset.
         pass
     yield
