@@ -58,6 +58,46 @@ def test_semantic_diff_preserves_arithmetic_grouping(source: str, target: str, c
 
 
 @pytest.mark.parametrize(
+    "source, target",
+    [
+        ("SELECT (1 + 2)", "SELECT 1 + 2"),
+        ("SELECT id FROM users WHERE (a + 2) > 5", "SELECT id FROM users WHERE a + 2 > 5"),
+        ("SELECT id FROM users WHERE (a = 1)", "SELECT id FROM users WHERE a = 1"),
+    ],
+)
+def test_semantic_diff_removes_redundant_parentheses(source: str, target: str) -> None:
+    result = diff_sql_ast(source, target, source_dialect="postgres", target_dialect="postgres")
+
+    assert result.status == "equivalent"
+    assert result.equivalent is True
+
+
+def test_semantic_diff_does_not_report_projection_null_as_null_semantics() -> None:
+    result = diff_sql_ast(
+        "SELECT NULL FROM users",
+        "SELECT 1 FROM users",
+        source_dialect="postgres",
+        target_dialect="postgres",
+    )
+
+    assert result.status == "different"
+    assert "projection" in result.difference_categories
+    assert "null_semantics" not in result.difference_categories
+
+
+def test_semantic_diff_reports_null_predicate_changes() -> None:
+    result = diff_sql_ast(
+        "SELECT 1 FROM users WHERE value IS NULL",
+        "SELECT 1 FROM users WHERE value = NULL",
+        source_dialect="postgres",
+        target_dialect="postgres",
+    )
+
+    assert result.status == "different"
+    assert "null_semantics" in result.difference_categories
+
+
+@pytest.mark.parametrize(
     "source, target, expected_status, category",
     [
         (

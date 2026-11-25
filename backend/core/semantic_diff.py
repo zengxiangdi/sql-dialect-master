@@ -76,12 +76,80 @@ def _parse_and_normalize(sql: str, dialect: str) -> exp.Expression:
     tree = parse_single_sql(sql, dialect)
     for node in tree.walk():
         node.comments = []
-    # A filter clause is already an expression boundary. Parentheses inside
-    # expressions can affect precedence or associativity when rendered.
-    for clause in tree.find_all(exp.Where, exp.Having, exp.Qualify):
-        while isinstance(clause.this, exp.Paren) and not clause.this.comments:
-            clause.set("this", clause.this.this)
+    _normalize_parentheses(tree)
     return tree
+
+
+_BINARY_PRECEDENCE = {
+    exp.Or: 1,
+    exp.And: 2,
+    exp.EQ: 3,
+    exp.NEQ: 3,
+    exp.GT: 3,
+    exp.GTE: 3,
+    exp.LT: 3,
+    exp.LTE: 3,
+    exp.Is: 3,
+    exp.Like: 3,
+    exp.In: 3,
+    exp.Add: 4,
+    exp.Sub: 4,
+    exp.Mul: 5,
+    exp.Div: 5,
+    exp.Mod: 5,
+}
+
+
+def _expression_precedence(node: exp.Expr) -> int | None:
+    if isinstance(node, exp.Not):
+        return 6
+    for expression_type, precedence in _BINARY_PRECEDENCE.items():
+        if isinstance(node, expression_type):
+            return precedence
+    return None
+
+
+def _can_remove_parentheses(paren: exp.Paren) -> bool:
+    """Return whether a parenthesized expression is redundant in context."""
+    parent = paren.parent
+    if parent is None:
+        return True
+    inner = paren.this
+    if isinstance(parent, (exp.Where, exp.Having, exp.Qualify, exp.Select, exp.Alias)):
+        return True
+
+    parent_precedence = _expression_precedence(parent)
+    inner_precedence = _expression_precedence(inner)
+    if parent_precedence is None or inner_precedence is None:
+        return False
+    if inner_precedence > parent_precedence:
+        return True
+    if isinstance(parent, exp.Not):
+        # SQL comparison and arithmetic operators bind more tightly than NOT,
+        # so ``NOT (a = 1)`` and ``NOT a = 1`` have the same parse. Boolean
+        # AND/OR expressions still require their grouping parentheses.
+        return inner_precedence >= 3
+    if inner_precedence < parent_precedence:
+        return False
+    if isinstance(parent, (exp.Sub, exp.Div, exp.Mod)) and parent.expression is paren:
+        return False
+    return isinstance(parent, (exp.Add, exp.Mul, exp.And, exp.Or))
+
+
+def _normalize_parentheses(tree: exp.Expression) -> None:
+    """Remove redundant parentheses while retaining precedence boundaries."""
+    changed = True
+    while changed:
+        changed = False
+
+        def replace(node: exp.Expression) -> exp.Expression:
+            nonlocal changed
+            if isinstance(node, exp.Paren) and _can_remove_parentheses(node):
+                changed = True
+                return node.this
+            return node
+
+        tree.transform(replace, copy=False)
 
 
 def _canonical_sql(tree: exp.Expression) -> str:
@@ -122,7 +190,7 @@ def _context_sensitive_functions(tree: exp.Expression) -> list[str]:
     return sorted(names)
 
 
-def _fragment_sql(node: exp.Expression | None) -> str:
+def _fragment_sql(node: exp.Expr | None) -> str:
     if node is None:
         return ""
     return node.sql(dialect="", pretty=False).strip()
@@ -130,6 +198,15 @@ def _fragment_sql(node: exp.Expression | None) -> str:
 
 def _list_fragment_sql(nodes) -> str:
     return "\n".join(_fragment_sql(node) for node in nodes)
+
+
+def _contains_null_semantics(*fragments: exp.Expr | None) -> bool:
+    return any(
+        isinstance(node, exp.Null)
+        for fragment in fragments
+        if fragment is not None
+        for node in fragment.walk()
+    )
 
 
 def _difference_categories(
@@ -149,16 +226,18 @@ def _difference_categories(
         target_where = _fragment_sql(target_select.args.get("where"))
         if source_where != target_where:
             categories.add("predicate")
-            if any(
-                isinstance(node, exp.Null)
-                for tree in (source_tree, target_tree)
-                for node in tree.walk()
+            if _contains_null_semantics(
+                source_select.args.get("where"), target_select.args.get("where")
             ):
                 categories.add("null_semantics")
         source_having = _fragment_sql(source_select.args.get("having"))
         target_having = _fragment_sql(target_select.args.get("having"))
         if source_having != target_having:
             categories.update({"predicate", "grouping"})
+            if _contains_null_semantics(
+                source_select.args.get("having"), target_select.args.get("having")
+            ):
+                categories.add("null_semantics")
         if _fragment_sql(source_select.args.get("group")) != _fragment_sql(target_select.args.get("group")):
             categories.add("grouping")
         if _fragment_sql(source_select.args.get("order")) != _fragment_sql(target_select.args.get("order")):
@@ -180,7 +259,9 @@ def _difference_categories(
 
     source_literals = [node for node in source_tree.walk() if type(node).__name__ in _CATEGORY_NODE_NAMES["literal_or_type"]]
     target_literals = [node for node in target_tree.walk() if type(node).__name__ in _CATEGORY_NODE_NAMES["literal_or_type"]]
-    if _list_fragment_sql(source_literals) != _list_fragment_sql(target_literals):
+    if Counter(_fragment_sql(node) for node in source_literals) != Counter(
+        _fragment_sql(node) for node in target_literals
+    ):
         categories.add("literal_or_type")
 
     if functions_differ:
