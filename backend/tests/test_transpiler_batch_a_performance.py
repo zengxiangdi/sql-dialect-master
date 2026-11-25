@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 from collections import Counter
 
-import sqlglot
+from sqlglot import parse, parse_one, transpile
 
 import backend.core.transpiler as transpiler_module
 from backend.core.config import settings
@@ -26,7 +26,7 @@ def _transpiler(monkeypatch) -> SQLTranspiler:
 def test_compatibility_notes_reuse_one_clause_parse(monkeypatch):
     sql = "SELECT id FROM users LIMIT 5"
     calls: list[tuple[str, str | None, list[str]]] = []
-    original = sqlglot.parse_one
+    original = parse_one
 
     def counted_parse_one(statement, read=None, **kwargs):
         calls.append(
@@ -78,8 +78,8 @@ def test_postgres_array_type_evidence_keeps_compatibility_note(monkeypatch):
 def test_mysql_plain_query_skips_ast_normalization(monkeypatch):
     sql = "SELECT id, name FROM users WHERE id > 100"
     calls: Counter[str] = Counter()
-    original = sqlglot.parse_one
-    original_transpile = sqlglot.transpile
+    original = parse_one
+    original_transpile = transpile
 
     def counted_parse_one(statement, read=None, **kwargs):
         calls["parse_one"] += 1
@@ -180,7 +180,7 @@ def test_mysql_ast_normalizations_keep_target_sql_and_notes(monkeypatch):
 
 def test_group_concat_guard_prefilters_non_executable_text(monkeypatch):
     calls = 0
-    original = sqlglot.parse_one
+    original = parse_one
 
     def counted_parse_one(*args, **kwargs):
         nonlocal calls
@@ -201,7 +201,7 @@ def test_group_concat_guard_prefilters_non_executable_text(monkeypatch):
 
 def test_group_concat_dynamic_separator_still_fails_closed(monkeypatch):
     calls = 0
-    original = sqlglot.parse_one
+    original = parse_one
 
     def counted_parse_one(*args, **kwargs):
         nonlocal calls
@@ -217,7 +217,7 @@ def test_group_concat_dynamic_separator_still_fails_closed(monkeypatch):
 
 def test_security_reuses_raw_ast_between_dangerous_and_system_checks(monkeypatch):
     calls = 0
-    original = sqlglot.parse
+    original = parse
 
     def counted_parse(*args, **kwargs):
         nonlocal calls

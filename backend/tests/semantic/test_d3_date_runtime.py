@@ -128,6 +128,7 @@ def duckdb_events():
 
 @pytest.fixture(scope="module")
 def postgres_events():
+    conn = None
     try:
         import psycopg
 
@@ -142,7 +143,8 @@ def postgres_events():
         _make_events_table(conn, "postgres")
         yield conn
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
 
 def _categories(rows):

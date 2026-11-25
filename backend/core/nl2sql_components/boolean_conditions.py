@@ -87,33 +87,6 @@ _CN_SET_PREFIX_PATTERN = re.compile(
     r"(类别|类型|部门|地区|状态)\s*(不在|在)\s*"
 )
 
-_STATUS_PATTERN = re.compile(
-    r"(?:\bstatus\s+|状态\s*(?:为|是|=)\s*)"
-    r"(active|enabled|valid|inactive|disabled|invalid|completed|done|pending|paid|unpaid|"
-    r"有效|无效|已完成|未完成|已支付|未支付)",
-    re.IGNORECASE,
-)
-
-_STATUS_CONDITIONS = {
-    "active": "status = 'active'",
-    "enabled": "status = 'active'",
-    "valid": "status = 'active'",
-    "有效": "status = 'active'",
-    "inactive": "status = 'inactive'",
-    "disabled": "status = 'inactive'",
-    "invalid": "status = 'inactive'",
-    "无效": "status = 'inactive'",
-    "completed": "status = 'completed'",
-    "done": "status = 'completed'",
-    "已完成": "status = 'completed'",
-    "pending": "status = 'pending'",
-    "未完成": "status = 'pending'",
-    "paid": "status = 'paid'",
-    "已支付": "status = 'paid'",
-    "unpaid": "status = 'unpaid'",
-    "未支付": "status = 'unpaid'",
-}
-
 _STATUS_VALUES = {
     "active": "active",
     "inactive": "inactive",

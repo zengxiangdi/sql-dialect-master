@@ -62,3 +62,12 @@ def test_transpile_does_not_reuse_validated_cache_for_unvalidated_mode() -> None
     ) != transpiler._cache_key(
         sql, "postgres", "mysql", pretty=True, validate=False
     )
+
+
+def test_transpile_without_cache_does_not_require_a_cache_key() -> None:
+    transpiler = SQLTranspiler()
+    transpiler._cache_enabled = False
+
+    result = transpiler.transpile("SELECT 1", "postgres", "mysql")
+
+    assert result.success is True

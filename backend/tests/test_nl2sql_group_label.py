@@ -172,7 +172,6 @@ def test_orders_per_user_without_label_table_or_fk_fails_closed(schema):
 
 
 def test_orders_per_user_with_multiple_relationships_fails_closed():
-    schema = schema_context()
     schema = SchemaContext.from_mapping({
         "tables": [
             {"name": "orders", "columns": [{"name": "id"}, {"name": "user_id"}, {"name": "buyer_id"}]},

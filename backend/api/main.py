@@ -427,7 +427,7 @@ class ConvertResponse(BaseModel):
             '"invalid": neither parser accepts the output.'
         ),
     )
-    timestamp: str = Field(default_factory=lambda: _now_iso(), description="Response timestamp")
+    timestamp: str = Field(default_factory=_now_iso, description="Response timestamp")
 
 
 class BatchConvertRequest(BaseModel):
@@ -458,7 +458,7 @@ class BatchConvertResponse(BaseModel):
     count: int
     succeeded: int
     failed: int
-    timestamp: str = Field(default_factory=lambda: _now_iso())
+    timestamp: str = Field(default_factory=_now_iso)
 
 
 SchemaIdentifier = Annotated[
@@ -657,7 +657,7 @@ class ParseResponse(BaseModel):
     success: bool
     dialect: str
     elements: ParseElementsResponse
-    timestamp: str = Field(default_factory=lambda: _now_iso())
+    timestamp: str = Field(default_factory=_now_iso)
 
 
 class SemanticDiffResponse(BaseModel):
@@ -764,7 +764,7 @@ class APIResponse(BaseModel):
     success: bool = Field(..., description="Operation success status")
     data: dict[str, Any] | None = Field(None, description="Response data")
     error: str | None = Field(None, description="Error message if failed")
-    timestamp: str = Field(default_factory=lambda: _now_iso())
+    timestamp: str = Field(default_factory=_now_iso)
 
 # === API Endpoints ===
 

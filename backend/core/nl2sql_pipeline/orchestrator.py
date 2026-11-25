@@ -443,15 +443,6 @@ class PipelineNL2SQLGenerator:
             )
         dialect = normalized_dialect
         table_hint = normalized_table_hint
-        if column_hints_error:
-            return NL2SQLResult(
-                success=False,
-                input_text=text if isinstance(text, str) else "",
-                dialect=dialect,
-                explanation=column_hints_error,
-                confidence=0.0,
-                evidence=GenerationEvidence(),
-            )
         text_lower = text.lower()
 
         log_text = text[:50].replace("\r", "\\r").replace("\n", "\\n")
@@ -1696,7 +1687,6 @@ class PipelineNL2SQLGenerator:
         if position >= len(text):
             raise SchemaValidationError("whose predicate value is missing")
         quote = text[position] if text[position] in "'\"" else None
-        value_end = position
         if quote is not None:
             position += 1
             value_chars: list[str] = []
