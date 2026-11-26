@@ -39,6 +39,30 @@ class PathCondition:
 
 
 @dataclass(frozen=True)
+class AssociationCondition:
+    """One predicate owned by the subject or data side of an association."""
+
+    owner: str
+    table: str
+    column: str
+    operator: str
+    literal: str
+
+
+@dataclass(frozen=True)
+class AssociationCountPlan:
+    """Validated one-hop row association count."""
+
+    subject_table: str
+    data_table: str
+    relationship_pairs: tuple[tuple[str, str], ...]
+    subject_identity: tuple[str, ...]
+    subject_conditions: tuple[AssociationCondition, ...] = ()
+    data_conditions: tuple[AssociationCondition, ...] = ()
+    orderings: tuple["AggregateOrderingTerm", ...] = ()
+
+
+@dataclass(frozen=True)
 class PathOrderingTerm:
     """One typed aggregate or subject-group ordering for a path count."""
 
@@ -95,6 +119,7 @@ class QueryIR:
     orderings: list[tuple[str, str]] | None = None
     distinct_count_plan: DistinctCountPlan | None = None
     path_distinct_count_plan: PathDistinctCountPlan | None = None
+    association_count_plan: AssociationCountPlan | None = None
     aggregate_orderings: tuple[AggregateOrderingTerm, ...] | None = None
     # Subject-owned predicates in relational queries are evaluated outside EXISTS.
     subject_conditions: list[str] = field(default_factory=list)
@@ -115,6 +140,7 @@ def build_ir(
     orderings: list[tuple[str, str]] | None = None,
     distinct_count_plan: DistinctCountPlan | None = None,
     path_distinct_count_plan: PathDistinctCountPlan | None = None,
+    association_count_plan: AssociationCountPlan | None = None,
     aggregate_orderings: tuple[AggregateOrderingTerm, ...] | None = None,
     subject_conditions: list[str] | None = None,
 ) -> QueryIR:
@@ -138,6 +164,7 @@ def build_ir(
         orderings=orderings,
         distinct_count_plan=distinct_count_plan,
         path_distinct_count_plan=path_distinct_count_plan,
+        association_count_plan=association_count_plan,
         aggregate_orderings=aggregate_orderings,
         subject_conditions=subject_conditions if subject_conditions is not None else [],
     )
