@@ -9,11 +9,10 @@ from sqlglot import parse, parse_one, transpile
 
 import backend.core.transpiler as transpiler_module
 from backend.core.config import settings
-from backend.core.transpiler import (
-    SQLTranspiler,
-    _contains_clause_construct,
-    _contains_type_construct,
-)
+
+SQLTranspiler = transpiler_module.SQLTranspiler
+_contains_clause_construct = transpiler_module._contains_clause_construct
+_contains_type_construct = transpiler_module._contains_type_construct
 
 
 def _transpiler(monkeypatch) -> SQLTranspiler:
