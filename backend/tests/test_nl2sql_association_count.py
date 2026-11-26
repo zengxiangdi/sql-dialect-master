@@ -113,6 +113,44 @@ def test_qualified_subject_and_data_filters_are_owned(text: str) -> None:
         assert "WHERE users.status = 'active'" in result.sql
 
 
+def test_multiple_whose_preserves_subject_and_data_conditions() -> None:
+    result = generate(
+        "count orders per user whose users.status is active and orders.status is paid",
+        composite_schema(),
+    )
+
+    assert result.success
+    assert "users.status = 'active'" in result.sql
+    assert "orders.status = 'paid'" in result.sql
+
+
+@pytest.mark.parametrize("text", [
+    "count orders per user top 5",
+    "count orders per user first 5",
+])
+def test_top_without_count_ordering_fails_closed(text: str) -> None:
+    result = generate(text, composite_schema())
+
+    assert result.success is False
+    assert result.sql is None
+
+
+def test_top_with_count_ordering_succeeds() -> None:
+    result = generate("count orders per user ordered by count desc top 5", composite_schema())
+
+    assert result.success
+    assert "ORDER BY COUNT(*) DESC" in result.sql
+
+
+@pytest.mark.parametrize("text", ["每位用户有多少订单", "每个用户有多少订单"])
+def test_chinese_association_phrases_resolve_subject_and_data(text: str) -> None:
+    result = generate(text, composite_schema())
+
+    assert result.success
+    assert "COUNT(*) AS count" in result.sql
+    assert "orders.tenant_id = users.tenant_id" in result.sql
+
+
 def test_ambiguous_unqualified_filter_fails_closed() -> None:
     result = generate("count orders per user where status is paid", composite_schema())
 

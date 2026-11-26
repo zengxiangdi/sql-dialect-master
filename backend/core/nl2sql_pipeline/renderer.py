@@ -316,6 +316,12 @@ def _render_association_count_plan(
         return _render_plan_failure("association relationship pairs are invalid")
     if len(plan.relationship_pairs) != len(plan.subject_identity):
         return _render_plan_failure("association relationship does not cover subject identity")
+    if len({(data.casefold(), subject.casefold()) for data, subject in plan.relationship_pairs}) != len(plan.relationship_pairs):
+        return _render_plan_failure("association relationship pairs are duplicated")
+    if {subject.casefold() for _, subject in plan.relationship_pairs} != {
+        column.casefold() for column in plan.subject_identity
+    }:
+        return _render_plan_failure("association relationship subject columns are incomplete")
 
     def render_conditions(conditions: tuple[AssociationCondition, ...], owner: str) -> list[str] | None:
         allowed_operators = {"=", "!=", "<>", ">", ">=", "<", "<=", "IS", "IS NOT"}
@@ -326,6 +332,9 @@ def _render_association_count_plan(
                 or condition.owner != owner
                 or not _safe_identifier(condition.table)
                 or not _safe_identifier(condition.column)
+                or condition.table.casefold() != (
+                    plan.subject_table.casefold() if owner == "subject" else plan.data_table.casefold()
+                )
                 or condition.operator not in allowed_operators
                 or not isinstance(condition.literal, str)
                 or _PATH_LITERAL.fullmatch(condition.literal) is None
@@ -366,6 +375,9 @@ def _render_association_count_plan(
         if not isinstance(term, AggregateOrderingTerm) or term.direction not in {"ASC", "DESC"}:
             return _render_plan_failure("association ordering is invalid")
         if term.kind == "count" and term.column is None:
+            if any(existing == "count" for existing in ordered_groups):
+                return _render_plan_failure("duplicate association count ordering")
+            ordered_groups.add("count")
             ordering_sql.append(f"COUNT(*) {term.direction}")
         elif term.kind == "group" and term.column is not None:
             key = term.column.casefold()

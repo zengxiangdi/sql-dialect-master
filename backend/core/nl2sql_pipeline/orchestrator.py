@@ -950,11 +950,20 @@ class PipelineNL2SQLGenerator:
             )
             chinese_match = match is not None
         if match is None:
+            match = re.search(
+                r"(?:每个|各个|每位)\s*([\u4e00-\u9fff]{1,8}?)\s*有多少\s*([\u4e00-\u9fff]{1,8})",
+                executable,
+            )
+            chinese_match = match is not None
+        if match is None:
             return None
         if re.search(r"\b(?:distinct|unique)\b", executable, re.IGNORECASE):
             raise SchemaValidationError("association count cannot use distinct semantics")
         if re.search(r"\b(?:sum|avg|min|max)\s*\(", executable, re.IGNORECASE):
             raise SchemaValidationError("association count supports COUNT only")
+        association_whose = parsed_whose_list
+        if len(association_whose) <= 1 and len(re.findall(r"\bwhose\b", executable, re.IGNORECASE)) > 0:
+            association_whose = self._schema_parse_whose_list(text)
         first_label, second_label = match.groups()
         data_label, subject_label = (
             (second_label, first_label) if chinese_match else (first_label, second_label)
@@ -964,11 +973,14 @@ class PipelineNL2SQLGenerator:
             mapped = [mapped for pattern, mapped in self.TABLE_PATTERNS.items() if pattern.casefold() == subject_label.casefold()]
             subject_candidates = tuple({candidate.key: candidate for name in mapped for candidate in schema.table_candidates(name)}.values())
         if len(subject_candidates) != 1:
+            mapped = [mapped for pattern, mapped in self.TABLE_PATTERNS.items() if pattern.casefold() == subject_label.casefold()]
+            subject_candidates = tuple({candidate.key: candidate for name in mapped for candidate in schema.table_candidates(name)}.values())
+        if len(subject_candidates) != 1:
             return None
         subject = subject_candidates[0]
         data_candidates = schema.table_candidates(data_label)
         if len(data_candidates) != 1:
-            mapped = [mapped for pattern, mapped in self.TABLE_PATTERNS.items() if data_label.casefold().startswith(pattern.casefold())]
+            mapped = [mapped for pattern, mapped in self.TABLE_PATTERNS.items() if pattern.casefold() == data_label.casefold()]
             data_candidates = tuple({candidate.key: candidate for name in mapped for candidate in schema.table_candidates(name)}.values())
         if len(data_candidates) != 1:
             return None
@@ -977,7 +989,7 @@ class PipelineNL2SQLGenerator:
             hinted = schema.table_candidates(table_hint)
             if len(hinted) != 1 or hinted[0].key != data.key:
                 raise SchemaValidationError("association table hint conflicts with data table")
-        requires_join = len(subject.primary_key) > 1 or bool(parsed_whose_list)
+        requires_join = len(subject.primary_key) > 1 or bool(association_whose)
         if re.search(r"\bwhere\b", executable, re.IGNORECASE):
             requires_join = True
         if re.search(r"\b(?:order(?:ed)?|sort(?:ed)?)\s+by\s+", executable, re.IGNORECASE):
@@ -1035,7 +1047,7 @@ class PipelineNL2SQLGenerator:
             )
             (subject_conditions if owner.key == subject.key else data_conditions).append(condition)
 
-        for parsed in parsed_whose_list:
+        for parsed in association_whose:
             add_condition(parsed.raw_column, parsed.operator, parsed.literal)
 
         where_match = re.search(r"\bwhere\b", executable, re.IGNORECASE)
@@ -1047,17 +1059,17 @@ class PipelineNL2SQLGenerator:
                 re.IGNORECASE,
             )
             where_end = where_start + boundary.start() if boundary else len(executable)
-            where_executable = executable[where_start:where_end]
+            where_original = text[where_start:where_end]
             condition_pattern = re.compile(
                 r"(?P<column>[A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)\s*"
                 r"(?P<operator>IS\s+NOT|IS|!=|<>|>=|<=|=|>|<)\s*"
                 r"(?P<literal>'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"|-?(?:\d+(?:\.\d*)?|\.\d+)|NULL|[A-Za-z_][A-Za-z0-9_$]*)",
                 re.IGNORECASE,
             )
-            matches = list(condition_pattern.finditer(where_executable))
+            matches = list(condition_pattern.finditer(where_original))
             if not matches:
                 raise SchemaValidationError("association WHERE condition is unsupported")
-            consumed = condition_pattern.sub(" ", where_executable)
+            consumed = condition_pattern.sub(" ", where_original)
             consumed = re.sub(r"\b(?:and)\b|[,，()]", " ", consumed, flags=re.IGNORECASE)
             if consumed.strip():
                 raise SchemaValidationError("association WHERE condition is unsupported")
@@ -1075,6 +1087,9 @@ class PipelineNL2SQLGenerator:
 
         ordering_terms: list[_nl2sql_ir.AggregateOrderingTerm] = []
         order_match = re.search(r"\b(?:order(?:ed)?|sort(?:ed)?)\s+by\s+(.+?)(?=\blimit\b|\btop\s+\d+\b|$)", executable, re.IGNORECASE)
+        top_match = re.search(r"\b(?:top|first|only)\s+\d+\b|前\s*\d+|\b\d+\s*(?:条|个|行|rows?)\b", executable, re.IGNORECASE)
+        if top_match is not None and order_match is None:
+            raise SchemaValidationError("association top requires count ordering")
         if order_match:
             for item in re.split(r"\s*,\s*|\s+and\s+", order_match.group(1), flags=re.IGNORECASE):
                 item_match = re.fullmatch(r"\s*([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)\s*(?:(asc|ascending|desc|descending))?\s*", item, re.IGNORECASE)
