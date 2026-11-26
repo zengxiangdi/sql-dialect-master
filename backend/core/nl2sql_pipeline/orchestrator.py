@@ -1075,7 +1075,9 @@ class PipelineNL2SQLGenerator:
                 raise SchemaValidationError("association WHERE condition is unsupported")
             for match_item in matches:
                 literal = match_item.group("literal")
-                if literal.startswith('"'):
+                if literal.startswith("'") and literal.endswith("'"):
+                    pass
+                elif literal.startswith('"') and literal.endswith('"'):
                     literal = "'" + literal[1:-1].replace("'", "''") + "'"
                 elif literal.upper() != "NULL" and not literal[0].isdigit() and not literal.startswith("-") and not literal.startswith("."):
                     literal = "'" + literal.replace("'", "''") + "'"

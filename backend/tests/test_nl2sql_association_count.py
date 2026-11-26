@@ -113,6 +113,37 @@ def test_qualified_subject_and_data_filters_are_owned(text: str) -> None:
         assert "WHERE users.status = 'active'" in result.sql
 
 
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("count orders per user where users.status = 'active'", "users.status = 'active'"),
+        ("count orders per user where orders.status = 'paid'", "orders.status = 'paid'"),
+        ('count orders per user where users.status = "active"', "users.status = 'active'"),
+        ("count orders per user where users.status is active", "users.status = 'active'"),
+        ("count orders per user where users.status = 'status = x'", "users.status = 'status = x'"),
+        ("count orders per user where users.status = 'O''Reilly'", "users.status = 'O''Reilly'"),
+    ],
+)
+def test_association_where_literal_is_preserved(text: str, expected: str) -> None:
+    result = generate(text, composite_schema())
+
+    assert result.success
+    assert expected in result.sql
+    assert "'''" not in result.sql
+
+
+def test_association_multiple_quoted_where_literals_are_preserved() -> None:
+    result = generate(
+        "count orders per user where users.status = 'active' and orders.status = 'paid'",
+        composite_schema(),
+    )
+
+    assert result.success
+    assert "users.status = 'active'" in result.sql
+    assert "orders.status = 'paid'" in result.sql
+    assert "'''" not in result.sql
+
+
 def test_multiple_whose_preserves_subject_and_data_conditions() -> None:
     result = generate(
         "count orders per user whose users.status is active and orders.status is paid",
