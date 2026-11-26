@@ -1,14 +1,14 @@
 # Core runtime versions retained for the engineering baseline.
 sqlglot==30.33.0
-fastapi==0.141.1
+fastapi==0.165.0
 # Starlette 1.7 fixes TestClient's deprecated AnyIO BlockingPortal alias.
-starlette==1.7.0
+starlette==1.10.0
 # TestClient uses httpx2; runtime LLM requests continue to use httpx below.
 httpx2==2.16.2
 uvicorn==0.52.4
-pydantic==2.13.5
-pydantic-settings==2.15.0
+pydantic==2.14.4
+pydantic-settings==2.16.3
 httpx==0.28.1
-certifi==2026.10.19
+certifi==2026.11.20
 # Fix CVE-2026-114613 in pip-audit's transitive msgpack dependency.
 msgpack==1.2.3
