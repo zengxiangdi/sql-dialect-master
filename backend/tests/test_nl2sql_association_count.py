@@ -82,6 +82,40 @@ def test_single_pk_subject_filter_uses_subject_join() -> None:
     assert "GROUP BY users.id" in result.sql
 
 
+def test_single_pk_data_filter_keeps_legacy_group_label_sql() -> None:
+    result = generate("count orders per user where orders.status = 'paid'", single_schema())
+
+    assert result.success
+    assert "FROM orders" in result.sql
+    assert "WHERE status = 'paid'" in result.sql
+    assert "users" not in result.sql
+
+
+def test_single_pk_count_ordering_keeps_legacy_group_label_sql() -> None:
+    result = generate("count orders per user ordered by count desc", single_schema())
+
+    assert result.success
+    assert "FROM orders" in result.sql
+    assert "ORDER BY count DESC" in result.sql
+    assert "users" not in result.sql
+
+
+def test_single_pk_data_only_ordering_by_user_id_keeps_legacy_path() -> None:
+    result = generate("count orders per user ordered by user_id desc", single_schema())
+
+    assert result.success
+    assert "FROM orders" in result.sql
+    assert "users" not in result.sql
+
+
+def test_single_pk_subject_identity_ordering_uses_association_join() -> None:
+    result = generate("count orders per user ordered by users.id desc", single_schema())
+
+    assert result.success
+    assert "FROM users\nINNER JOIN orders" in result.sql
+    assert "ORDER BY users.id DESC" in result.sql
+
+
 def test_composite_subject_uses_all_relationship_pairs() -> None:
     result = generate("count orders per user", composite_schema())
 
