@@ -212,7 +212,7 @@ sortedcontainers==2.4.0
     # via
     #   cyclonedx-python-lib
     #   hypothesis
-sqlglot==30.18.0
+sqlglot==30.33.0
     # via
     #   -c constraints.txt
     #   -r requirements.in

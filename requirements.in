@@ -2,7 +2,7 @@
 # Recompile with uv pip compile --universal and constraints.txt.
 
 # Runtime
-sqlglot>=30.18.0,<31.0.0
+sqlglot>=30.33.0,<31.0.0
 fastapi>=0.115.0
 starlette>=1.7.0,<2.0.0
 uvicorn>=0.30.0

@@ -5,7 +5,7 @@ description = "SQL Dialect Master - Multi-database SQL conversion engine"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "sqlglot>=30.18.0,<31.0.0",
+    "sqlglot>=30.33.0,<31.0.0",
     "fastapi>=0.115.0",
     "starlette>=1.7.0,<2.0.0",
     "uvicorn>=0.30.0",
