@@ -6,6 +6,7 @@ annotated-types==0.8.0
     # via pydantic
 anyio==4.15.1
     # via
+    #   fastapi
     #   httpx
     #   httpx2
     #   starlette
@@ -19,7 +20,7 @@ build==1.6.1
     # via -r requirements.in
 cachecontrol==0.14.4
     # via pip-audit
-certifi==2026.10.19
+certifi==2026.11.20
     # via
     #   -c constraints.txt
     #   httpcore
@@ -46,7 +47,7 @@ defusedxml==0.7.1
     # via py-serializable
 docutils==0.23
     # via readme-renderer
-fastapi==0.141.1
+fastapi==0.165.0
     # via
     #   -c constraints.txt
     #   -r requirements.in
@@ -119,6 +120,8 @@ mypy-extensions==1.1.0
     # via mypy
 nh3==0.3.7
     # via readme-renderer
+opentelemetry-api==1.45.2
+    # via fastapi
 packageurl-python==0.17.6
     # via cyclonedx-python-lib
 packaging==26.3
@@ -151,15 +154,15 @@ py-serializable==2.1.0
     # via cyclonedx-python-lib
 pycparser==3.11 ; implementation_name != 'PyPy' and platform_machine != 'ppc64le' and platform_machine != 's390x' and platform_python_implementation != 'PyPy' and sys_platform == 'linux'
     # via cffi
-pydantic==2.13.5
+pydantic==2.14.4
     # via
     #   -c constraints.txt
     #   -r requirements.in
     #   fastapi
     #   pydantic-settings
-pydantic-core==2.46.5
+pydantic-core==2.50.5
     # via pydantic
-pydantic-settings==2.15.0
+pydantic-settings==2.16.3
     # via
     #   -c constraints.txt
     #   -r requirements.in
@@ -216,7 +219,7 @@ sqlglot==30.33.0
     # via
     #   -c constraints.txt
     #   -r requirements.in
-starlette==1.7.0
+starlette==1.10.0
     # via
     #   -c constraints.txt
     #   -r requirements.in
@@ -242,8 +245,10 @@ typing-extensions==4.16.0
     #   fastapi
     #   httpx2
     #   mypy
+    #   opentelemetry-api
     #   pydantic
     #   pydantic-core
+    #   pydantic-settings
     #   starlette
     #   typing-inspection
 typing-inspection==0.4.4
