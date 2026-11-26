@@ -423,8 +423,8 @@ def validate_schema_references(
             columns: set[str] | None = {
                 name.casefold() for name in source.outer_columns
             }
-        elif source.union_scopes:
-            columns = source_columns(source.union_scopes[0], visiting)
+        elif source.set_operation_scopes:
+            columns = source_columns(source.set_operation_scopes[0], visiting)
         else:
             columns = set()
             for projection in cast(exp.Query, source.expression).selects:
