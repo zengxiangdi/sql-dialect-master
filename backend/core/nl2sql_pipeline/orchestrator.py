@@ -796,17 +796,13 @@ class PipelineNL2SQLGenerator:
             return None
         label = match.group(1)
         tail = text[match.end():].strip(" \t\r\n,.;，。；")
-        unique_count_phrase = bool(
-            self._schema_unique_count_spans(text, ("count", None))
-        )
         if tail and not (
-            unique_count_phrase
-            and re.match(
+            re.match(
                 r"^(?:where|whose|order(?:ed)?\s+by|sort(?:ed)?\s+by|limit|top\s+\d+)\b",
                 tail,
                 re.IGNORECASE,
             )
-            or unique_count_phrase and self._schema_is_zero_count_suffix(tail)
+            or self._schema_is_zero_count_suffix(tail)
         ):
             raise SchemaValidationError("multiple schema group labels are unsupported")
         return self._schema_resolve_group_label(
@@ -925,6 +921,277 @@ class PipelineNL2SQLGenerator:
         if foreign_keys:
             return data_table, foreign_keys[0], span
         raise SchemaValidationError("schema group label relationship is missing")
+
+    def _schema_resolve_association_count(
+        self,
+        text: str,
+        table_hint: str | None,
+        schema: SchemaContext,
+        parsed_whose_list: list[_SchemaWhoseParsed],
+    ) -> _nl2sql_ir.AssociationCountPlan | None:
+        """Resolve a join-backed row association count when a join is needed."""
+        executable = mask_nl2sql_non_executable(text)
+        match = re.search(
+            r"\b(?:count(?:\s+of)?|number\s+of|how\s+many)\s+"
+            r"([A-Za-z_][A-Za-z0-9_$]*)\s+per\s+([A-Za-z_][A-Za-z0-9_$]*)\b",
+            executable,
+            re.IGNORECASE,
+        )
+        chinese_match = False
+        if match is None:
+            match = re.search(
+                r"(?:统计|计算|数一数)\s*(?:每个|各个|每位)\s*"
+                r"([\u4e00-\u9fff]{1,8}?)\s*的\s*([\u4e00-\u9fff]{1,8})",
+                executable,
+            )
+            chinese_match = match is not None
+        if match is None:
+            match = re.search(
+                r"(?:每个|各个|每位)\s*([\u4e00-\u9fff]{1,8}?)\s*有多少\s*([\u4e00-\u9fff]{1,8})",
+                executable,
+            )
+            chinese_match = match is not None
+        if match is None:
+            return None
+        if re.search(r"\b(?:distinct|unique)\b", executable, re.IGNORECASE):
+            raise SchemaValidationError("association count cannot use distinct semantics")
+        if re.search(r"\b(?:sum|avg|min|max)\s*\(", executable, re.IGNORECASE):
+            raise SchemaValidationError("association count supports COUNT only")
+        association_whose = parsed_whose_list
+        if len(association_whose) <= 1 and len(re.findall(r"\bwhose\b", executable, re.IGNORECASE)) > 0:
+            association_whose = self._schema_parse_whose_list(text)
+        first_label, second_label = match.groups()
+        data_label, subject_label = (
+            (second_label, first_label) if chinese_match else (first_label, second_label)
+        )
+        subject_candidates = schema.table_candidates(subject_label)
+        if len(subject_candidates) != 1:
+            mapped = [mapped for pattern, mapped in self.TABLE_PATTERNS.items() if pattern.casefold() == subject_label.casefold()]
+            subject_candidates = tuple({candidate.key: candidate for name in mapped for candidate in schema.table_candidates(name)}.values())
+        if len(subject_candidates) != 1:
+            return None
+        subject = subject_candidates[0]
+        data_candidates = schema.table_candidates(data_label)
+        if len(data_candidates) != 1:
+            mapped = [mapped for pattern, mapped in self.TABLE_PATTERNS.items() if pattern.casefold() == data_label.casefold()]
+            data_candidates = tuple({candidate.key: candidate for name in mapped for candidate in schema.table_candidates(name)}.values())
+        if len(data_candidates) != 1:
+            return None
+        data = data_candidates[0]
+        if table_hint:
+            hinted = schema.table_candidates(table_hint)
+            if len(hinted) != 1 or hinted[0].key != data.key:
+                raise SchemaValidationError("association table hint conflicts with data table")
+        subject_keys = {column.casefold() for column in subject.primary_key}
+        subject_owned = False
+
+        def owner_for(raw_column: str) -> str:
+            parts = raw_column.split(".")
+            if len(parts) > 1:
+                owners = schema.table_candidates(".".join(parts[:-1]))
+                if len(owners) != 1 or owners[0].key not in {subject.key, data.key}:
+                    raise SchemaValidationError("association predicate owner is invalid")
+                return "subject" if owners[0].key == subject.key else "data"
+            owners = tuple(
+                table for table in (subject, data)
+                if schema.canonical_column(table, parts[0]) is not None
+            )
+            if len(owners) != 1:
+                raise SchemaValidationError("association predicate owner is ambiguous")
+            return "subject" if owners[0].key == subject.key else "data"
+
+        for parsed in association_whose:
+            subject_owned = owner_for(parsed.raw_column) == "subject" or subject_owned
+
+        where_match = re.search(r"\bwhere\b", executable, re.IGNORECASE)
+        if where_match is not None:
+            where_start = where_match.end()
+            boundary = re.search(
+                r"\b(?:group(?:ed)?\s+by|order(?:ed)?\s+by|sort(?:ed)?\s+by|limit|top\s+\d+)\b",
+                executable[where_start:],
+                re.IGNORECASE,
+            )
+            where_end = where_start + boundary.start() if boundary else len(executable)
+            where_original = text[where_start:where_end]
+            condition_pattern = re.compile(
+                r"(?P<column>[A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)\s*"
+                r"(?P<operator>IS\s+NOT|IS|!=|<>|>=|<=|=|>|<)\s*"
+                r"(?P<literal>'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"|-?(?:\d+(?:\.\d*)?|\.\d+)|NULL|[A-Za-z_][A-Za-z0-9_$]*)",
+                re.IGNORECASE,
+            )
+            matches = list(condition_pattern.finditer(where_original))
+            if not matches:
+                raise SchemaValidationError("association WHERE condition is unsupported")
+            consumed = condition_pattern.sub(" ", where_original)
+            consumed = re.sub(r"\b(?:and)\b|[,，()]", " ", consumed, flags=re.IGNORECASE)
+            if consumed.strip():
+                raise SchemaValidationError("association WHERE condition is unsupported")
+            subject_owned = any(owner_for(item.group("column")) == "subject" for item in matches) or subject_owned
+
+        order_match = re.search(
+            r"\b(?:order(?:ed)?|sort(?:ed)?)\s+by\s+(.+?)(?=\blimit\b|\btop\s+\d+\b|$)",
+            executable,
+            re.IGNORECASE,
+        )
+        top_match = re.search(
+            r"\b(?:top|first|only)\s+\d+\b|前\s*\d+|\b\d+\s*(?:条|个|行|rows?)\b",
+            executable,
+            re.IGNORECASE,
+        )
+        count_ordered = False
+        if order_match:
+            for item in re.split(r"\s*,\s*|\s+and\s+", order_match.group(1), flags=re.IGNORECASE):
+                item_match = re.fullmatch(
+                    r"\s*([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)\s*"
+                    r"(?:(?:asc|ascending|desc|descending))?\s*",
+                    item,
+                    re.IGNORECASE,
+                )
+                if item_match is None:
+                    raise SchemaValidationError("association ordering is invalid")
+                raw_column = item_match.group(1)
+                if raw_column.casefold() == "count":
+                    count_ordered = True
+                    continue
+                if owner_for(raw_column) == "subject":
+                    subject_owned = True
+                elif len(raw_column.split(".")) == 1:
+                    # Data-only ordering may remain on the legacy path, but
+                    # an ambiguous owner already fails in owner_for().
+                    continue
+                else:
+                    raise SchemaValidationError("association ordering must use subject identity")
+        if top_match is not None and not count_ordered:
+            raise SchemaValidationError("association top requires count ordering")
+        if len(subject.primary_key) <= 1 and not subject_owned and count_ordered:
+            return None
+        if len(subject.primary_key) <= 1 and not subject_owned and order_match is not None:
+            return None
+
+        if len(subject.primary_key) <= 1 and not subject_owned:
+            return None
+        if not subject.primary_key:
+            raise SchemaValidationError("association subject requires a declared primary key")
+        relationship_candidates = schema.relationship_candidates(data.name, subject.name)
+        if len(relationship_candidates) != 1:
+            raise SchemaValidationError("association relationship is missing or ambiguous")
+        relationship = relationship_candidates[0]
+        if relationship.from_table.casefold() == data.key:
+            pairs = relationship.column_pairs
+        else:
+            pairs = tuple((to_column, from_column) for from_column, to_column in relationship.column_pairs)
+        if {subject_column.casefold() for _, subject_column in pairs} != subject_keys:
+            raise SchemaValidationError("association relationship does not cover subject identity")
+        if len(pairs) != len(subject.primary_key):
+            raise SchemaValidationError("association relationship pair count is incomplete")
+
+        subject_conditions: list[_nl2sql_ir.AssociationCondition] = []
+        data_conditions: list[_nl2sql_ir.AssociationCondition] = []
+
+        def add_condition(
+            raw_column: str, operator: str, literal: str,
+        ) -> None:
+            parts = raw_column.split(".")
+            if len(parts) > 1:
+                owners = schema.table_candidates(".".join(parts[:-1]))
+                if len(owners) != 1 or owners[0].key not in {subject.key, data.key}:
+                    raise SchemaValidationError("association predicate owner is invalid")
+                owner = owners[0]
+            else:
+                owners = tuple(
+                    table for table in (subject, data)
+                    if schema.canonical_column(table, parts[0]) is not None
+                )
+                if len(owners) != 1:
+                    raise SchemaValidationError("association predicate owner is ambiguous")
+                owner = owners[0]
+            canonical = schema.canonical_column(owner, parts[-1])
+            if canonical is None:
+                raise SchemaValidationError("association predicate column is outside schema")
+            normalized_operator = " ".join(operator.split()).upper()
+            if normalized_operator == "IS" and literal.upper() != "NULL":
+                normalized_operator = "="
+            condition = _nl2sql_ir.AssociationCondition(
+                owner="subject" if owner.key == subject.key else "data",
+                table=owner.name,
+                column=canonical,
+                operator=normalized_operator,
+                literal=literal,
+            )
+            (subject_conditions if owner.key == subject.key else data_conditions).append(condition)
+
+        for parsed in association_whose:
+            add_condition(parsed.raw_column, parsed.operator, parsed.literal)
+
+        where_match = re.search(r"\bwhere\b", executable, re.IGNORECASE)
+        if where_match is not None:
+            where_start = where_match.end()
+            boundary = re.search(
+                r"\b(?:group(?:ed)?\s+by|order(?:ed)?\s+by|sort(?:ed)?\s+by|limit|top\s+\d+)\b",
+                executable[where_start:],
+                re.IGNORECASE,
+            )
+            where_end = where_start + boundary.start() if boundary else len(executable)
+            where_original = text[where_start:where_end]
+            condition_pattern = re.compile(
+                r"(?P<column>[A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)\s*"
+                r"(?P<operator>IS\s+NOT|IS|!=|<>|>=|<=|=|>|<)\s*"
+                r"(?P<literal>'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"|-?(?:\d+(?:\.\d*)?|\.\d+)|NULL|[A-Za-z_][A-Za-z0-9_$]*)",
+                re.IGNORECASE,
+            )
+            matches = list(condition_pattern.finditer(where_original))
+            if not matches:
+                raise SchemaValidationError("association WHERE condition is unsupported")
+            consumed = condition_pattern.sub(" ", where_original)
+            consumed = re.sub(r"\b(?:and)\b|[,，()]", " ", consumed, flags=re.IGNORECASE)
+            if consumed.strip():
+                raise SchemaValidationError("association WHERE condition is unsupported")
+            for match_item in matches:
+                literal = match_item.group("literal")
+                if literal.startswith("'") and literal.endswith("'"):
+                    pass
+                elif literal.startswith('"') and literal.endswith('"'):
+                    literal = "'" + literal[1:-1].replace("'", "''") + "'"
+                elif literal.upper() != "NULL" and not literal[0].isdigit() and not literal.startswith("-") and not literal.startswith("."):
+                    literal = "'" + literal.replace("'", "''") + "'"
+                add_condition(
+                    match_item.group("column"),
+                    match_item.group("operator"),
+                    literal,
+                )
+
+        ordering_terms: list[_nl2sql_ir.AggregateOrderingTerm] = []
+        order_match = re.search(r"\b(?:order(?:ed)?|sort(?:ed)?)\s+by\s+(.+?)(?=\blimit\b|\btop\s+\d+\b|$)", executable, re.IGNORECASE)
+        top_match = re.search(r"\b(?:top|first|only)\s+\d+\b|前\s*\d+|\b\d+\s*(?:条|个|行|rows?)\b", executable, re.IGNORECASE)
+        if top_match is not None and order_match is None:
+            raise SchemaValidationError("association top requires count ordering")
+        if order_match:
+            for item in re.split(r"\s*,\s*|\s+and\s+", order_match.group(1), flags=re.IGNORECASE):
+                item_match = re.fullmatch(r"\s*([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)\s*(?:(asc|ascending|desc|descending))?\s*", item, re.IGNORECASE)
+                if item_match is None:
+                    raise SchemaValidationError("association ordering is invalid")
+                raw_column, raw_direction = item_match.groups()
+                direction = "DESC" if raw_direction and raw_direction.casefold().startswith("desc") else "ASC"
+                if raw_column.casefold() == "count":
+                    ordering_terms.append(_nl2sql_ir.AggregateOrderingTerm("count", None, direction))
+                    continue
+                parts = raw_column.split(".")
+                if len(parts) > 1 and ".".join(parts[:-1]).casefold() != subject.key:
+                    raise SchemaValidationError("association ordering must use subject identity")
+                canonical = schema.canonical_column(subject, parts[-1])
+                if canonical is None or canonical.casefold() not in subject_keys:
+                    raise SchemaValidationError("association ordering must use subject identity")
+                ordering_terms.append(_nl2sql_ir.AggregateOrderingTerm("group", canonical, direction))
+
+        return _nl2sql_ir.AssociationCountPlan(
+            subject_table=subject.name,
+            data_table=data.name,
+            relationship_pairs=tuple(pairs),
+            subject_identity=tuple(subject.primary_key),
+            subject_conditions=tuple(subject_conditions),
+            data_conditions=tuple(data_conditions),
+            orderings=tuple(ordering_terms),
+        )
 
     def _schema_resolve_table(
         self,
@@ -1389,6 +1656,20 @@ class PipelineNL2SQLGenerator:
         match = re.search(
             r"\b(?:where|whose|order(?:ed)?\s+by|sort(?:ed)?\s+by|limit)\b",
             text,
+            re.IGNORECASE,
+        )
+        if match is None:
+            return text
+        return text[:match.start()] + " " * (len(text) - match.start())
+
+    @staticmethod
+    def _schema_mask_condition_suffix(text: str) -> str:
+        """Mask executable LIMIT/TOP suffixes before condition extraction."""
+        executable = mask_nl2sql_non_executable(text)
+        match = re.search(
+            r"\b(?:limit|top|first|only)\s+-?\d+\b|"
+            r"前\s*-?\d+|\b-?\d+\s*(?:条|个|行|rows?)\b",
+            executable,
             re.IGNORECASE,
         )
         if match is None:
@@ -2781,12 +3062,18 @@ class PipelineNL2SQLGenerator:
                 else 3
             ):
                 raise SchemaValidationError("too many whose predicates for this shape")
+            association_count_plan = None
+            if not unique_whose_scope:
+                association_count_plan = self._schema_resolve_association_count(
+                    text, table_hint, schema, parsed_whose_list,
+                )
             label_resolution = None
             if (
                 joined_on_resolution is None
                 and physical_chain_resolution is None
                 and joined_with_resolution is None
                 and multihop_unique_resolution is None
+                and association_count_plan is None
             ):
                 label_resolution = self._schema_resolve_english_group_label(executable_text, schema)
                 if label_resolution is None:
@@ -2801,6 +3088,42 @@ class PipelineNL2SQLGenerator:
                     dialect,
                     "The request references tables outside the provided schema.",
                 )
+            if association_count_plan is not None:
+                if (
+                    zero_count_intent
+                    or self._has_relational_keyword(executable_text)
+                    or re.search(r"\b(?:joined\s+with|joined\s+on)\b", executable_text, re.IGNORECASE)
+                    or self._check_distinct(executable_text)
+                ):
+                    raise SchemaValidationError("association count conflicts with another query shape")
+                limit = self._extract_limit(executable_text)
+                sql, explanation, confidence, evidence = self._build_sql_enhanced(
+                    "SELECT",
+                    association_count_plan.subject_table,
+                    ["*"],
+                    [],
+                    [],
+                    [],
+                    None,
+                    limit,
+                    [],
+                    False,
+                    dialect,
+                    association_count_plan=association_count_plan,
+                )
+                result = self._apply_confidence_policy(NL2SQLResult(
+                    success=sql is not None,
+                    input_text=text,
+                    sql=sql,
+                    dialect=dialect,
+                    explanation=explanation,
+                    confidence=confidence,
+                    evidence=evidence,
+                    suggestions=(self._generate_suggestions(text, sql, dialect) if sql is not None else []),
+                    parsed_elements=analysis,
+                ))
+                finalized = self._schema_finalize(result, schema)
+                return finalized
             joined_on_span = None
             joined_with_span = None
             chain_span = None
@@ -2927,6 +3250,9 @@ class PipelineNL2SQLGenerator:
                     condition_text, condition_original, table_context, schema, joins,
                 )
             else:
+                if label_resolution is not None:
+                    condition_text = self._schema_mask_condition_suffix(condition_text)
+                    condition_original = self._schema_mask_condition_suffix(condition_original)
                 conditions = self._schema_resolve_conditions(
                     condition_text,
                     self._extract_conditions_enhanced(condition_text, condition_original),
@@ -3113,17 +3439,38 @@ class PipelineNL2SQLGenerator:
             elif unique_count_intent:
                 pass
             else:
+                if label_resolution is None and association_count_plan is None:
+                    label_resolution = self._schema_resolve_english_group_label(executable_text, schema)
+                    if label_resolution is None:
+                        label_resolution = self._schema_resolve_chinese_group_label(executable_text, schema)
                 chain_has_explicit_ordering = (
                     re.search(r"\b(?:order(?:ed)?|sort(?:ed)?)\s+by\b", group_source_text, re.IGNORECASE)
                     is not None
                     if physical_chain_resolution is not None
                     else self._schema_has_explicit_ordering(group_source_text)
                 )
-                ordering_candidates = (
-                    self._schema_resolve_ordering(group_source_text, table_context, schema)
-                    if chain_has_explicit_ordering
-                    else []
-                )
+                if label_resolution is not None and re.search(
+                    r"\b(?:order(?:ed)?|sort(?:ed)?)\s+by\s+count\b",
+                    group_source_text,
+                    re.IGNORECASE,
+                ):
+                    direction_match = re.search(
+                        r"\bcount\s+(asc|ascending|desc|descending)\b",
+                        group_source_text,
+                        re.IGNORECASE,
+                    )
+                    direction = (
+                        "DESC"
+                        if direction_match and direction_match.group(1).casefold().startswith("desc")
+                        else "ASC"
+                    )
+                    ordering_candidates = [("count", direction)]
+                else:
+                    ordering_candidates = (
+                        self._schema_resolve_ordering(group_source_text, table_context, schema)
+                        if chain_has_explicit_ordering
+                        else []
+                    )
                 if physical_chain_resolution is not None:
                     order_match = re.search(r"\b(?:order(?:ed)?|sort(?:ed)?)\s+by\b(.+?)(?=\blimit\b|\btop\s+\d+\b|$)", group_source_text, re.IGNORECASE)
                     order_clause = order_match.group(1) if order_match else ""
@@ -3415,6 +3762,7 @@ class PipelineNL2SQLGenerator:
         orderings=None,
         distinct_count_plan=None,
         path_distinct_count_plan=None,
+        association_count_plan=None,
         aggregate_orderings=None,
         subject_conditions=None,
     ) -> tuple:
@@ -3430,6 +3778,7 @@ class PipelineNL2SQLGenerator:
             orderings=orderings,
             distinct_count_plan=distinct_count_plan,
             path_distinct_count_plan=path_distinct_count_plan,
+                association_count_plan=association_count_plan,
             aggregate_orderings=aggregate_orderings,
             subject_conditions=subject_conditions,
         )

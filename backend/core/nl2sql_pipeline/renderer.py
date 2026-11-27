@@ -25,6 +25,8 @@ from ..p1_sql_scanner import executable_segments
 from .dialect import apply_dialect_adjustments
 from .ir import (
     AggregateOrderingTerm,
+    AssociationCondition,
+    AssociationCountPlan,
     DistinctCountPlan,
     PathCondition,
     PathDistinctCountPlan,
@@ -288,6 +290,122 @@ def _render_distinct_count_plan(
             + " | ".join(explanation_parts)
         ), 0.0, evidence
     return sql, " | ".join(explanation_parts), evidence.score, evidence
+
+
+def _render_association_count_plan(
+    ir: QueryIR,
+) -> tuple[str | None, str, float, GenerationEvidence]:
+    plan: AssociationCountPlan = ir.association_count_plan  # type: ignore[assignment]
+    if ir.operation != "SELECT":
+        return _render_plan_failure("association count only supports SELECT")
+    if (
+        ir.joins or ir.distinct or ir.aggregations or ir.group_by
+        or ir.distinct_count_plan is not None
+        or ir.path_distinct_count_plan is not None
+        or plan.subject_table.casefold() == plan.data_table.casefold()
+    ):
+        return _render_plan_failure("association count plan is mixed with another query shape")
+    if not _safe_identifier(plan.subject_table) or not _safe_identifier(plan.data_table):
+        return _render_plan_failure("association tables are invalid")
+    if not plan.subject_identity or any(not _safe_identifier(column) for column in plan.subject_identity):
+        return _render_plan_failure("association subject identity is invalid")
+    if not plan.relationship_pairs or any(
+        not _safe_identifier(data_column) or not _safe_identifier(subject_column)
+        for data_column, subject_column in plan.relationship_pairs
+    ):
+        return _render_plan_failure("association relationship pairs are invalid")
+    if len(plan.relationship_pairs) != len(plan.subject_identity):
+        return _render_plan_failure("association relationship does not cover subject identity")
+    if len({(data.casefold(), subject.casefold()) for data, subject in plan.relationship_pairs}) != len(plan.relationship_pairs):
+        return _render_plan_failure("association relationship pairs are duplicated")
+    if {subject.casefold() for _, subject in plan.relationship_pairs} != {
+        column.casefold() for column in plan.subject_identity
+    }:
+        return _render_plan_failure("association relationship subject columns are incomplete")
+
+    def render_conditions(conditions: tuple[AssociationCondition, ...], owner: str) -> list[str] | None:
+        allowed_operators = {"=", "!=", "<>", ">", ">=", "<", "<=", "IS", "IS NOT"}
+        rendered: list[str] = []
+        for condition in conditions:
+            if (
+                not isinstance(condition, AssociationCondition)
+                or condition.owner != owner
+                or not _safe_identifier(condition.table)
+                or not _safe_identifier(condition.column)
+                or condition.table.casefold() != (
+                    plan.subject_table.casefold() if owner == "subject" else plan.data_table.casefold()
+                )
+                or condition.operator not in allowed_operators
+                or not isinstance(condition.literal, str)
+                or _PATH_LITERAL.fullmatch(condition.literal) is None
+            ):
+                return None
+            if condition.literal.upper() == "NULL" and condition.operator not in {"IS", "IS NOT"}:
+                return None
+            if condition.literal.upper() != "NULL" and condition.operator in {"IS", "IS NOT"}:
+                return None
+            rendered.append(f"{condition.table}.{condition.column} {condition.operator} {condition.literal}")
+        return rendered
+
+    subject_conditions = render_conditions(plan.subject_conditions, "subject")
+    data_conditions = render_conditions(plan.data_conditions, "data")
+    if subject_conditions is None or data_conditions is None:
+        return _render_plan_failure("association condition is invalid")
+
+    group_columns = [f"{plan.subject_table}.{column}" for column in plan.subject_identity]
+    projection = [f"{column} AS _group_{index}" for index, column in enumerate(group_columns)]
+    join_conditions = " AND ".join(
+        f"{plan.data_table}.{data_column} = {plan.subject_table}.{subject_column}"
+        for data_column, subject_column in plan.relationship_pairs
+    )
+    sql = (
+        f"SELECT {', '.join([*projection, 'COUNT(*) AS count'])}\n"
+        f"FROM {plan.subject_table}\n"
+        f"INNER JOIN {plan.data_table} ON {join_conditions}"
+    )
+    conditions = [*subject_conditions, *data_conditions]
+    conditions.extend(f"{column} IS NOT NULL" for column in group_columns)
+    if conditions:
+        sql += "\nWHERE " + " AND ".join(conditions)
+    sql += "\nGROUP BY " + ", ".join(group_columns)
+
+    ordering_sql: list[str] = []
+    ordered_groups: set[str] = set()
+    for term in plan.orderings:
+        if not isinstance(term, AggregateOrderingTerm) or term.direction not in {"ASC", "DESC"}:
+            return _render_plan_failure("association ordering is invalid")
+        if term.kind == "count" and term.column is None:
+            if any(existing == "count" for existing in ordered_groups):
+                return _render_plan_failure("duplicate association count ordering")
+            ordered_groups.add("count")
+            ordering_sql.append(f"COUNT(*) {term.direction}")
+        elif term.kind == "group" and term.column is not None:
+            key = term.column.casefold()
+            if key not in {column.casefold() for column in plan.subject_identity}:
+                return _render_plan_failure("association ordering must use subject identity")
+            ordered_groups.add(key)
+            ordering_sql.append(f"{plan.subject_table}.{term.column} {term.direction}")
+        else:
+            return _render_plan_failure("association ordering term is invalid")
+    for column in plan.subject_identity:
+        if column.casefold() not in ordered_groups:
+            ordering_sql.append(f"{plan.subject_table}.{column} ASC")
+    if ordering_sql:
+        sql += "\nORDER BY " + ", ".join(ordering_sql)
+    if ir.limit is not None:
+        sql = add_limit(sql, ir.limit, ir.dialect)
+
+    evidence = ir.evidence
+    evidence.items.append(EvidenceItem("base", "Base confidence for generated SQL", 0.5))
+    evidence.items.append(EvidenceItem(EVIDENCE_AGGREGATION_PRESENT, "Association row count", 0.15))
+    evidence.items.append(EvidenceItem(EVIDENCE_JOIN_KNOWN, "Validated association relationship", 0.1))
+    sql = f"-- Generated for {ir.dialect.upper()}\n{sql}"
+    sql = apply_dialect_adjustments(sql, ir.dialect)
+    parse_adjustment = validate_sql(sql, ir.dialect)
+    if parse_adjustment < 0:
+        return _render_plan_failure("generated association SQL failed validation")
+    evidence.items.append(EvidenceItem(EVIDENCE_PARSE_OK, "Target dialect parser accepted the generated SQL", parse_adjustment))
+    return sql, "聚合: COUNT(*) AS count | 关联: validated association", evidence.score, evidence
 
 
 def _qualify_subject_condition(condition: str, subject_table: str, dialect: str) -> str:
@@ -714,6 +832,10 @@ def render_sql(ir: QueryIR) -> tuple[str | None, str, float, GenerationEvidence]
     Returns the same 4-tuple the legacy ``_build_sql_enhanced`` returns:
     ``(sql, explanation, confidence, evidence)``.
     """
+    if ir.association_count_plan is not None:
+        if ir.path_distinct_count_plan is not None or ir.distinct_count_plan is not None:
+            return _render_plan_failure("association count cannot mix with derived count plans")
+        return _render_association_count_plan(ir)
     if ir.path_distinct_count_plan is not None and ir.distinct_count_plan is not None:
         return _render_plan_failure("multiple derived count plans are unsupported")
     if ir.path_distinct_count_plan is not None:
