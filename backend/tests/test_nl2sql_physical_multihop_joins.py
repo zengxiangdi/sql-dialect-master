@@ -273,6 +273,66 @@ def test_chain_base_qualified_group_and_order_are_allowed():
     assert "ORDER BY users.status" in result.sql
 
 
+def test_chain_joined_qualified_projection_is_canonicalized():
+    result = generate(
+        "show users.status and orders.status joined with orders joined with shipments",
+        schema(),
+    )
+
+    assert result.success
+    assert "SELECT users.status, orders.status" in result.sql
+
+
+def test_chain_joined_qualified_filter_is_owned():
+    result = generate(
+        "show users.status joined with orders joined with shipments where orders.status = 'paid'",
+        schema(),
+    )
+
+    assert result.success is False
+    assert result.sql is None
+
+
+@pytest.mark.parametrize("text", [
+    "show users.status joined with orders joined with shipments group by orders.status",
+    "show users.status joined with orders joined with shipments order by orders.status desc",
+])
+def test_chain_joined_group_and_order_are_fail_closed_until_ownership_completion(text):
+    result = generate(text, schema())
+    assert result.success is False
+    assert result.sql is None
+
+
+@pytest.mark.parametrize("text", [
+    "show users.status joined with orders joined with shipments where orders.status in ('paid', 'pending')",
+    "show users.status joined with orders joined with shipments where shipments.region like 'east%'",
+    "show users.status joined with orders joined with shipments where orders.id between 1 and 10",
+])
+def test_chain_joined_complex_predicates_remain_fail_closed(text):
+    result = generate(text, schema())
+    assert result.success is False
+    assert result.sql is None
+
+
+def test_chain_or_predicate_fails_closed():
+    result = generate(
+        "show users.status joined with orders joined with shipments where users.status = 'active' or users.status = 'pending'",
+        schema(),
+    )
+    assert result.success is False
+    assert result.sql is None
+
+
+@pytest.mark.parametrize("text", [
+    "show count(distinct users.id) joined with orders joined with shipments",
+    "count distinct orders per user joined with orders joined with shipments",
+])
+def test_chain_unique_count_conflicts_fail_closed(text):
+    result = generate(text, schema())
+    assert result.success is False
+    assert result.sql is None
+
+
 def test_chain_base_group_aggregate_order_limit():
     result = generate(
         "show users.id and count joined with orders joined with shipments "
