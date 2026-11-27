@@ -91,6 +91,25 @@ def test_single_pk_data_filter_keeps_legacy_group_label_sql() -> None:
     assert "users" not in result.sql
 
 
+@pytest.mark.parametrize("text", [
+    "count orders per user where orders.status = 'paid' limit 5",
+    "count orders per user where orders.status = 'paid' ordered by count desc limit 5",
+])
+def test_single_pk_structural_suffix_is_not_a_where_predicate(text: str) -> None:
+    result = generate(text, single_schema())
+
+    assert result.success
+    assert "WHERE status = 'paid'" in result.sql
+    assert "status = 5" not in result.sql
+    assert "LIMIT 5" in result.sql
+
+
+def test_group_label_structural_suffix_does_not_create_extra_condition() -> None:
+    result = generate("count employees per department where employees.status = 'active' limit 5", single_schema())
+
+    assert result.success is False or "status = 5" not in (result.sql or "")
+
+
 def test_single_pk_count_ordering_keeps_legacy_group_label_sql() -> None:
     result = generate("count orders per user ordered by count desc", single_schema())
 

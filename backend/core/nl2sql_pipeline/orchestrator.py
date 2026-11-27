@@ -1662,6 +1662,20 @@ class PipelineNL2SQLGenerator:
             return text
         return text[:match.start()] + " " * (len(text) - match.start())
 
+    @staticmethod
+    def _schema_mask_condition_suffix(text: str) -> str:
+        """Mask executable LIMIT/TOP suffixes before condition extraction."""
+        executable = mask_nl2sql_non_executable(text)
+        match = re.search(
+            r"\b(?:limit|top|first|only)\s+-?\d+\b|"
+            r"前\s*-?\d+|\b-?\d+\s*(?:条|个|行|rows?)\b",
+            executable,
+            re.IGNORECASE,
+        )
+        if match is None:
+            return text
+        return text[:match.start()] + " " * (len(text) - match.start())
+
     def _schema_extract_aggregations(
         self,
         text: str,
@@ -3236,6 +3250,9 @@ class PipelineNL2SQLGenerator:
                     condition_text, condition_original, table_context, schema, joins,
                 )
             else:
+                if label_resolution is not None:
+                    condition_text = self._schema_mask_condition_suffix(condition_text)
+                    condition_original = self._schema_mask_condition_suffix(condition_original)
                 conditions = self._schema_resolve_conditions(
                     condition_text,
                     self._extract_conditions_enhanced(condition_text, condition_original),
