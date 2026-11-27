@@ -1842,6 +1842,8 @@ class PipelineNL2SQLGenerator:
         executable = mask_nl2sql_non_executable(original)
         where = re.search(r"\bwhere\b", executable, re.IGNORECASE)
         if where is None:
+            if re.search(r"\bwhose\b", executable, re.IGNORECASE):
+                return []
             if self._extract_conditions_enhanced(text, original):
                 raise SchemaValidationError("physical chain conditions have no WHERE mapping")
             return []
@@ -1853,7 +1855,24 @@ class PipelineNL2SQLGenerator:
         )
         if boundary is not None:
             end = start + boundary.start()
-        separators = list(re.finditer(r"\band\b|[,，]", executable[start:end], re.IGNORECASE))
+        separators: list[re.Match[str]] = []
+        depth = 0
+        between_pending = False
+        for token in re.finditer(r"\(|\)|\bbetween\b|\band\b|[,，]", executable[start:end], re.IGNORECASE):
+            value = token.group(0).casefold()
+            if value == "(":
+                depth += 1
+            elif value == ")":
+                depth = max(0, depth - 1)
+            elif depth == 0 and value == "between":
+                between_pending = True
+            elif depth == 0 and value == "and":
+                if between_pending:
+                    between_pending = False
+                else:
+                    separators.append(token)
+            elif depth == 0 and value in {",", "，"}:
+                separators.append(token)
         spans: list[tuple[int, int]] = []
         for separator in separators:
             spans.append((start, where.end() + separator.start()))
@@ -1862,7 +1881,7 @@ class PipelineNL2SQLGenerator:
 
         lhs_pattern = re.compile(
             r"\s*([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)\s*"
-            r"(?:IS\s+NOT\b|ISN'T\b|IS\b|NOT\b|NOT\s+IN\b|IN\b|BETWEEN\b|NOT\s+LIKE\b|LIKE\b|!=|<>|>=|<=|=|>|<)",
+            r"(?:IS\s+NOT\b|ISN'T\b|IS\b|NOT\s+IN\b|IN\b|BETWEEN\b|NOT\s+LIKE\b|LIKE\b|!=|<>|>=|<=|=|>|<)",
             re.IGNORECASE,
         )
         conditions: list[str] = []
@@ -1874,22 +1893,50 @@ class PipelineNL2SQLGenerator:
             parts = source_lhs.group(1).split(".")
             owner, canonical = self._schema_chain_resolve_column(parts, chain_tables, schema)
 
-            extracted = self._schema_resolve_conditions(
-                text[start:end],
-                self._extract_conditions_enhanced(text[start:end], original[start:end]),
-                table,
-                schema,
+            source = original[start:end].strip()
+            normalized_source = mask_nl2sql_non_executable(source)
+            condition_lhs = lhs_pattern.match(normalized_source)
+            if condition_lhs is None:
+                raise SchemaValidationError("physical chain WHERE segment cannot be mapped")
+            operator_match = re.match(
+                r"\s*(IS\s+NOT|IS|NOT\s+IN|IN|BETWEEN|NOT\s+LIKE|LIKE|!=|<>|>=|<=|=|>|<)\s*",
+                normalized_source[condition_lhs.end(1):], re.IGNORECASE,
             )
-            if len(extracted) != 1:
-                raise SchemaValidationError("physical chain WHERE segment requires exactly one condition")
-            condition = extracted[0]
-            extracted_original = self._extract_conditions_enhanced(text[start:end], original[start:end])
-            if extracted_original != [condition]:
-                raise SchemaValidationError("physical chain WHERE segment extraction is ambiguous")
-            condition_lhs = lhs_pattern.match(mask_nl2sql_non_executable(condition))
-            if condition_lhs is None or condition_lhs.group(1).casefold() != canonical.casefold():
-                raise SchemaValidationError("physical chain WHERE condition does not match its segment")
-            condition = condition[:condition_lhs.start(1)] + f"{owner.name}.{canonical}" + condition[condition_lhs.end(1):]
+            if operator_match is None:
+                raise SchemaValidationError("physical chain WHERE operator is unsupported")
+            operator = " ".join(operator_match.group(1).split()).upper()
+            if operator not in {"IN", "NOT IN", "BETWEEN", "LIKE", "NOT LIKE"}:
+                extracted = self._extract_conditions_enhanced(
+                    text[start:end], original[start:end],
+                )
+                if len(extracted) != 1:
+                    raise SchemaValidationError("physical chain WHERE segment requires exactly one condition")
+                condition = extracted[0]
+                condition_lhs = lhs_pattern.match(mask_nl2sql_non_executable(condition))
+                if condition_lhs is None or condition_lhs.group(1).casefold() != canonical.casefold():
+                    raise SchemaValidationError("physical chain WHERE condition does not match its segment")
+                condition = condition[:condition_lhs.start(1)] + f"{owner.name}.{canonical}" + condition[condition_lhs.end(1):]
+                conditions.append(condition)
+                continue
+            operator_start = condition_lhs.end(1) + operator_match.start()
+            operator_end = condition_lhs.end(1) + operator_match.end()
+            rhs = source[operator_end:].strip()
+            if not rhs:
+                rhs = source[operator_start + len(operator_match.group(1)):].strip()
+            if re.search(r"\bor\b", mask_nl2sql_non_executable(rhs), re.IGNORECASE):
+                raise SchemaValidationError("physical chain OR predicates are unsupported")
+            if operator in {"IN", "NOT IN"}:
+                if not rhs.startswith("(") or not rhs.endswith(")") or re.search(r"\bselect\b", rhs, re.IGNORECASE):
+                    raise SchemaValidationError("physical chain IN requires scalar literals")
+            elif operator == "BETWEEN":
+                if not re.fullmatch(r".+\s+AND\s+.+", rhs, re.IGNORECASE | re.DOTALL) or re.search(r"[()]", rhs):
+                    raise SchemaValidationError("physical chain BETWEEN requires scalar bounds")
+            elif operator in {"LIKE", "NOT LIKE"}:
+                if not re.fullmatch(r"'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"", rhs):
+                    raise SchemaValidationError("physical chain LIKE requires a string literal")
+            elif re.search(r"\b(?:select|between|like|in)\b|[()]", rhs, re.IGNORECASE):
+                raise SchemaValidationError("physical chain condition expression is unsupported")
+            condition = f"{owner.name}.{canonical} {operator} {rhs}"
             conditions.append(condition)
         return conditions
 
@@ -2001,7 +2048,7 @@ class PipelineNL2SQLGenerator:
             return aggregations
         if len(calls) != len(explicit):
             raise SchemaValidationError("physical chain aggregate references are ambiguous")
-        joined_tables = [schema.table_candidates(join["table"])[0] for join in joins]
+        chain_tables = self._schema_chain_tables(table, joins, schema)
         resolved: list[str] = []
         call_index = 0
         for aggregation in aggregations:
@@ -2018,13 +2065,14 @@ class PipelineNL2SQLGenerator:
             parts = raw_argument.split(".")
             if len(parts) > 1:
                 owners = schema.table_candidates(".".join(parts[:-1]))
-                if len(owners) != 1 or owners[0].key != table.key:
-                    raise SchemaValidationError("physical chain aggregate is not base-owned")
+                if len(owners) != 1 or owners[0].key not in {item.key for item in chain_tables}:
+                    raise SchemaValidationError("physical chain aggregate table is outside chain")
                 owner = owners[0]
             else:
-                owner = table
-                if any(schema.canonical_column(joined, raw_argument) is not None for joined in joined_tables):
+                owners = tuple(item for item in chain_tables if schema.canonical_column(item, raw_argument) is not None)
+                if len(owners) != 1:
                     raise SchemaValidationError("physical chain aggregate column is ambiguous")
+                owner = owners[0]
             canonical = schema.canonical_column(owner, parts[-1])
             if canonical is None:
                 raise SchemaValidationError("physical chain aggregate column is outside base schema")
@@ -3266,7 +3314,15 @@ class PipelineNL2SQLGenerator:
                         column = subject_condition[:-len(f" {item.operator} {item.literal}")].casefold()
                         whose_conditions.append(subject_condition)
                 else:
-                    condition = self._schema_resolve_selected_whose(item, table_context, schema)
+                    if physical_chain_resolution is not None:
+                        owner_context, canonical = self._schema_chain_resolve_column(
+                            item.raw_column.split("."),
+                            self._schema_chain_tables(table_context, joins, schema),
+                            schema,
+                        )
+                        condition = f"{owner_context.name}.{canonical} {item.operator} {item.literal}"
+                    else:
+                        condition = self._schema_resolve_selected_whose(item, table_context, schema)
                     owner = table_context.key
                     column = condition[:-len(f" {item.operator} {item.literal}")].casefold()
                     whose_conditions.append(condition)
@@ -3365,6 +3421,8 @@ class PipelineNL2SQLGenerator:
             elif whose_conditions:
                 conditions = [*conditions, *whose_conditions]
             if physical_chain_resolution is not None:
+                if parsed_whose_list and not ordinary_conditions:
+                    pass
                 for item in parsed_whose_list:
                     whose_owner, whose_column = self._schema_chain_resolve_column(
                         item.raw_column.split("."),
@@ -3372,13 +3430,10 @@ class PipelineNL2SQLGenerator:
                         schema,
                     )
                     item_condition = f"{whose_owner.name}.{whose_column} {item.operator} {item.literal}"
-                    conditions.append(item_condition)
+                    if item_condition not in conditions:
+                        conditions.append(item_condition)
                 conditions = [
-                    self._schema_qualify_base_condition(condition, table_context)
-                    if not condition.split(".", 1)[0].casefold() in {
-                        join["table"].casefold() for join in joins
-                    }
-                    else condition
+                    condition
                     for condition in conditions
                 ]
             parsed = self._parse_text(text_lower, text)
