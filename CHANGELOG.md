@@ -2,6 +2,46 @@
 
 All notable changes to SQL Dialect Master are documented here.
 
+## [1.16.0] - 2026-11-28
+
+### New
+
+- Added schema-aware one-hop association counts, including composite subject
+  identity, reverse relationships, subject/data filter ownership, count
+  ordering, and LIMIT/TOP.
+- Completed INNER physical multi-hop JOIN ownership: joined projections,
+  filters, scalar IN/BETWEEN/LIKE, aggregates, GROUP BY, ORDER BY, DISTINCT,
+  and LIMIT/TOP.
+- Added uniform LEFT multi-hop physical chains with per-join `ON` conditions
+  and base-owned `WHERE` conditions while preserving null extension.
+- Preserved single-PK group-label behavior and kept association count
+  precedence separate from existing count paths.
+
+### Fixed
+
+- Upgraded sqlglot to 30.33.0 and adapted Scope union handling.
+- Upgraded FastAPI, Starlette, Pydantic, pydantic-settings, certifi, and the
+  CodeQL actions to their reviewed versions.
+- Kept projection columns isolated from filter/group/order clauses.
+- Added group/projection consistency validation and canonical
+  `ORDER BY COUNT(*)` rendering.
+- Kept mixed outer joins, multi-hop RIGHT, aliases, multi-hop `SELECT *`, OR
+  precedence, and complex predicate forms fail closed.
+
+### Quality
+
+- Full suite: 5299 passed, 38 skipped in the local audit environment.
+- Coverage: 92.71%; all 8 guarded modules meet the 90% gate.
+- Full-backend Ruff and mypy: clean.
+- Strict deprecation warnings, Bandit, and release metadata checks pass.
+
+### Notes
+
+- Multi-hop RIGHT, aliases, multi-hop `SELECT *`, OR precedence, and complex
+  subquery/expression predicates remain explicit unsupported boundaries.
+- No production server, firewall, database, or deployment configuration
+  changes are included.
+
 ## [1.15.0] - 2026-11-26
 
 ### Fixed
