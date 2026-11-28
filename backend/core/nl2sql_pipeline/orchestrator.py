@@ -1988,7 +1988,15 @@ class PipelineNL2SQLGenerator:
                 owner, canonical = self._schema_chain_resolve_column(hint.split("."), tables, schema)
                 columns.append(f"{owner.name}.{canonical}")
             return columns
-        projection = self._schema_projection_text(mask_nl2sql_non_executable(text))
+        executable = mask_nl2sql_non_executable(text)
+        projection = self._schema_projection_text(executable)
+        boundary = re.search(
+            r"\b(?:where|whose|group(?:ed)?\s+by|order(?:ed)?\s+by|sort(?:ed)?\s+by|limit|top\s+\d+)\b",
+            projection,
+            re.IGNORECASE,
+        )
+        if boundary is not None:
+            projection = projection[:boundary.start()]
         refs: list[tuple[int, str]] = []
         for match in re.finditer(
             r"(?<![\w$])([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)(?![\w$])",

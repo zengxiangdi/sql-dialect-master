@@ -301,6 +301,44 @@ def test_chain_joined_qualified_filter_is_owned():
     assert "WHERE orders.status = 'paid'" in result.sql
 
 
+@pytest.mark.parametrize("predicate, expected", [
+    ("orders.status = 'paid'", "orders.status = 'paid'"),
+    ("orders.id BETWEEN 1 AND 5", "orders.id BETWEEN 1 AND 5"),
+    ("orders.status IN ('paid','pending')", "orders.status IN ('paid','pending')"),
+])
+def test_chain_filter_does_not_pollute_projection(predicate: str, expected: str) -> None:
+    result = generate(
+        f"show users.status joined with orders joined with shipments where {predicate}",
+        schema(),
+    )
+
+    assert result.success
+    assert "SELECT users.status\n" in result.sql
+    assert expected in result.sql
+
+
+def test_chain_like_filter_does_not_pollute_projection() -> None:
+    result = generate(
+        "show users.status joined with orders joined with shipments where orders.status like 'p%'",
+        schema(),
+    )
+
+    assert result.success
+    assert "SELECT users.status\n" in result.sql
+    assert "WHERE orders.status LIKE 'p%'" in result.sql
+
+
+def test_chain_whose_filter_does_not_pollute_projection() -> None:
+    result = generate(
+        "show users.status joined with orders joined with shipments whose shipments.region is east",
+        schema(),
+    )
+
+    assert result.success
+    assert "SELECT users.status\n" in result.sql
+    assert "WHERE shipments.region = 'east'" in result.sql
+
+
 @pytest.mark.parametrize("text", [
     "show users.status joined with orders joined with shipments group by orders.status",
     "show users.status joined with orders joined with shipments order by orders.status desc",
