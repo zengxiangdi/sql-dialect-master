@@ -1925,8 +1925,6 @@ class PipelineNL2SQLGenerator:
             operator_start = condition_lhs.end(1) + operator_match.start()
             operator_end = condition_lhs.end(1) + operator_match.end()
             rhs = source[operator_end:].strip()
-            if not rhs:
-                rhs = source[operator_start + len(operator_match.group(1)):].strip()
             if re.search(r"\bor\b", mask_nl2sql_non_executable(rhs), re.IGNORECASE):
                 raise SchemaValidationError("physical chain OR predicates are unsupported")
             if operator in {"IN", "NOT IN"}:
@@ -1936,7 +1934,13 @@ class PipelineNL2SQLGenerator:
                 if not re.fullmatch(r".+\s+AND\s+.+", rhs, re.IGNORECASE | re.DOTALL) or re.search(r"[()]", rhs):
                     raise SchemaValidationError("physical chain BETWEEN requires scalar bounds")
             elif operator in {"LIKE", "NOT LIKE"}:
-                if not re.fullmatch(r"'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"", rhs):
+                like_rhs = re.match(
+                    r"\s*(?:NOT\s+LIKE|LIKE)\s+(.+)\s*$",
+                    source[operator_start:],
+                    re.IGNORECASE | re.DOTALL,
+                )
+                rhs = like_rhs.group(1).strip() if like_rhs is not None else ""
+                if not re.fullmatch(r"'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"", rhs.strip()):
                     raise SchemaValidationError("physical chain LIKE requires a string literal")
             elif re.search(r"\b(?:select|between|like|in)\b|[()]", rhs, re.IGNORECASE):
                 raise SchemaValidationError("physical chain condition expression is unsupported")

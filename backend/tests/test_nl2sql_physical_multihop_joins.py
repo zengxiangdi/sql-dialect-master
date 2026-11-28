@@ -354,14 +354,34 @@ def test_chain_joined_group_and_order_are_fail_closed_until_ownership_completion
     "show users.status joined with orders joined with shipments where shipments.region like 'east%'",
     "show users.status joined with orders joined with shipments where orders.id between 1 and 10",
 ])
-def test_chain_joined_complex_predicates_remain_fail_closed(text):
+def test_chain_joined_scalar_predicates_are_supported(text):
     result = generate(text, schema())
-    if "LIKE" in text.upper():
-        assert result.success is False
-        assert result.sql is None
-    else:
-        assert result.success
-        assert "WHERE" in result.sql
+    assert result.success, result.explanation
+    assert "WHERE" in result.sql
+
+
+@pytest.mark.parametrize("predicate", [
+    "shipments.region LIKE lower('east%')",
+    "shipments.region LIKE ('east%')",
+])
+def test_chain_like_requires_a_scalar_string_literal(predicate):
+    result = generate(
+        f"show users.status joined with orders joined with shipments where {predicate}",
+        schema(),
+    )
+    assert result.success is False
+    assert result.sql is None
+
+
+def test_chain_like_ignores_clause_words_in_comments():
+    result = generate(
+        "show users.status joined with orders joined with shipments "
+        "where /* IN and order by are comments */ shipments.region like 'east%'",
+        schema(),
+    )
+    assert result.success, result.explanation
+    assert "SELECT users.status\n" in result.sql
+    assert "WHERE shipments.region LIKE 'east%'" in result.sql
 
 
 def test_chain_or_predicate_fails_closed():
