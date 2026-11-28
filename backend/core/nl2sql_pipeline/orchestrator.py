@@ -2926,30 +2926,57 @@ class PipelineNL2SQLGenerator:
         table_hint: str | None,
         schema: SchemaContext,
     ) -> tuple[SchemaTableContext, list[dict], tuple[int, int]] | None:
-        """Resolve an explicit linear INNER ``joined with`` chain."""
+        """Resolve an explicit linear INNER or uniform LEFT join chain."""
         executable = mask_nl2sql_non_executable(text)
-        marker = re.search(r"\bjoined\s+with\b", executable, re.IGNORECASE)
-        if marker is None:
+        edge_pattern = re.compile(
+            r"\b(?:(left|right|inner)\s+)?joined\s+with\s+"
+            r"([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)\b",
+            re.IGNORECASE,
+        )
+        first_edge = edge_pattern.search(executable)
+        if first_edge is None:
             return None
-        chain_tail = executable[marker.end():]
-        table_identifier = r"[A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?"
+        chain_start = first_edge.start()
+        edge_text = (
+            r"\b(?:(left|right|inner)\s+)?joined\s+with\s+"
+            r"([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)\b"
+        )
         chain_match = re.match(
-            rf"\s*({table_identifier}(?:\s+joined\s+with\s+{table_identifier}){{1,2}})",
-            chain_tail,
+            rf"({edge_text}(?:\s+{edge_text}){{1,2}})",
+            executable[chain_start:],
             re.IGNORECASE,
         )
         if chain_match is None:
-            if len(re.findall(r"\bjoined\s+with\b", executable, re.IGNORECASE)) == 1:
+            if len(list(edge_pattern.finditer(executable))) <= 1:
                 return None
             raise SchemaValidationError("physical join chain must contain two or three edges")
-        before = executable[:marker.start()]
+        edge_matches = list(re.finditer(edge_text, chain_match.group(1), re.IGNORECASE))
+        if len(edge_matches) not in {2, 3}:
+            raise SchemaValidationError("physical join chain must contain two or three edges")
+        edge_kinds = [
+            (match.group(1) or "inner").upper()
+            for match in edge_matches
+        ]
+        if len(set(edge_kinds)) != 1:
+            raise SchemaValidationError("physical join chain kinds must be uniform")
+        chain_kind = edge_kinds[0]
+        if chain_kind == "RIGHT":
+            raise SchemaValidationError("multi-hop RIGHT physical chains are unsupported")
+        if chain_kind not in {"INNER", "LEFT"}:
+            raise SchemaValidationError("physical join chain kind is unsupported")
+        if chain_kind == "INNER" and any(match.group(1) for match in edge_matches):
+            raise SchemaValidationError("explicit INNER physical chain syntax is unsupported")
+        tail_start = chain_start + chain_match.end()
+        if edge_pattern.search(executable[tail_start:]) is not None:
+            raise SchemaValidationError("physical join chain must contain two or three edges")
+        before = executable[:chain_start]
         before_mentions = self._schema_table_mentions(before, schema)
-        if re.search(r"\b(?:left|right|full|outer|natural|cross|semi|anti|lateral)\b", before, re.IGNORECASE):
+        if re.search(r"\b(?:full|outer|natural|cross|semi|anti|lateral)\b", executable, re.IGNORECASE):
             raise SchemaValidationError("only INNER physical join chains are supported")
-        raw_chain = chain_match.group(1)
+        if re.search(r"\bas\s+[A-Za-z_][A-Za-z0-9_$]*\b", executable, re.IGNORECASE):
+            raise SchemaValidationError("physical join chain aliases are unsupported")
         names = [
-            name for name in re.findall(table_identifier, raw_chain)
-            if name.casefold() not in {"joined", "with"}
+            match.group(2) for match in edge_matches
         ]
         if not before_mentions:
             raise SchemaValidationError("physical join chain has no base")
@@ -2963,7 +2990,7 @@ class PipelineNL2SQLGenerator:
             raise SchemaValidationError("physical chain base is ambiguous")
         if explicit_bases:
             base = explicit_bases[0]
-        else:
+        elif chain_kind == "INNER":
             predecessors = [
                 candidate
                 for candidate in schema.tables
@@ -2973,16 +3000,18 @@ class PipelineNL2SQLGenerator:
             if len(predecessors) != 1:
                 raise SchemaValidationError("physical chain base is ambiguous")
             base = predecessors[0]
+        else:
+            raise SchemaValidationError("LEFT physical chain requires an explicit base table")
         names.insert(0, base.name)
-        match_start = marker.start()
-        match_end = marker.end() + chain_match.end()
+        match_start = chain_start
+        match_end = tail_start
         if not 3 <= len(names) <= 4:
             raise SchemaValidationError("physical join chain must contain two or three edges")
         chain_name_keys = {name.casefold() for name in names}
         if any(mention.key not in chain_name_keys for mention in before_mentions):
             raise SchemaValidationError("physical chain projection references an extra table")
         tail = executable[match_end:]
-        if re.search(r"\bjoined\s+with\b|\bjoined\s+on\b", tail, re.IGNORECASE):
+        if re.search(r"\bjoined\s+on\b", tail, re.IGNORECASE):
             raise SchemaValidationError("physical join chain is too long or mixed")
         tail_mentions = self._schema_table_mentions(tail, schema)
         chain_keys = set(names)
@@ -3024,14 +3053,17 @@ class PipelineNL2SQLGenerator:
             edges = schema.relationship_candidates(left.name, right.name)
             if len(edges) != 1:
                 raise SchemaValidationError("physical chain relationship is missing or ambiguous")
-            joins.append({
-                "type": "INNER",
+            join = {
+                "type": chain_kind,
                 "table": right.name,
                 "subject": tables[0].name,
                 "condition": orient(edges[0], left, right),
                 "relational": False,
-                "join_spec": JoinSpec(kind="INNER", matched_text="joined with"),
-            })
+                "join_spec": JoinSpec(kind=chain_kind, matched_text="joined with"),
+            }
+            if chain_kind == "LEFT":
+                join["on_conditions"] = []
+            joins.append(join)
         return tables[0], joins, (match_start, match_end)
 
     def _schema_resolve_path_whose(
@@ -3261,7 +3293,12 @@ class PipelineNL2SQLGenerator:
             executable_text = mask_nl2sql_non_executable(text)
             zero_count_intent = self._schema_has_zero_count_intent(text)
             unique_whose_scope = bool(self._schema_unique_count_spans(text, ("count", None)))
-            if unique_whose_scope:
+            physical_chain_requested = re.search(
+                r"\b(?:(?:left|right|inner)\s+)?joined\s+with\b",
+                executable_text,
+                re.IGNORECASE,
+            ) is not None
+            if unique_whose_scope or physical_chain_requested:
                 parsed_whose_list = self._schema_parse_whose_list(text)
             else:
                 parsed_whose = self._schema_parse_whose(text)
@@ -3536,6 +3573,38 @@ class PipelineNL2SQLGenerator:
                     condition
                     for condition in conditions
                 ]
+                if joins and "on_conditions" in joins[0]:
+                    chain_tables = self._schema_chain_tables(table_context, joins, schema)
+                    table_by_key = {item.key: item for item in chain_tables}
+                    joins_by_key = {
+                        join["table"].casefold(): join
+                        for join in joins
+                    }
+                    base_conditions: list[str] = []
+                    for condition in conditions:
+                        owner_match = re.match(
+                            r"\s*([A-Za-z_][A-Za-z0-9_$]*)\.([A-Za-z_][A-Za-z0-9_$]*)\b",
+                            condition,
+                        )
+                        if owner_match is None:
+                            raise SchemaValidationError(
+                                "LEFT physical chain condition owner is unresolved"
+                            )
+                        owner_table = table_by_key.get(owner_match.group(1).casefold())
+                        if owner_table is None:
+                            raise SchemaValidationError(
+                                "LEFT physical chain condition table is outside chain"
+                            )
+                        if owner_table.key == table_context.key:
+                            base_conditions.append(condition)
+                            continue
+                        join = joins_by_key.get(owner_table.key)
+                        if join is None:
+                            raise SchemaValidationError(
+                                "LEFT physical chain condition join is unresolved"
+                            )
+                        join["on_conditions"].append(condition)
+                    conditions = base_conditions
             parsed = self._parse_text(text_lower, text)
             parsed.update(analysis)
             operation = self._detect_operation(text_lower)

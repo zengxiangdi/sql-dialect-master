@@ -21,7 +21,7 @@ from ..nl2sql_components.evidence import (
     EvidenceItem,
     GenerationEvidence,
 )
-from ..p1_sql_scanner import executable_segments
+from ..p1_sql_scanner import executable_segments, mask_non_executable
 from .dialect import apply_dialect_adjustments
 from .ir import (
     AggregateOrderingTerm,
@@ -843,10 +843,47 @@ def render_sql(ir: QueryIR) -> tuple[str | None, str, float, GenerationEvidence]
     if ir.distinct_count_plan is not None:
         return _render_distinct_count_plan(ir)
 
+    outer_chain = any("on_conditions" in join for join in ir.joins)
+    if outer_chain:
+        chain_tables = {ir.table.casefold()}
+        for join in ir.joins:
+            kind = join_sql_kind(join)
+            table_name = join.get("table")
+            on_conditions = join.get("on_conditions")
+            if (
+                join.get("relational")
+                or join.get("path")
+                or kind != "LEFT"
+                or not isinstance(table_name, str)
+                or table_name.casefold() in chain_tables
+                or not isinstance(on_conditions, list)
+                or any(not isinstance(condition, str) or not condition.strip() for condition in on_conditions)
+            ):
+                return _render_plan_failure("LEFT physical chain join entry is invalid")
+            chain_tables.add(table_name.casefold())
+            table_prefix = re.escape(table_name)
+            if any(
+                re.match(
+                    rf"^\s*{table_prefix}\.[A-Za-z_][A-Za-z0-9_$]*\b",
+                    condition,
+                    re.IGNORECASE,
+                ) is None
+                for condition in on_conditions
+            ):
+                return _render_plan_failure("LEFT physical chain ON condition owner is invalid")
+            for condition in on_conditions:
+                executable_condition = mask_non_executable(condition)
+                owners = re.findall(
+                    r"\b([A-Za-z_][A-Za-z0-9_$]*)\.[A-Za-z_][A-Za-z0-9_$]*\b",
+                    executable_condition,
+                )
+                if any(owner.casefold() != table_name.casefold() for owner in owners):
+                    return _render_plan_failure("LEFT physical chain ON condition crosses table owners")
+
     for join in ir.joins:
         if join.get("path"):
             continue
-        if join.get("condition") is None:
+        if not isinstance(join.get("condition"), str) or not join.get("condition", "").strip():
             subject = join.get("subject") or ir.table
             pair_desc = f"{subject} ⟷ {join['table']}"
             explanation = (
@@ -955,7 +992,11 @@ def render_sql(ir: QueryIR) -> tuple[str | None, str, float, GenerationEvidence]
             else:
                 # Physical JOIN — kind comes from the structured JoinSpec
                 # (LEFT/RIGHT/INNER/OUTER), never a first-token guess.
-                sql += f"\n{join_sql_kind(join)} JOIN {join['table']} ON {join['condition']}"
+                on_conditions = join.get("on_conditions", [])
+                on_sql = join["condition"]
+                if on_conditions:
+                    on_sql += " AND " + " AND ".join(on_conditions)
+                sql += f"\n{join_sql_kind(join)} JOIN {join['table']} ON {on_sql}"
                 explanation_parts.append(f"关联: {join['table']}")
                 evidence.items.append(EvidenceItem(
                     EVIDENCE_JOIN_KNOWN,

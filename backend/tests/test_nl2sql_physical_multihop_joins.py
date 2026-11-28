@@ -594,3 +594,209 @@ def test_chain_is_deterministic_and_no_schema_unchanged():
     assert first.sql == second.sql and first.explanation == second.explanation
     legacy = generate("users joined with orders")
     assert legacy.schema_used is False and legacy.success
+
+
+def test_left_chain_preserves_ordered_relationships():
+    result = generate(
+        "show users.status left joined with orders left joined with shipments",
+        schema(),
+    )
+    assert result.success, result.explanation
+    assert "SELECT users.status" in result.sql
+    assert "LEFT JOIN orders ON users.tenant_id = orders.tenant_id AND users.id = orders.user_id" in result.sql
+    assert "LEFT JOIN shipments ON orders.tenant_id = shipments.tenant_id AND orders.id = shipments.order_id" in result.sql
+    assert "INNER JOIN" not in result.sql
+
+
+def test_left_chain_supports_three_edges():
+    result = generate(
+        "show users.status left joined with orders left joined with shipments left joined with products",
+        schema(),
+    )
+    assert result.success, result.explanation
+    assert result.sql.count("LEFT JOIN") == 3
+    assert "LEFT JOIN products" in result.sql
+
+
+def test_left_chain_places_base_filter_in_where_and_joined_filters_in_on():
+    result = generate(
+        "show users.status left joined with orders left joined with shipments "
+        "where users.status = 'active' and orders.status = 'paid' "
+        "and shipments.region like 'east%'",
+        schema(),
+    )
+    assert result.success, result.explanation
+    assert "LEFT JOIN orders ON users.tenant_id = orders.tenant_id AND users.id = orders.user_id AND orders.status = 'paid'" in result.sql
+    assert "LEFT JOIN shipments ON orders.tenant_id = shipments.tenant_id AND orders.id = shipments.order_id AND shipments.region LIKE 'east%'" in result.sql
+    assert "WHERE users.status = 'active'" in result.sql
+    assert "WHERE users.status = 'active' AND orders.status" not in result.sql
+
+
+def test_left_chain_whose_filters_follow_owner_placement():
+    result = generate(
+        "show users.status left joined with orders left joined with shipments "
+        "whose users.status is active and orders.status is paid",
+        schema(),
+    )
+    assert result.success, result.explanation
+    assert "orders.status = 'paid'" in result.sql.split("LEFT JOIN orders ON", 1)[1].split("LEFT JOIN", 1)[0]
+    assert "WHERE users.status = 'active'" in result.sql
+
+
+def test_left_chain_target_whose_filter_is_on_condition():
+    result = generate(
+        "show users.status left joined with orders left joined with shipments "
+        "whose shipments.region is east",
+        schema(),
+    )
+    assert result.success, result.explanation
+    assert "shipments.region = 'east'" in result.sql.split("LEFT JOIN shipments ON", 1)[1]
+    assert "WHERE" not in result.sql
+
+
+@pytest.mark.parametrize("predicate,fragment", [
+    ("orders.id between 1 and 5", "orders.id BETWEEN 1 and 5"),
+    ("orders.status in ('paid','pending')", "orders.status IN ('paid','pending')"),
+    ("shipments.region like 'east%'", "shipments.region LIKE 'east%'") ,
+])
+def test_left_chain_scalar_filters_are_placed_in_on(predicate, fragment):
+    result = generate(
+        "show users.status left joined with orders left joined with shipments "
+        f"where /* group by and order by are comments */ {predicate}",
+        schema(),
+    )
+    assert result.success, result.explanation
+    assert fragment in result.sql
+    assert "WHERE" not in result.sql
+
+
+def test_left_chain_preserves_subjects_without_matching_rows_in_sqlite():
+    result = generate(
+        "show users.id and orders.id and shipments.id "
+        "left joined with orders left joined with shipments",
+        schema(),
+    )
+    assert result.success, result.explanation
+    connection = sqlite3.connect(":memory:")
+    connection.executescript(
+        "CREATE TABLE users(tenant_id INTEGER,id INTEGER,status TEXT);"
+        "CREATE TABLE orders(tenant_id INTEGER,id INTEGER,user_id INTEGER,status TEXT);"
+        "CREATE TABLE shipments(tenant_id INTEGER,id INTEGER,order_id INTEGER,product_id INTEGER,region TEXT);"
+        "INSERT INTO users VALUES (1,1,'active'),(1,2,'active');"
+        "INSERT INTO orders VALUES (1,10,1,'paid');"
+    )
+    rows = connection.execute(result.sql.split("\n", 1)[1]).fetchall()
+    assert rows == [(1, 10, None), (2, None, None)]
+
+
+def test_left_chain_count_star_and_joined_pk_remain_distinct():
+    count_star = generate(
+        "show users.status and count left joined with orders left joined with shipments "
+        "group by users.status",
+        schema(),
+    )
+    count_orders = generate(
+        "show users.status and count(orders.id) left joined with orders left joined with shipments "
+        "group by users.status",
+        schema(),
+    )
+    assert count_star.success, count_star.explanation
+    assert count_orders.success, count_orders.explanation
+    assert "COUNT(*) AS count" in count_star.sql
+    assert "COUNT(orders.id) AS count" in count_orders.sql
+
+
+def test_left_chain_count_star_and_joined_pk_have_null_extension_semantics():
+    connection = sqlite3.connect(":memory:")
+    connection.executescript(
+        "CREATE TABLE users(tenant_id INTEGER,id INTEGER,status TEXT);"
+        "CREATE TABLE orders(tenant_id INTEGER,id INTEGER,user_id INTEGER,status TEXT);"
+        "CREATE TABLE shipments(tenant_id INTEGER,id INTEGER,order_id INTEGER,product_id INTEGER,region TEXT);"
+        "INSERT INTO users VALUES (1,1,'active'),(1,2,'active');"
+        "INSERT INTO orders VALUES (1,10,1,'paid');"
+    )
+    for expression, expected in [("count", [(1, 1), (2, 1)]), ("count(orders.id)", [(1, 1), (2, 0)])]:
+        result = generate(
+            f"show users.id and {expression} left joined with orders left joined with shipments group by users.id",
+            schema(),
+        )
+        assert result.success, result.explanation
+        rows = connection.execute(result.sql.split("\n", 1)[1]).fetchall()
+        assert rows == expected
+
+
+def test_left_chain_numeric_aggregates_preserve_null_extension():
+    connection = sqlite3.connect(":memory:")
+    connection.executescript(
+        "CREATE TABLE users(tenant_id INTEGER,id INTEGER,status TEXT);"
+        "CREATE TABLE orders(tenant_id INTEGER,id INTEGER,user_id INTEGER,status TEXT);"
+        "CREATE TABLE shipments(tenant_id INTEGER,id INTEGER,order_id INTEGER,product_id INTEGER,region TEXT);"
+        "INSERT INTO users VALUES (1,1,'active'),(1,2,'active');"
+        "INSERT INTO orders VALUES (1,10,1,'paid');"
+    )
+    for function in ("SUM", "AVG", "MIN", "MAX"):
+        result = generate(
+            f"show users.id and {function.lower()}(orders.id) left joined with orders "
+            "left joined with shipments group by users.id",
+            schema(),
+        )
+        assert result.success, result.explanation
+        rows = connection.execute(result.sql.split("\n", 1)[1]).fetchall()
+        assert rows[0][0] == 1 and rows[0][1] == 10
+        assert rows[1][0] == 2 and rows[1][1] is None
+
+
+def test_left_chain_nullable_group_and_order_are_qualified():
+    result = generate(
+        "show users.id and shipments.region and count left joined with orders "
+        "left joined with shipments group by users.id and shipments.region "
+        "order by shipments.region desc",
+        schema(),
+    )
+    assert result.success, result.explanation
+    assert "GROUP BY users.id, shipments.region" in result.sql
+    assert "ORDER BY shipments.region DESC" in result.sql
+
+
+def test_left_chain_distinct_and_limit_boundaries():
+    distinct = generate(
+        "show distinct users.status left joined with orders left joined with shipments",
+        schema(),
+    )
+    star = generate(
+        "show distinct users left joined with orders left joined with shipments",
+        schema(),
+    )
+    limited = generate(
+        "show users.status left joined with orders left joined with shipments limit 2",
+        schema(),
+    )
+    assert distinct.success, distinct.explanation
+    assert "SELECT DISTINCT users.status" in distinct.sql
+    assert star.success is False
+    assert limited.success, limited.explanation
+    assert limited.sql.endswith("LIMIT 2")
+
+
+def test_left_chain_rejects_mixed_kinds_and_unsupported_shapes():
+    for text in [
+        "show users.status left joined with orders joined with shipments",
+        "show users.status left joined with orders right joined with shipments",
+        "show users.status right joined with orders right joined with shipments",
+        "show users.status left joined with orders left joined with shipments left joined with products joined with archives",
+        "show users.status AS u left joined with orders left joined with shipments",
+        "users left joined with orders left joined with shipments",
+    ]:
+        result = generate(text, schema())
+        assert result.success is False
+        assert result.sql is None
+
+
+@pytest.mark.parametrize("dialect", DIALECTS)
+def test_left_chain_sql_parses_in_all_dialects(dialect):
+    result = generate(
+        "show users.status left joined with orders left joined with shipments",
+        schema(), dialect,
+    )
+    assert result.success, result.explanation
+    assert sqlglot.parse_one(result.sql, read=dialect) is not None
