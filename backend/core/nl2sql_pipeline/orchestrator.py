@@ -3552,6 +3552,14 @@ class PipelineNL2SQLGenerator:
                 )
             )
             if physical_chain_resolution is not None:
+                if re.search(r"\b(?:group(?:ed)?\s+by|order(?:ed)?\s+by)\b", group_source_text, re.IGNORECASE):
+                    projection_slice = group_source_text.split("group by", 1)[0].split("grouped by", 1)[0]
+                    projection_slice = re.split(r"\b(?:order(?:ed)?|sort(?:ed)?)\s+by\b", projection_slice, flags=re.IGNORECASE)[0]
+                    explicit_aggregate_projection = bool(re.search(r"\b(?:count|sum|avg|min|max)\s*\(", projection_slice, re.IGNORECASE))
+                    if explicit_aggregate_projection and columns != ["*"]:
+                        projected_non_aggregate = [column for column in columns if not re.search(r"\b(?:count|sum|avg|min|max)\s*\(", column, re.IGNORECASE)]
+                        if any(column not in group_by for column in projected_non_aggregate):
+                            raise SchemaValidationError("physical chain projection must be grouped")
                 group_match = re.search(r"\bgroup(?:ed)?\s+by\b(.+?)(?=\border(?:ed)?\s+by\b|\blimit\b|\btop\s+\d+\b|$)", group_source_text, re.IGNORECASE)
                 group_clause = group_match.group(1) if group_match else ""
                 for column in group_by:
