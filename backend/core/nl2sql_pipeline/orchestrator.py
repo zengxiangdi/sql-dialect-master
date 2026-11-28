@@ -2001,6 +2001,12 @@ class PipelineNL2SQLGenerator:
         )
         if boundary is not None:
             projection = projection[:boundary.start()]
+        projection = re.sub(
+            r"\b(?:count|sum|avg|min|max)\s*\([^()]*\)",
+            lambda match: " " * len(match.group(0)),
+            projection,
+            flags=re.IGNORECASE,
+        )
         refs: list[tuple[int, str]] = []
         for match in re.finditer(
             r"(?<![\w$])([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)(?![\w$])",
@@ -2947,11 +2953,27 @@ class PipelineNL2SQLGenerator:
         ]
         if not before_mentions:
             raise SchemaValidationError("physical join chain has no base")
+        chain_name_keys = {name.casefold() for name in names}
         if len(before_mentions) > 1:
-            for mention in before_mentions[1:]:
+            for mention in before_mentions:
                 if re.search(rf"\b{re.escape(mention.name)}\.", before, re.IGNORECASE) is None:
                     raise SchemaValidationError("physical chain base mentions are not qualified")
-        names.insert(0, before_mentions[0].name)
+        explicit_bases = [mention for mention in before_mentions if mention.key not in chain_name_keys]
+        if len(explicit_bases) > 1:
+            raise SchemaValidationError("physical chain base is ambiguous")
+        if explicit_bases:
+            base = explicit_bases[0]
+        else:
+            predecessors = [
+                candidate
+                for candidate in schema.tables
+                if candidate.key not in chain_name_keys
+                and len(schema.relationship_candidates(candidate.name, names[0])) == 1
+            ]
+            if len(predecessors) != 1:
+                raise SchemaValidationError("physical chain base is ambiguous")
+            base = predecessors[0]
+        names.insert(0, base.name)
         match_start = marker.start()
         match_end = marker.end() + chain_match.end()
         if not 3 <= len(names) <= 4:
@@ -3476,10 +3498,6 @@ class PipelineNL2SQLGenerator:
                     suppress_quantity_token=count_metric is not None,
                 )
             )
-            if physical_chain_resolution is not None and columns == ["*"]:
-                raise SchemaValidationError(
-                    "multi-hop physical chains require explicit base-table projection"
-                )
             if physical_chain_resolution is not None:
                 conditions = self._schema_resolve_chain_where_conditions(
                     condition_text, condition_original, table_context, schema, joins,
@@ -3528,6 +3546,10 @@ class PipelineNL2SQLGenerator:
                 aggregations = self._schema_resolve_chain_aggregations(
                     aggregations, metric_text, table_context, schema, joins
                 )
+                if columns == ["*"] and not aggregations:
+                    raise SchemaValidationError(
+                        "multi-hop physical chains require explicit base-table projection"
+                    )
                 columns = [column for column in columns if column != "*"]
                 if not columns:
                     columns = ["*"]
@@ -3564,14 +3586,6 @@ class PipelineNL2SQLGenerator:
                 )
             )
             if physical_chain_resolution is not None:
-                if re.search(r"\b(?:group(?:ed)?\s+by|order(?:ed)?\s+by)\b", group_source_text, re.IGNORECASE):
-                    projection_slice = group_source_text.split("group by", 1)[0].split("grouped by", 1)[0]
-                    projection_slice = re.split(r"\b(?:order(?:ed)?|sort(?:ed)?)\s+by\b", projection_slice, flags=re.IGNORECASE)[0]
-                    explicit_aggregate_projection = bool(re.search(r"\b(?:count|sum|avg|min|max)\s*\(", projection_slice, re.IGNORECASE))
-                    if explicit_aggregate_projection and columns != ["*"]:
-                        projected_non_aggregate = [column for column in columns if not re.search(r"\b(?:count|sum|avg|min|max)\s*\(", column, re.IGNORECASE)]
-                        if any(column not in group_by for column in projected_non_aggregate):
-                            raise SchemaValidationError("physical chain projection must be grouped")
                 group_match = re.search(r"\bgroup(?:ed)?\s+by\b(.+?)(?=\border(?:ed)?\s+by\b|\blimit\b|\btop\s+\d+\b|$)", group_source_text, re.IGNORECASE)
                 group_clause = group_match.group(1) if group_match else ""
                 for column in group_by:
@@ -3585,11 +3599,18 @@ class PipelineNL2SQLGenerator:
                     ):
                         raise SchemaValidationError("physical chain group column is ambiguous")
                 group_by = [column if "." in column else f"{table_context.name}.{column}" for column in group_by]
-                if group_by and aggregations and projection_columns != ["*"] and any(
-                    column not in group_by and not re.search(r"\b(?:COUNT|SUM|AVG|MIN|MAX)\s*\(", column, re.IGNORECASE)
-                    for column in projection_columns
+                projected_non_aggregate = [
+                    column for column in projection_columns
+                    if not re.search(r"\b(?:COUNT|SUM|AVG|MIN|MAX)\s*\(", column, re.IGNORECASE)
+                ]
+                if group_by and projection_columns != ["*"] and any(
+                    column not in group_by for column in projected_non_aggregate
                 ):
                     raise SchemaValidationError("physical chain projection must be grouped")
+                if aggregations and not group_by and projection_columns != ["*"] and projected_non_aggregate:
+                    raise SchemaValidationError(
+                        "physical chain aggregate requires grouped projection"
+                    )
             distinct = self._check_distinct(group_source_text)
             distinct_count_plan = None
             path_distinct_count_plan = None
@@ -3747,7 +3768,12 @@ class PipelineNL2SQLGenerator:
                         ):
                             raise SchemaValidationError("physical chain ordering column is ambiguous")
                     ordering_candidates = [
-                        (column if "." in column else f"{table_context.name}.{column}", direction)
+                        (
+                            column
+                            if "." in column or column.casefold() in {"count", "count(*)"}
+                            else f"{table_context.name}.{column}",
+                            direction,
+                        )
                         for column, direction in ordering_candidates
                     ]
             if path_distinct_count_plan is None and len(ordering_candidates) > 1 and (

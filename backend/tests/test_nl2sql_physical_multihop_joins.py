@@ -340,10 +340,9 @@ def test_chain_whose_filter_does_not_pollute_projection() -> None:
 
 
 @pytest.mark.parametrize("text", [
-    "show users.status joined with orders joined with shipments group by orders.status",
     "show users.status joined with orders joined with shipments order by orders.status desc",
 ])
-def test_chain_joined_group_and_order_are_fail_closed_until_ownership_completion(text):
+def test_chain_joined_order_is_canonicalized(text):
     result = generate(text, schema())
     assert result.success
     assert "orders.status" in result.sql
@@ -415,6 +414,92 @@ def test_chain_base_group_aggregate_order_limit():
     assert result.sql.endswith("LIMIT 5")
 
 
+def test_chain_joined_group_by_owns_joined_projection():
+    result = generate(
+        "show orders.status and count joined with orders joined with shipments "
+        "group by orders.status",
+        schema(),
+    )
+    assert result.success, result.explanation
+    assert "SELECT orders.status, COUNT(*) AS count" in result.sql
+    assert "GROUP BY orders.status" in result.sql
+
+
+def test_chain_joined_target_group_by_is_canonicalized():
+    result = generate(
+        "show shipments.region and count joined with orders joined with shipments "
+        "group by shipments.region",
+        schema(),
+    )
+    assert result.success, result.explanation
+    assert "SELECT shipments.region, COUNT(*) AS count" in result.sql
+    assert "GROUP BY shipments.region" in result.sql
+
+
+def test_chain_joined_aggregate_and_group_preserve_both():
+    result = generate(
+        "show users.status and sum(orders.id) joined with orders joined with shipments "
+        "group by users.status",
+        schema(),
+    )
+    assert result.success, result.explanation
+    assert "SELECT users.status, SUM(orders.id)" in result.sql
+    assert "GROUP BY users.status" in result.sql
+
+
+@pytest.mark.parametrize("text", [
+    "show users.status and orders.status joined with orders joined with shipments group by users.status",
+    "show users.status and count joined with orders joined with shipments group by orders.status",
+])
+def test_chain_group_by_must_cover_non_aggregate_projection(text):
+    result = generate(text, schema())
+    assert result.success is False
+    assert result.sql is None
+
+
+@pytest.mark.parametrize("text", [
+    "show users.status and sum(orders.id) joined with orders joined with shipments",
+    "show users.status and count joined with orders joined with shipments",
+])
+def test_chain_aggregate_without_group_rejects_non_aggregate_projection(text):
+    result = generate(text, schema())
+    assert result.success is False
+    assert result.sql is None
+
+
+def test_chain_count_ordering_uses_unqualified_count_expression():
+    result = generate(
+        "show users.status and count joined with orders joined with shipments "
+        "group by users.status order by count desc limit 5",
+        schema(),
+    )
+    assert result.success, result.explanation
+    assert "ORDER BY COUNT(*) DESC" in result.sql
+    assert "users.COUNT(*)" not in result.sql
+    assert result.sql.endswith("LIMIT 5")
+
+
+def test_chain_joined_ordering_uses_joined_column():
+    result = generate(
+        "show users.status and count joined with orders joined with shipments "
+        "group by users.status order by shipments.region desc",
+        schema(),
+    )
+    assert result.success, result.explanation
+    assert "ORDER BY shipments.region DESC" in result.sql
+
+
+@pytest.mark.parametrize("dialect", DIALECTS)
+def test_chain_joined_count_ordering_is_parseable(dialect):
+    result = generate(
+        "show users.status and count joined with orders joined with shipments "
+        "group by users.status order by count desc limit 5",
+        schema(), dialect,
+    )
+    assert result.success, result.explanation
+    assert sqlglot.parse_one(result.sql, read=dialect) is not None
+
+
 @pytest.mark.parametrize("function", ["sum", "avg", "min", "max"])
 def test_chain_base_qualified_aggregates_are_qualified(function):
     result = generate(
@@ -427,13 +512,27 @@ def test_chain_base_qualified_aggregates_are_qualified(function):
 
 @pytest.mark.parametrize("text", [
     "show sum(id) joined with orders joined with shipments",
-    "show sum(orders.id) joined with orders joined with shipments",
-    "show avg(orders.id) joined with orders joined with shipments",
 ])
 def test_chain_aggregate_ownership_fail_closed(text):
     result = generate(text, schema())
     assert result.success is False
     assert result.sql is None
+
+
+@pytest.mark.parametrize("function,table,column", [
+    ("sum", "orders", "id"),
+    ("avg", "shipments", "id"),
+    ("min", "orders", "id"),
+    ("max", "orders", "id"),
+    ("count", "orders", "id"),
+])
+def test_chain_joined_qualified_aggregate_is_scalar(function, table, column):
+    result = generate(
+        f"show {function}({table}.{column}) joined with orders joined with shipments",
+        schema(),
+    )
+    assert result.success, result.explanation
+    assert f"{function.upper()}({table}.{column})" in result.sql
 
 
 def test_chain_count_aggregate_regression():
