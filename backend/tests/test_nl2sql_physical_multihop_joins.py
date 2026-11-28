@@ -78,8 +78,12 @@ def test_chain_allows_base_owned_filters(text):
 ])
 def test_chain_rejects_joined_owned_or_ambiguous_filters(text):
     result = generate(text, schema())
-    assert result.success is False
-    assert result.sql is None
+    if "where orders.status" in text or "whose orders.status" in text:
+        assert result.success
+        assert "orders.status" in result.sql
+    else:
+        assert result.success is False
+        assert result.sql is None
 
 
 @pytest.mark.parametrize("predicate,expected", [
@@ -143,8 +147,12 @@ def test_chain_where_cannot_borrow_another_predicate_qualifier(predicate):
         schema(),
     )
 
-    assert result.success is False
-    assert result.sql is None
+    if "orders.status='paid'" in predicate and "users.status='active'" in predicate:
+        assert result.success
+        assert "orders.status" in result.sql and "users.status" in result.sql
+    else:
+        assert result.success is False
+        assert result.sql is None
 
 
 def test_chain_base_only_unqualified_where_column_remains_allowed():
@@ -273,6 +281,127 @@ def test_chain_base_qualified_group_and_order_are_allowed():
     assert "ORDER BY users.status" in result.sql
 
 
+def test_chain_joined_qualified_projection_is_canonicalized():
+    result = generate(
+        "show users.status and orders.status joined with orders joined with shipments",
+        schema(),
+    )
+
+    assert result.success
+    assert "SELECT users.status, orders.status" in result.sql
+
+
+def test_chain_joined_qualified_filter_is_owned():
+    result = generate(
+        "show users.status joined with orders joined with shipments where orders.status = 'paid'",
+        schema(),
+    )
+
+    assert result.success
+    assert "WHERE orders.status = 'paid'" in result.sql
+
+
+@pytest.mark.parametrize("predicate, expected", [
+    ("orders.status = 'paid'", "orders.status = 'paid'"),
+    ("orders.id BETWEEN 1 AND 5", "orders.id BETWEEN 1 AND 5"),
+    ("orders.status IN ('paid','pending')", "orders.status IN ('paid','pending')"),
+])
+def test_chain_filter_does_not_pollute_projection(predicate: str, expected: str) -> None:
+    result = generate(
+        f"show users.status joined with orders joined with shipments where {predicate}",
+        schema(),
+    )
+
+    assert result.success
+    assert "SELECT users.status\n" in result.sql
+    assert expected in result.sql
+
+
+def test_chain_like_filter_does_not_pollute_projection() -> None:
+    result = generate(
+        "show users.status joined with orders joined with shipments where orders.status like 'p%'",
+        schema(),
+    )
+
+    assert result.success
+    assert "SELECT users.status\n" in result.sql
+    assert "WHERE orders.status LIKE 'p%'" in result.sql
+
+
+def test_chain_whose_filter_does_not_pollute_projection() -> None:
+    result = generate(
+        "show users.status joined with orders joined with shipments whose shipments.region is east",
+        schema(),
+    )
+
+    assert result.success
+    assert "SELECT users.status\n" in result.sql
+    assert "WHERE shipments.region = 'east'" in result.sql
+
+
+@pytest.mark.parametrize("text", [
+    "show users.status joined with orders joined with shipments order by orders.status desc",
+])
+def test_chain_joined_order_is_canonicalized(text):
+    result = generate(text, schema())
+    assert result.success
+    assert "orders.status" in result.sql
+
+
+@pytest.mark.parametrize("text", [
+    "show users.status joined with orders joined with shipments where orders.status in ('paid', 'pending')",
+    "show users.status joined with orders joined with shipments where shipments.region like 'east%'",
+    "show users.status joined with orders joined with shipments where orders.id between 1 and 10",
+])
+def test_chain_joined_scalar_predicates_are_supported(text):
+    result = generate(text, schema())
+    assert result.success, result.explanation
+    assert "WHERE" in result.sql
+
+
+@pytest.mark.parametrize("predicate", [
+    "shipments.region LIKE lower('east%')",
+    "shipments.region LIKE ('east%')",
+])
+def test_chain_like_requires_a_scalar_string_literal(predicate):
+    result = generate(
+        f"show users.status joined with orders joined with shipments where {predicate}",
+        schema(),
+    )
+    assert result.success is False
+    assert result.sql is None
+
+
+def test_chain_like_ignores_clause_words_in_comments():
+    result = generate(
+        "show users.status joined with orders joined with shipments "
+        "where /* IN and order by are comments */ shipments.region like 'east%'",
+        schema(),
+    )
+    assert result.success, result.explanation
+    assert "SELECT users.status\n" in result.sql
+    assert "WHERE shipments.region LIKE 'east%'" in result.sql
+
+
+def test_chain_or_predicate_fails_closed():
+    result = generate(
+        "show users.status joined with orders joined with shipments where users.status = 'active' or users.status = 'pending'",
+        schema(),
+    )
+    assert result.success is False
+    assert result.sql is None
+
+
+@pytest.mark.parametrize("text", [
+    "show count(distinct users.id) joined with orders joined with shipments",
+    "count distinct orders per user joined with orders joined with shipments",
+])
+def test_chain_unique_count_conflicts_fail_closed(text):
+    result = generate(text, schema())
+    assert result.success is False
+    assert result.sql is None
+
+
 def test_chain_base_group_aggregate_order_limit():
     result = generate(
         "show users.id and count joined with orders joined with shipments "
@@ -283,6 +412,92 @@ def test_chain_base_group_aggregate_order_limit():
     assert "GROUP BY users.id" in result.sql
     assert "ORDER BY users.id DESC" in result.sql
     assert result.sql.endswith("LIMIT 5")
+
+
+def test_chain_joined_group_by_owns_joined_projection():
+    result = generate(
+        "show orders.status and count joined with orders joined with shipments "
+        "group by orders.status",
+        schema(),
+    )
+    assert result.success, result.explanation
+    assert "SELECT orders.status, COUNT(*) AS count" in result.sql
+    assert "GROUP BY orders.status" in result.sql
+
+
+def test_chain_joined_target_group_by_is_canonicalized():
+    result = generate(
+        "show shipments.region and count joined with orders joined with shipments "
+        "group by shipments.region",
+        schema(),
+    )
+    assert result.success, result.explanation
+    assert "SELECT shipments.region, COUNT(*) AS count" in result.sql
+    assert "GROUP BY shipments.region" in result.sql
+
+
+def test_chain_joined_aggregate_and_group_preserve_both():
+    result = generate(
+        "show users.status and sum(orders.id) joined with orders joined with shipments "
+        "group by users.status",
+        schema(),
+    )
+    assert result.success, result.explanation
+    assert "SELECT users.status, SUM(orders.id)" in result.sql
+    assert "GROUP BY users.status" in result.sql
+
+
+@pytest.mark.parametrize("text", [
+    "show users.status and orders.status joined with orders joined with shipments group by users.status",
+    "show users.status and count joined with orders joined with shipments group by orders.status",
+])
+def test_chain_group_by_must_cover_non_aggregate_projection(text):
+    result = generate(text, schema())
+    assert result.success is False
+    assert result.sql is None
+
+
+@pytest.mark.parametrize("text", [
+    "show users.status and sum(orders.id) joined with orders joined with shipments",
+    "show users.status and count joined with orders joined with shipments",
+])
+def test_chain_aggregate_without_group_rejects_non_aggregate_projection(text):
+    result = generate(text, schema())
+    assert result.success is False
+    assert result.sql is None
+
+
+def test_chain_count_ordering_uses_unqualified_count_expression():
+    result = generate(
+        "show users.status and count joined with orders joined with shipments "
+        "group by users.status order by count desc limit 5",
+        schema(),
+    )
+    assert result.success, result.explanation
+    assert "ORDER BY COUNT(*) DESC" in result.sql
+    assert "users.COUNT(*)" not in result.sql
+    assert result.sql.endswith("LIMIT 5")
+
+
+def test_chain_joined_ordering_uses_joined_column():
+    result = generate(
+        "show users.status and count joined with orders joined with shipments "
+        "group by users.status order by shipments.region desc",
+        schema(),
+    )
+    assert result.success, result.explanation
+    assert "ORDER BY shipments.region DESC" in result.sql
+
+
+@pytest.mark.parametrize("dialect", DIALECTS)
+def test_chain_joined_count_ordering_is_parseable(dialect):
+    result = generate(
+        "show users.status and count joined with orders joined with shipments "
+        "group by users.status order by count desc limit 5",
+        schema(), dialect,
+    )
+    assert result.success, result.explanation
+    assert sqlglot.parse_one(result.sql, read=dialect) is not None
 
 
 @pytest.mark.parametrize("function", ["sum", "avg", "min", "max"])
@@ -297,13 +512,27 @@ def test_chain_base_qualified_aggregates_are_qualified(function):
 
 @pytest.mark.parametrize("text", [
     "show sum(id) joined with orders joined with shipments",
-    "show sum(orders.id) joined with orders joined with shipments",
-    "show avg(orders.id) joined with orders joined with shipments",
 ])
 def test_chain_aggregate_ownership_fail_closed(text):
     result = generate(text, schema())
     assert result.success is False
     assert result.sql is None
+
+
+@pytest.mark.parametrize("function,table,column", [
+    ("sum", "orders", "id"),
+    ("avg", "shipments", "id"),
+    ("min", "orders", "id"),
+    ("max", "orders", "id"),
+    ("count", "orders", "id"),
+])
+def test_chain_joined_qualified_aggregate_is_scalar(function, table, column):
+    result = generate(
+        f"show {function}({table}.{column}) joined with orders joined with shipments",
+        schema(),
+    )
+    assert result.success, result.explanation
+    assert f"{function.upper()}({table}.{column})" in result.sql
 
 
 def test_chain_count_aggregate_regression():

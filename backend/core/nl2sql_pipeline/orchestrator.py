@@ -1685,6 +1685,10 @@ class PipelineNL2SQLGenerator:
     ) -> list[str]:
         executable = mask_nl2sql_non_executable(text)
         existing = self._extract_aggregations(text)
+        if table is not None and schema is not None:
+            chain_match = re.search(r"\b(count|sum|avg|min|max)\s*\(\s*distinct\b", executable, re.IGNORECASE)
+            if chain_match:
+                raise SchemaValidationError("physical chain COUNT(DISTINCT) is unsupported")
         if count_metric is not None and count_metric[0] == "sum":
             return [f"SUM({count_metric[1]})"]
         if count_metric is not None and count_metric[0] == "count" and not any(
@@ -1842,6 +1846,8 @@ class PipelineNL2SQLGenerator:
         executable = mask_nl2sql_non_executable(original)
         where = re.search(r"\bwhere\b", executable, re.IGNORECASE)
         if where is None:
+            if re.search(r"\bwhose\b", executable, re.IGNORECASE):
+                return []
             if self._extract_conditions_enhanced(text, original):
                 raise SchemaValidationError("physical chain conditions have no WHERE mapping")
             return []
@@ -1853,7 +1859,24 @@ class PipelineNL2SQLGenerator:
         )
         if boundary is not None:
             end = start + boundary.start()
-        separators = list(re.finditer(r"\band\b|[,，]", executable[start:end], re.IGNORECASE))
+        separators: list[re.Match[str]] = []
+        depth = 0
+        between_pending = False
+        for token in re.finditer(r"\(|\)|\bbetween\b|\band\b|[,，]", executable[start:end], re.IGNORECASE):
+            value = token.group(0).casefold()
+            if value == "(":
+                depth += 1
+            elif value == ")":
+                depth = max(0, depth - 1)
+            elif depth == 0 and value == "between":
+                between_pending = True
+            elif depth == 0 and value == "and":
+                if between_pending:
+                    between_pending = False
+                else:
+                    separators.append(token)
+            elif depth == 0 and value in {",", "，"}:
+                separators.append(token)
         spans: list[tuple[int, int]] = []
         for separator in separators:
             spans.append((start, where.end() + separator.start()))
@@ -1862,42 +1885,170 @@ class PipelineNL2SQLGenerator:
 
         lhs_pattern = re.compile(
             r"\s*([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)\s*"
-            r"(?:IS\s+NOT\b|ISN'T\b|IS\b|NOT\b|!=|<>|>=|<=|=|>|<)",
+            r"(?:IS\s+NOT\b|ISN'T\b|IS\b|NOT\s+IN\b|IN\b|BETWEEN\b|NOT\s+LIKE\b|LIKE\b|!=|<>|>=|<=|=|>|<)",
             re.IGNORECASE,
         )
         conditions: list[str] = []
+        chain_tables = self._schema_chain_tables(table, joins, schema)
         for start, end in spans:
             source_lhs = lhs_pattern.match(executable[start:end])
             if source_lhs is None:
                 raise SchemaValidationError("physical chain WHERE segment cannot be mapped")
             parts = source_lhs.group(1).split(".")
-            if len(parts) > 1:
-                owners = schema.table_candidates(".".join(parts[:-1]))
-                if len(owners) != 1 or owners[0].key != table.key:
-                    raise SchemaValidationError("physical chain condition is not base-owned")
-            elif any(
-                schema.canonical_column(schema.table_candidates(join["table"])[0], parts[-1]) is not None
-                for join in joins
-            ):
-                raise SchemaValidationError("physical chain WHERE column is joined-table-owned or ambiguous")
-            canonical = schema.canonical_column(table, parts[-1])
-            if canonical is None:
-                raise SchemaValidationError("physical chain WHERE column is outside base schema")
+            owner, canonical = self._schema_chain_resolve_column(parts, chain_tables, schema)
 
-            extracted = self._schema_resolve_conditions(
-                text[start:end],
-                self._extract_conditions_enhanced(text[start:end], original[start:end]),
-                table,
-                schema,
+            source = original[start:end].strip()
+            normalized_source = mask_nl2sql_non_executable(source)
+            condition_lhs = lhs_pattern.match(normalized_source)
+            if condition_lhs is None:
+                raise SchemaValidationError("physical chain WHERE segment cannot be mapped")
+            operator_match = re.match(
+                r"\s*(IS\s+NOT|IS|NOT\s+IN|IN|BETWEEN|NOT\s+LIKE|LIKE|!=|<>|>=|<=|=|>|<)\s*",
+                normalized_source[condition_lhs.end(1):], re.IGNORECASE,
             )
-            if len(extracted) != 1:
-                raise SchemaValidationError("physical chain WHERE segment requires exactly one condition")
-            condition = extracted[0]
-            condition_lhs = lhs_pattern.match(mask_nl2sql_non_executable(condition))
-            if condition_lhs is None or condition_lhs.group(1).casefold() != canonical.casefold():
-                raise SchemaValidationError("physical chain WHERE condition does not match its segment")
+            if operator_match is None:
+                raise SchemaValidationError("physical chain WHERE operator is unsupported")
+            operator = " ".join(operator_match.group(1).split()).upper()
+            if operator not in {"IN", "NOT IN", "BETWEEN", "LIKE", "NOT LIKE"}:
+                extracted = self._extract_conditions_enhanced(
+                    text[start:end], original[start:end],
+                )
+                if len(extracted) != 1:
+                    raise SchemaValidationError("physical chain WHERE segment requires exactly one condition")
+                condition = extracted[0]
+                condition_lhs = lhs_pattern.match(mask_nl2sql_non_executable(condition))
+                if condition_lhs is None or condition_lhs.group(1).casefold() != canonical.casefold():
+                    raise SchemaValidationError("physical chain WHERE condition does not match its segment")
+                condition = condition[:condition_lhs.start(1)] + f"{owner.name}.{canonical}" + condition[condition_lhs.end(1):]
+                conditions.append(condition)
+                continue
+            operator_start = condition_lhs.end(1) + operator_match.start()
+            operator_end = condition_lhs.end(1) + operator_match.end()
+            rhs = source[operator_end:].strip()
+            if re.search(r"\bor\b", mask_nl2sql_non_executable(rhs), re.IGNORECASE):
+                raise SchemaValidationError("physical chain OR predicates are unsupported")
+            if operator in {"IN", "NOT IN"}:
+                if not rhs.startswith("(") or not rhs.endswith(")") or re.search(r"\bselect\b", rhs, re.IGNORECASE):
+                    raise SchemaValidationError("physical chain IN requires scalar literals")
+            elif operator == "BETWEEN":
+                if not re.fullmatch(r".+\s+AND\s+.+", rhs, re.IGNORECASE | re.DOTALL) or re.search(r"[()]", rhs):
+                    raise SchemaValidationError("physical chain BETWEEN requires scalar bounds")
+            elif operator in {"LIKE", "NOT LIKE"}:
+                like_rhs = re.match(
+                    r"\s*(?:NOT\s+LIKE|LIKE)\s+(.+)\s*$",
+                    source[operator_start:],
+                    re.IGNORECASE | re.DOTALL,
+                )
+                rhs = like_rhs.group(1).strip() if like_rhs is not None else ""
+                if not re.fullmatch(r"'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"", rhs.strip()):
+                    raise SchemaValidationError("physical chain LIKE requires a string literal")
+            elif re.search(r"\b(?:select|between|like|in)\b|[()]", rhs, re.IGNORECASE):
+                raise SchemaValidationError("physical chain condition expression is unsupported")
+            condition = f"{owner.name}.{canonical} {operator} {rhs}"
             conditions.append(condition)
         return conditions
+
+    @staticmethod
+    def _schema_chain_tables(
+        table: SchemaTableContext, joins: list[dict], schema: SchemaContext,
+    ) -> tuple[SchemaTableContext, ...]:
+        tables = [table]
+        for join in joins:
+            candidates = schema.table_candidates(join.get("table", ""))
+            if len(candidates) != 1 or candidates[0].key in {item.key for item in tables}:
+                raise SchemaValidationError("physical chain table is not unique")
+            tables.append(candidates[0])
+        return tuple(tables)
+
+    @staticmethod
+    def _schema_chain_resolve_column(
+        parts: list[str], tables: tuple[SchemaTableContext, ...], schema: SchemaContext,
+    ) -> tuple[SchemaTableContext, str]:
+        if len(parts) > 1:
+            candidates = schema.table_candidates(".".join(parts[:-1]))
+            if len(candidates) != 1 or candidates[0].key not in {table.key for table in tables}:
+                raise SchemaValidationError("physical chain column table is outside the chain")
+            owner_candidates: tuple[SchemaTableContext, ...] = (candidates[0],)
+        else:
+            owner_candidates = tuple(
+                table for table in tables if schema.canonical_column(table, parts[0]) is not None
+            )
+            if len(owner_candidates) != 1:
+                raise SchemaValidationError("physical chain column owner is ambiguous or unknown")
+        owner = owner_candidates[0]
+        canonical = schema.canonical_column(owner, parts[-1])
+        if canonical is None:
+            raise SchemaValidationError("physical chain column is outside schema")
+        return owner, canonical
+
+    def _schema_resolve_chain_columns(
+        self, text: str, table: SchemaTableContext, schema: SchemaContext,
+        joins: list[dict], column_hints: list[str] | None,
+    ) -> list[str]:
+        tables = self._schema_chain_tables(table, joins, schema)
+        if column_hints:
+            columns: list[str] = []
+            for hint in column_hints:
+                owner, canonical = self._schema_chain_resolve_column(hint.split("."), tables, schema)
+                columns.append(f"{owner.name}.{canonical}")
+            return columns
+        executable = mask_nl2sql_non_executable(text)
+        projection = self._schema_projection_text(executable)
+        boundary = re.search(
+            r"\b(?:where|whose|group(?:ed)?\s+by|order(?:ed)?\s+by|sort(?:ed)?\s+by|limit|top\s+\d+)\b",
+            projection,
+            re.IGNORECASE,
+        )
+        if boundary is not None:
+            projection = projection[:boundary.start()]
+        projection = re.sub(
+            r"\b(?:count|sum|avg|min|max)\s*\([^()]*\)",
+            lambda match: " " * len(match.group(0)),
+            projection,
+            flags=re.IGNORECASE,
+        )
+        refs: list[tuple[int, str]] = []
+        for match in re.finditer(
+            r"(?<![\w$])([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)(?![\w$])",
+            projection,
+        ):
+            raw = match.group(1)
+            if raw.casefold() in {"show", "select", "and", "from"}:
+                continue
+            try:
+                owner, canonical = self._schema_chain_resolve_column(raw.split("."), tables, schema)
+            except SchemaValidationError:
+                continue
+            refs.append((match.start(), f"{owner.name}.{canonical}"))
+        deduped: list[str] = []
+        for _, column in sorted(refs):
+            if column not in deduped:
+                deduped.append(column)
+        if not deduped:
+            mapped_columns = self._extract_columns(projection)
+            if mapped_columns == ["*"] or not mapped_columns:
+                return ["*"]
+            for mapped in mapped_columns:
+                owners = tuple(
+                    (owner, schema.canonical_column(owner, mapped))
+                    for owner in tables
+                    if schema.canonical_column(owner, mapped) is not None
+                )
+                if len(owners) > 1 and re.search(
+                    rf"\b(?:show|select)\s+(?:{re.escape(table.name.rsplit('.', 1)[-1])}|user)\s+{re.escape(mapped)}\b",
+                    projection,
+                    re.IGNORECASE,
+                ):
+                    base_column = schema.canonical_column(table, mapped)
+                    if base_column is not None:
+                        owners = ((table, base_column),)
+                if len(owners) != 1:
+                    raise SchemaValidationError("physical chain projection owner is ambiguous or unknown")
+                projection_owner, projection_column = owners[0]
+                if projection_column is None:
+                    raise SchemaValidationError("physical chain projection column is outside schema")
+                deduped.append(f"{projection_owner.name}.{projection_column}")
+        return deduped or ["*"]
 
     def _schema_resolve_chain_aggregations(
         self,
@@ -1919,7 +2070,7 @@ class PipelineNL2SQLGenerator:
             return aggregations
         if len(calls) != len(explicit):
             raise SchemaValidationError("physical chain aggregate references are ambiguous")
-        joined_tables = [schema.table_candidates(join["table"])[0] for join in joins]
+        chain_tables = self._schema_chain_tables(table, joins, schema)
         resolved: list[str] = []
         call_index = 0
         for aggregation in aggregations:
@@ -1936,17 +2087,77 @@ class PipelineNL2SQLGenerator:
             parts = raw_argument.split(".")
             if len(parts) > 1:
                 owners = schema.table_candidates(".".join(parts[:-1]))
-                if len(owners) != 1 or owners[0].key != table.key:
-                    raise SchemaValidationError("physical chain aggregate is not base-owned")
+                if len(owners) != 1 or owners[0].key not in {item.key for item in chain_tables}:
+                    raise SchemaValidationError("physical chain aggregate table is outside chain")
                 owner = owners[0]
             else:
-                owner = table
-                if any(schema.canonical_column(joined, raw_argument) is not None for joined in joined_tables):
+                owners = tuple(item for item in chain_tables if schema.canonical_column(item, raw_argument) is not None)
+                if len(owners) != 1:
                     raise SchemaValidationError("physical chain aggregate column is ambiguous")
+                owner = owners[0]
             canonical = schema.canonical_column(owner, parts[-1])
             if canonical is None:
                 raise SchemaValidationError("physical chain aggregate column is outside base schema")
             resolved.append(f"{function.upper()}({owner.name}.{canonical})" + (f" AS {alias}" if alias else ""))
+        return resolved
+
+    def _schema_resolve_chain_group_by(
+        self, text: str, table: SchemaTableContext, schema: SchemaContext,
+        joins: list[dict], aggregations: list[str],
+    ) -> list[str]:
+        executable = mask_nl2sql_non_executable(text)
+        match = re.search(r"\b(?:group(?:ed)?\s+by)\s+(.+?)(?=\border(?:ed)?\s+by\b|\blimit\b|\btop\s+\d+\b|$)", executable, re.IGNORECASE)
+        if match is None:
+            return []
+        clause = match.group(1).strip()
+        if re.search(r"\bor\b|[()\u4e00-\u9fff]", clause, re.IGNORECASE):
+            raise SchemaValidationError("physical chain GROUP BY expression is unsupported")
+        items = re.split(r"\s*,\s*|\s+and\s+", clause, flags=re.IGNORECASE)
+        tables = self._schema_chain_tables(table, joins, schema)
+        resolved: list[str] = []
+        for item in items:
+            parts = item.strip().split(".")
+            owner, canonical = self._schema_chain_resolve_column(parts, tables, schema)
+            value = f"{owner.name}.{canonical}"
+            if value in resolved:
+                raise SchemaValidationError("duplicate physical chain GROUP BY column")
+            resolved.append(value)
+        return resolved
+
+    def _schema_resolve_chain_ordering(
+        self, text: str, table: SchemaTableContext, schema: SchemaContext,
+        joins: list[dict], aggregations: list[str],
+    ) -> list[tuple[str, str]]:
+        executable = mask_nl2sql_non_executable(text)
+        match = re.search(r"\b(?:order(?:ed)?|sort(?:ed)?)\s+by\s+(.+?)(?=\blimit\b|\btop\s+\d+\b|$)", executable, re.IGNORECASE)
+        if match is None:
+            return []
+        clause = match.group(1).strip()
+        if re.search(r"\bor\b|[()\u4e00-\u9fff]|\bNULLS\s+(?:FIRST|LAST)\b", clause, re.IGNORECASE):
+            raise SchemaValidationError("physical chain ORDER BY expression is unsupported")
+        items = re.split(r"\s*,\s*|\s+and\s+", clause, flags=re.IGNORECASE)
+        tables = self._schema_chain_tables(table, joins, schema)
+        resolved: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        for item in items:
+            item_match = re.fullmatch(r"\s*([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)\s*(?:(asc|ascending|desc|descending))?\s*", item, re.IGNORECASE)
+            if item_match is None:
+                raise SchemaValidationError("physical chain ORDER BY column is invalid")
+            raw, raw_direction = item_match.groups()
+            if raw.casefold() == "count":
+                if not aggregations:
+                    raise SchemaValidationError("physical chain count ordering requires aggregate")
+                canonical = "COUNT(*)" if any(aggregation.upper().startswith("COUNT(*)") for aggregation in aggregations) else "COUNT"
+                value = canonical
+            else:
+                owner, canonical_column = self._schema_chain_resolve_column(raw.split("."), tables, schema)
+                value = f"{owner.name}.{canonical_column}"
+            key = value.casefold()
+            if key in seen:
+                raise SchemaValidationError("duplicate physical chain ORDER BY column")
+            seen.add(key)
+            direction = "DESC" if raw_direction and raw_direction.casefold().startswith("desc") else "ASC"
+            resolved.append((value, direction))
         return resolved
 
     def _schema_parse_whose_one(self, text: str, *, allow_tail: bool = False) -> _SchemaWhoseParsed | None:
@@ -2720,10 +2931,6 @@ class PipelineNL2SQLGenerator:
         marker = re.search(r"\bjoined\s+with\b", executable, re.IGNORECASE)
         if marker is None:
             return None
-        before = executable[:marker.start()]
-        before_mentions = self._schema_table_mentions(before, schema)
-        if len(before_mentions) != 1:
-            raise SchemaValidationError("physical join chain has an ambiguous base")
         chain_tail = executable[marker.end():]
         table_identifier = r"[A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?"
         chain_match = re.match(
@@ -2735,6 +2942,8 @@ class PipelineNL2SQLGenerator:
             if len(re.findall(r"\bjoined\s+with\b", executable, re.IGNORECASE)) == 1:
                 return None
             raise SchemaValidationError("physical join chain must contain two or three edges")
+        before = executable[:marker.start()]
+        before_mentions = self._schema_table_mentions(before, schema)
         if re.search(r"\b(?:left|right|full|outer|natural|cross|semi|anti|lateral)\b", before, re.IGNORECASE):
             raise SchemaValidationError("only INNER physical join chains are supported")
         raw_chain = chain_match.group(1)
@@ -2742,17 +2951,45 @@ class PipelineNL2SQLGenerator:
             name for name in re.findall(table_identifier, raw_chain)
             if name.casefold() not in {"joined", "with"}
         ]
-        names.insert(0, before_mentions[0].name)
+        if not before_mentions:
+            raise SchemaValidationError("physical join chain has no base")
+        chain_name_keys = {name.casefold() for name in names}
+        if len(before_mentions) > 1:
+            for mention in before_mentions:
+                if re.search(rf"\b{re.escape(mention.name)}\.", before, re.IGNORECASE) is None:
+                    raise SchemaValidationError("physical chain base mentions are not qualified")
+        explicit_bases = [mention for mention in before_mentions if mention.key not in chain_name_keys]
+        if len(explicit_bases) > 1:
+            raise SchemaValidationError("physical chain base is ambiguous")
+        if explicit_bases:
+            base = explicit_bases[0]
+        else:
+            predecessors = [
+                candidate
+                for candidate in schema.tables
+                if candidate.key not in chain_name_keys
+                and len(schema.relationship_candidates(candidate.name, names[0])) == 1
+            ]
+            if len(predecessors) != 1:
+                raise SchemaValidationError("physical chain base is ambiguous")
+            base = predecessors[0]
+        names.insert(0, base.name)
         match_start = marker.start()
         match_end = marker.end() + chain_match.end()
         if not 3 <= len(names) <= 4:
             raise SchemaValidationError("physical join chain must contain two or three edges")
+        chain_name_keys = {name.casefold() for name in names}
+        if any(mention.key not in chain_name_keys for mention in before_mentions):
+            raise SchemaValidationError("physical chain projection references an extra table")
         tail = executable[match_end:]
         if re.search(r"\bjoined\s+with\b|\bjoined\s+on\b", tail, re.IGNORECASE):
             raise SchemaValidationError("physical join chain is too long or mixed")
         tail_mentions = self._schema_table_mentions(tail, schema)
-        if any(mention.key != before_mentions[0].key for mention in tail_mentions):
-            raise SchemaValidationError("physical chain tail mentions a joined or extra table")
+        chain_keys = set(names)
+        if any(mention.key not in chain_keys for mention in before_mentions):
+            raise SchemaValidationError("physical chain projection references an extra table")
+        if any(mention.key not in chain_keys for mention in tail_mentions):
+            raise SchemaValidationError("physical chain tail mentions an extra table")
         if re.search(r"\b(?:left|right|full|outer|natural|cross|semi|anti|lateral)\s+join\b", executable, re.IGNORECASE):
             raise SchemaValidationError("unsupported physical join kind")
         if table_hint:
@@ -3038,6 +3275,12 @@ class PipelineNL2SQLGenerator:
                 physical_chain_resolution = self._schema_resolve_physical_join_chain(
                     text, table_hint, schema
                 )
+            if physical_chain_resolution is not None and re.search(
+                r"\bcount\s*\(\s*distinct\b|\b(?:count\s+distinct|count\s+unique)\b",
+                executable_text,
+                re.IGNORECASE,
+            ):
+                raise SchemaValidationError("physical chain cannot combine with distinct count")
             joined_with_resolution = None
             if joined_on_resolution is None and physical_chain_resolution is None:
                 joined_with_resolution = self._schema_resolve_joined_with(
@@ -3175,7 +3418,15 @@ class PipelineNL2SQLGenerator:
                         column = subject_condition[:-len(f" {item.operator} {item.literal}")].casefold()
                         whose_conditions.append(subject_condition)
                 else:
-                    condition = self._schema_resolve_selected_whose(item, table_context, schema)
+                    if physical_chain_resolution is not None:
+                        owner_context, canonical = self._schema_chain_resolve_column(
+                            item.raw_column.split("."),
+                            self._schema_chain_tables(table_context, joins, schema),
+                            schema,
+                        )
+                        condition = f"{owner_context.name}.{canonical} {item.operator} {item.literal}"
+                    else:
+                        condition = self._schema_resolve_selected_whose(item, table_context, schema)
                     owner = table_context.key
                     column = condition[:-len(f" {item.operator} {item.literal}")].casefold()
                     whose_conditions.append(condition)
@@ -3234,17 +3485,19 @@ class PipelineNL2SQLGenerator:
                 raise SchemaValidationError(
                     "zero-count requests require a unique-count path and group label"
                 )
-            columns = self._schema_resolve_columns(
-                metric_text,
-                table_context,
-                column_hints,
-                schema,
-                suppress_quantity_token=count_metric is not None,
-            )
-            if physical_chain_resolution is not None and columns == ["*"]:
-                raise SchemaValidationError(
-                    "multi-hop physical chains require explicit base-table projection"
+            columns = (
+                self._schema_resolve_chain_columns(
+                    metric_text, table_context, schema, joins, column_hints,
                 )
+                if physical_chain_resolution is not None
+                else self._schema_resolve_columns(
+                    metric_text,
+                    table_context,
+                    column_hints,
+                    schema,
+                    suppress_quantity_token=count_metric is not None,
+                )
+            )
             if physical_chain_resolution is not None:
                 conditions = self._schema_resolve_chain_where_conditions(
                     condition_text, condition_original, table_context, schema, joins,
@@ -3268,17 +3521,19 @@ class PipelineNL2SQLGenerator:
             elif whose_conditions:
                 conditions = [*conditions, *whose_conditions]
             if physical_chain_resolution is not None:
+                if parsed_whose_list and not ordinary_conditions:
+                    pass
                 for item in parsed_whose_list:
-                    if "." not in item.raw_column and any(
-                        schema.canonical_column(schema.table_candidates(join["table"])[0], item.raw_column) is not None
-                        for join in joins
-                    ):
-                        raise SchemaValidationError("physical chain whose column is ambiguous")
-                columns = [
-                    f"{table_context.name}.{column}" for column in columns
-                ]
+                    whose_owner, whose_column = self._schema_chain_resolve_column(
+                        item.raw_column.split("."),
+                        self._schema_chain_tables(table_context, joins, schema),
+                        schema,
+                    )
+                    item_condition = f"{whose_owner.name}.{whose_column} {item.operator} {item.literal}"
+                    if item_condition not in conditions:
+                        conditions.append(item_condition)
                 conditions = [
-                    self._schema_qualify_base_condition(condition, table_context)
+                    condition
                     for condition in conditions
                 ]
             parsed = self._parse_text(text_lower, text)
@@ -3291,6 +3546,13 @@ class PipelineNL2SQLGenerator:
                 aggregations = self._schema_resolve_chain_aggregations(
                     aggregations, metric_text, table_context, schema, joins
                 )
+                if columns == ["*"] and not aggregations:
+                    raise SchemaValidationError(
+                        "multi-hop physical chains require explicit base-table projection"
+                    )
+                columns = [column for column in columns if column != "*"]
+                if not columns:
+                    columns = ["*"]
             group_source_text = chain_executable_text or text_lower
             group_source_for_group = group_source_text
             if not unique_count_intent and physical_chain_resolution is not None:
@@ -3304,11 +3566,16 @@ class PipelineNL2SQLGenerator:
                         group_source_text,
                         (group_clause_match.start(), len(group_source_text)),
                     )
+            projection_columns = columns
             group_by = (
                 []
                 if multihop_unique_resolution is not None
                 else [label_group_column]
                 if label_resolution is not None
+                else self._schema_resolve_chain_group_by(
+                    group_source_for_group, table_context, schema, joins, aggregations,
+                )
+                if physical_chain_resolution is not None
                 else self._schema_resolve_group_by(
                     self._schema_mask_clause_tail(text_lower)
                     if unique_count_intent
@@ -3331,7 +3598,19 @@ class PipelineNL2SQLGenerator:
                         re.IGNORECASE,
                     ):
                         raise SchemaValidationError("physical chain group column is ambiguous")
-                group_by = [f"{table_context.name}.{column}" for column in group_by]
+                group_by = [column if "." in column else f"{table_context.name}.{column}" for column in group_by]
+                projected_non_aggregate = [
+                    column for column in projection_columns
+                    if not re.search(r"\b(?:COUNT|SUM|AVG|MIN|MAX)\s*\(", column, re.IGNORECASE)
+                ]
+                if group_by and projection_columns != ["*"] and any(
+                    column not in group_by for column in projected_non_aggregate
+                ):
+                    raise SchemaValidationError("physical chain projection must be grouped")
+                if aggregations and not group_by and projection_columns != ["*"] and projected_non_aggregate:
+                    raise SchemaValidationError(
+                        "physical chain aggregate requires grouped projection"
+                    )
             distinct = self._check_distinct(group_source_text)
             distinct_count_plan = None
             path_distinct_count_plan = None
@@ -3467,9 +3746,13 @@ class PipelineNL2SQLGenerator:
                     ordering_candidates = [("count", direction)]
                 else:
                     ordering_candidates = (
-                        self._schema_resolve_ordering(group_source_text, table_context, schema)
-                        if chain_has_explicit_ordering
-                        else []
+                    self._schema_resolve_chain_ordering(
+                        group_source_text, table_context, schema, joins, aggregations,
+                    )
+                    if physical_chain_resolution is not None and chain_has_explicit_ordering
+                    else self._schema_resolve_ordering(group_source_text, table_context, schema)
+                    if chain_has_explicit_ordering
+                    else []
                     )
                 if physical_chain_resolution is not None:
                     order_match = re.search(r"\b(?:order(?:ed)?|sort(?:ed)?)\s+by\b(.+?)(?=\blimit\b|\btop\s+\d+\b|$)", group_source_text, re.IGNORECASE)
@@ -3485,7 +3768,12 @@ class PipelineNL2SQLGenerator:
                         ):
                             raise SchemaValidationError("physical chain ordering column is ambiguous")
                     ordering_candidates = [
-                        (f"{table_context.name}.{column}", direction)
+                        (
+                            column
+                            if "." in column or column.casefold() in {"count", "count(*)"}
+                            else f"{table_context.name}.{column}",
+                            direction,
+                        )
                         for column, direction in ordering_candidates
                     ]
             if path_distinct_count_plan is None and len(ordering_candidates) > 1 and (
@@ -3517,6 +3805,9 @@ class PipelineNL2SQLGenerator:
                 if path_distinct_count_plan is None and len(ordering_candidates) > 1
                 else None
             )
+            if physical_chain_resolution is not None and ordering_candidates and ordering is None:
+                ordering = ordering_candidates[0]
+                orderings = None
             if unique_count_intent and not group_by and path_distinct_count_plan is None:
                 ordering = None
                 orderings = None
