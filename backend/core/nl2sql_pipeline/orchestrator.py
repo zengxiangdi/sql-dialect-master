@@ -1685,6 +1685,10 @@ class PipelineNL2SQLGenerator:
     ) -> list[str]:
         executable = mask_nl2sql_non_executable(text)
         existing = self._extract_aggregations(text)
+        if table is not None and schema is not None:
+            chain_match = re.search(r"\b(count|sum|avg|min|max)\s*\(\s*distinct\b", executable, re.IGNORECASE)
+            if chain_match:
+                raise SchemaValidationError("physical chain COUNT(DISTINCT) is unsupported")
         if count_metric is not None and count_metric[0] == "sum":
             return [f"SUM({count_metric[1]})"]
         if count_metric is not None and count_metric[0] == "count" and not any(
@@ -3512,6 +3516,9 @@ class PipelineNL2SQLGenerator:
                 aggregations = self._schema_resolve_chain_aggregations(
                     aggregations, metric_text, table_context, schema, joins
                 )
+                columns = [column for column in columns if column != "*"]
+                if not columns:
+                    columns = ["*"]
             group_source_text = chain_executable_text or text_lower
             group_source_for_group = group_source_text
             if not unique_count_intent and physical_chain_resolution is not None:
@@ -3525,6 +3532,7 @@ class PipelineNL2SQLGenerator:
                         group_source_text,
                         (group_clause_match.start(), len(group_source_text)),
                     )
+            projection_columns = columns
             group_by = (
                 []
                 if multihop_unique_resolution is not None
@@ -3557,6 +3565,11 @@ class PipelineNL2SQLGenerator:
                     ):
                         raise SchemaValidationError("physical chain group column is ambiguous")
                 group_by = [column if "." in column else f"{table_context.name}.{column}" for column in group_by]
+                if group_by and aggregations and projection_columns != ["*"] and any(
+                    column not in group_by and not re.search(r"\b(?:COUNT|SUM|AVG|MIN|MAX)\s*\(", column, re.IGNORECASE)
+                    for column in projection_columns
+                ):
+                    raise SchemaValidationError("physical chain projection must be grouped")
             distinct = self._check_distinct(group_source_text)
             distinct_count_plan = None
             path_distinct_count_plan = None
